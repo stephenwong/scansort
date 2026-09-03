@@ -21,3 +21,7 @@ uv run pytest -v
 # Code quality check
 uv run ruff check .
 ```
+
+## Documentation
+- Detailed product requirements and technical architecture: [Product Requirements Document (PRD)](docs/PRD.md)
+
