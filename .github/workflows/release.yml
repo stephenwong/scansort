@@ -1,0 +1,53 @@
+name: Release Standalone Windows Executable
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-windows:
+    name: Build Windows ScanSort.exe
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies & build tools
+        run: |
+          uv sync --all-extras
+          uv add --dev pyinstaller
+
+      - name: Run test suite
+        run: uv run pytest -v
+
+      - name: Build executable via PyInstaller
+        run: uv run pyinstaller scansort.spec
+
+      - name: Test compiled binary
+        run: dist\ScanSort\ScanSort.exe --help
+
+      - name: Package Release ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\ScanSort\* -DestinationPath ScanSort-${{ github.ref_name }}-windows-x64.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ScanSort-${{ github.ref_name }}-windows-x64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
