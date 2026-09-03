@@ -103,3 +103,46 @@ def test_folder_mapper_class_caching(tmp_path: Path):
     # Load from cache
     saved_data = json.loads(cache_file.read_text(encoding="utf-8"))
     assert "Work/Contracts" in saved_data["folders"]
+from unittest.mock import patch
+
+
+def test_scan_nonexistent_directory(tmp_path: Path):
+    missing_dir = tmp_path / "missing_dir"
+    assert scan_documents_folders(missing_dir) == []
+
+
+def test_scan_handles_permission_error(tmp_path: Path):
+    docs_dir = tmp_path / "Docs"
+    (docs_dir / "Allowed").mkdir(parents=True)
+    with patch.object(Path, "iterdir", side_effect=PermissionError("Denied")):
+        assert scan_documents_folders(docs_dir) == []
+
+
+def test_format_taxonomy_empty():
+    assert format_taxonomy_for_prompt([]) == "No pre-existing folders detected."
+
+
+def test_folder_mapper_load_from_cache_and_prompt_string(tmp_path: Path):
+    docs_dir = tmp_path / "Docs"
+    (docs_dir / "Finances").mkdir(parents=True)
+    cache_file = tmp_path / "cache.json"
+
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    assert mapper.get_prompt_string() is not None
+
+    # Test loading from cache on new instance
+    mapper2 = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    assert "Finances" in mapper2.get_taxonomy()
+    # Call again to test if _cached_folders already populated
+    assert "Finances" in mapper2.get_taxonomy()
+
+
+def test_folder_mapper_cache_write_error(tmp_path: Path):
+    docs_dir = tmp_path / "Docs"
+    docs_dir.mkdir()
+    cache_file = tmp_path / "cache.json"
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    with patch.object(Path, "write_text", side_effect=OSError("Read-only filesystem")):
+        # Should not raise exception
+        folders = mapper.refresh()
+        assert folders == []

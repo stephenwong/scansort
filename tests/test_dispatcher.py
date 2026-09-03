@@ -143,3 +143,40 @@ def test_undo_last_move(tmp_path: Path):
     # Check status was updated
     last_line = jsonl_path.read_text(encoding="utf-8").strip().splitlines()[-1]
     assert json.loads(last_line)["status"] == "UNDONE"
+from unittest.mock import patch
+
+
+def test_undo_nonexistent_history_file(tmp_path: Path):
+    missing_file = tmp_path / "does_not_exist.jsonl"
+    assert undo_last_move(missing_file) is None
+
+
+def test_undo_empty_history_file(tmp_path: Path):
+    empty_file = tmp_path / "empty.jsonl"
+    empty_file.touch()
+    assert undo_last_move(empty_file) is None
+
+
+def test_undo_no_reversible_records(tmp_path: Path):
+    no_rev_file = tmp_path / "no_rev.jsonl"
+    no_rev_file.write_text('{"status": "DUPLICATE"}\n{invalid json\n', encoding="utf-8")
+    assert undo_last_move(no_rev_file) is None
+
+
+def test_undo_destination_file_missing(tmp_path: Path):
+    hist_file = tmp_path / "hist.jsonl"
+    entry = {
+        "status": "SUCCESS",
+        "destination_path": str(tmp_path / "ghost.pdf"),
+        "original_path": str(tmp_path / "orig.pdf"),
+    }
+    hist_file.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    assert undo_last_move(hist_file) is None
+
+
+def test_audit_logger_os_error_handling(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    logger = AuditLogger(jsonl_path=log_dir / "h.jsonl", csv_path=log_dir / "h.csv")
+    with patch("builtins.open", side_effect=OSError("Disk full")):
+        # Should not raise exception
+        logger.log_scan({"status": "SUCCESS"})

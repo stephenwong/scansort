@@ -40,3 +40,62 @@ def test_cli_undo(tmp_path: Path):
         exit_code = main_cli(["undo"])
         assert exit_code == 0
         mock_undo.assert_called_once()
+
+
+def test_cli_watch_overrides(capsys, tmp_path: Path):
+    custom_inbox = tmp_path / "MyInbox"
+    custom_docs = tmp_path / "MyDocs"
+    exit_code = main_cli([
+        "watch",
+        "--watch-folder", str(custom_inbox),
+        "--documents-root", str(custom_docs),
+        "--dry-run",
+    ])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert str(custom_inbox) in captured.out
+    assert str(custom_docs) in captured.out
+    assert "DRY-RUN MODE ACTIVE" in captured.out
+
+
+def test_cli_config_update_folders(tmp_path: Path):
+    new_watch = tmp_path / "NewInbox"
+    new_docs = tmp_path / "NewDocs"
+
+    with patch("scansort.__main__.save_config") as mock_save:
+        assert main_cli(["config", "--watch-folder", str(new_watch)]) == 0
+        assert mock_save.called
+
+        assert main_cli(["config", "--documents-folder", str(new_docs)]) == 0
+        assert mock_save.called
+
+
+def test_cli_config_autostart_toggle():
+    with patch("scansort.__main__.enable_autorun") as mock_enable, patch("scansort.__main__.save_config"):
+        assert main_cli(["config", "--autostart", "enable"]) == 0
+        mock_enable.assert_called_once()
+
+    with patch("scansort.__main__.disable_autorun") as mock_disable, patch("scansort.__main__.save_config"):
+        assert main_cli(["config", "--autostart", "disable"]) == 0
+        mock_disable.assert_called_once()
+
+
+def test_cli_undo_nothing_to_undo(capsys):
+    with patch("scansort.__main__.undo_last_move", return_value=None):
+        exit_code = main_cli(["undo"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "No reversible" in captured.out
+
+
+def test_cli_rescan(capsys, tmp_path: Path):
+    docs = tmp_path / "Docs"
+    (docs / "Bills").mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs)
+
+    with patch("scansort.__main__.load_config", return_value=cfg):
+        exit_code = main_cli(["rescan"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Discovered 1 destination folders" in captured.out
+        assert "Bills" in captured.out

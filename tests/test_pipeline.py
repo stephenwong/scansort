@@ -137,3 +137,67 @@ def test_pipeline_e2e_dry_run_mode(tmp_path: Path):
     assert scan_file.exists()
     # And target file should NOT exist on disk
     assert not (docs_root / "Taxes" / "260901_ATO_Notice.pdf").exists()
+import queue
+import threading
+import time
+from unittest.mock import patch
+
+
+def test_pipeline_missing_file_returns_none(tmp_path: Path):
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+    assert pipeline.process_file(tmp_path / "missing.pdf") is None
+
+
+def test_pipeline_unstable_file_returns_none(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    unstable_file = inbox / "unstable.pdf"
+    unstable_file.touch()
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=tmp_path / "Docs")
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+
+    with patch("scansort.pipeline.wait_for_file_stability", return_value=False):
+        assert pipeline.process_file(unstable_file) is None
+
+
+def test_pipeline_conversion_error_returns_none(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    corrupt_file = inbox / "corrupt.jpg"
+    corrupt_file.write_bytes(b"bad data")
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=tmp_path / "Docs")
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+
+    with patch("scansort.pipeline.convert_to_pdf", side_effect=ValueError("Corrupted image")):
+        assert pipeline.process_file(corrupt_file) is None
+
+
+def test_pipeline_run_worker_processes_queue(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Docs"
+    docs.mkdir()
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+
+    file_queue = queue.Queue()
+    stop_event = threading.Event()
+
+    test_file = inbox / "item.pdf"
+    test_file.write_bytes(b"%PDF-1.4 test")
+    file_queue.put(test_file)
+
+    with patch.object(pipeline, "process_file") as mock_process:
+        worker_thread = threading.Thread(target=pipeline.run_worker, args=(file_queue, stop_event))
+        worker_thread.start()
+
+        # Wait for item to be processed
+        time.sleep(0.1)
+        stop_event.set()
+        worker_thread.join(timeout=1.0)
+
+        mock_process.assert_called_once_with(test_file)

@@ -41,3 +41,21 @@ def test_check_duplicate_found(tmp_path: Path):
 def test_check_duplicate_missing_history_file(tmp_path: Path):
     missing_history = tmp_path / "no_history.jsonl"
     assert check_duplicate("somehash", missing_history) is None
+from unittest.mock import patch
+
+
+def test_check_duplicate_skips_empty_and_corrupt_lines(tmp_path: Path):
+    history_file = tmp_path / "history.jsonl"
+    content = "\n\n{invalid json\n" + json.dumps({"sha256": "target_hash", "new_filename": "found.pdf"}) + "\n"
+    history_file.write_text(content, encoding="utf-8")
+
+    result = check_duplicate("target_hash", history_file)
+    assert result is not None
+    assert result["new_filename"] == "found.pdf"
+
+
+def test_check_duplicate_handles_os_error(tmp_path: Path):
+    history_file = tmp_path / "history.jsonl"
+    history_file.touch()
+    with patch("builtins.open", side_effect=OSError("Read error")):
+        assert check_duplicate("somehash", history_file) is None

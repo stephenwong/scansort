@@ -98,3 +98,38 @@ def test_get_default_config_path():
     path = get_default_config_path()
     assert path.name == "config.json"
     assert "ScanSort" in str(path) or "scansort" in str(path)
+
+
+def test_get_default_app_dir_windows(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("APPDATA", "C:\\Users\\Test\\AppData\\Roaming")
+    from scansort.config import get_default_app_dir
+    app_dir = get_default_app_dir()
+    assert "ScanSort" in str(app_dir)
+    assert "AppData" in str(app_dir)
+
+
+def test_load_config_corrupt_json_fallback(tmp_path: Path):
+    corrupt_file = tmp_path / "corrupt_config.json"
+    corrupt_file.write_text("{invalid json", encoding="utf-8")
+    cfg = load_config(corrupt_file)
+    assert isinstance(cfg, AppConfig)
+    assert cfg.gemini_model == "gemini-2.5-flash"
+
+
+def test_get_default_hints_path():
+    from scansort.folder_hints import get_default_hints_path
+    path = get_default_hints_path()
+    assert path.name == "folder_hints.json"
+
+
+def test_load_folder_hints_invalid_format(tmp_path: Path):
+    invalid_file = tmp_path / "hints.json"
+    invalid_file.write_text('["not", "a", "dict"]', encoding="utf-8")
+    assert load_folder_hints(invalid_file) == {}
+
+
+def test_load_folder_hints_corrupt(tmp_path: Path):
+    corrupt_file = tmp_path / "corrupt_hints.json"
+    corrupt_file.write_text("{bad json", encoding="utf-8")
+    assert load_folder_hints(corrupt_file) == {}

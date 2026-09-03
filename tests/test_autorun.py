@@ -43,3 +43,31 @@ def test_autorun_windows(monkeypatch):
             # Test disable
             disable_autorun()
             mock_winreg.DeleteValue.assert_called()
+
+
+def test_autorun_windows_exceptions(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+
+    mock_winreg = MagicMock()
+    mock_winreg.OpenKey.side_effect = OSError("Access denied")
+    mock_winreg.SetValueEx.side_effect = OSError("Write failed")
+    mock_winreg.DeleteValue.side_effect = OSError("Delete failed")
+
+    with patch.dict("sys.modules", {"winreg": mock_winreg}), patch("scansort.autorun._winreg", mock_winreg, create=True):
+        assert is_autorun_enabled() is False
+        assert enable_autorun("C:\\app.exe") is False
+        assert disable_autorun() is False
+
+
+def test_autorun_linux_os_errors(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    desktop_file = tmp_path / "autostart" / "app.desktop"
+
+    with patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file):
+        with patch.object(Path, "write_text", side_effect=OSError("Permission denied")):
+            assert enable_autorun() is False
+
+        desktop_file.parent.mkdir(parents=True, exist_ok=True)
+        desktop_file.touch()
+        with patch.object(Path, "unlink", side_effect=OSError("Cannot delete")):
+            assert disable_autorun() is False
