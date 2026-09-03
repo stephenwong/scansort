@@ -1,4 +1,4 @@
-"""Unit tests for scansort.autorun module (TDD Cycle 10)."""
+"""Unit tests for scansort.autorun module."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch

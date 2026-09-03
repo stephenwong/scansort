@@ -1,4 +1,4 @@
-"""Unit tests for scansort.dispatcher and audit_logger modules (TDD Cycle 8)."""
+"""Unit tests for scansort.dispatcher and audit_logger modules."""
 
 import csv
 import json

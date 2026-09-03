@@ -1,4 +1,4 @@
-"""Unit tests for scansort.file_stabilizer module (TDD Cycle 4)."""
+"""Unit tests for scansort.file_stabilizer module."""
 
 import time
 from pathlib import Path

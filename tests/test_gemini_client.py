@@ -1,4 +1,4 @@
-"""Unit tests for scansort.gemini_client module (TDD Cycle 7)."""
+"""Unit tests for scansort.gemini_client module."""
 
 from datetime import UTC, datetime
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""End-to-End integration tests for ScanSort pipeline (TDD Cycle 11)."""
+"""End-to-End integration tests for ScanSort pipeline."""
 
 import json
 from pathlib import Path

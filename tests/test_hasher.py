@@ -1,4 +1,4 @@
-"""Unit tests for scansort.hasher module (TDD Cycle 4)."""
+"""Unit tests for scansort.hasher module."""
 
 import hashlib
 import json

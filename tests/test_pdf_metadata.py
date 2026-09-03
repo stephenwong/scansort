@@ -1,4 +1,4 @@
-"""Unit tests for scansort.pdf_metadata module (TDD Cycle 6)."""
+"""Unit tests for scansort.pdf_metadata module."""
 
 from pathlib import Path
 

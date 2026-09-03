@@ -1,4 +1,4 @@
-"""Unit tests for scansort.folder_mapper module (TDD Cycle 3)."""
+"""Unit tests for scansort.folder_mapper module."""
 
 import json
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Unit tests for CLI commands in scansort.__main__ (TDD Cycle 10)."""
+"""Unit tests for CLI commands in scansort.__main__."""
 
 from pathlib import Path
 from unittest.mock import patch

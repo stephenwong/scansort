@@ -1,4 +1,4 @@
-"""Unit tests for scansort.watcher module (TDD Cycle 9)."""
+"""Unit tests for scansort.watcher module."""
 
 import queue
 import threading

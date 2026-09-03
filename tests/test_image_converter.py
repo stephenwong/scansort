@@ -1,4 +1,4 @@
-"""Unit tests for scansort.image_converter module (TDD Cycle 5)."""
+"""Unit tests for scansort.image_converter module."""
 
 from pathlib import Path
 

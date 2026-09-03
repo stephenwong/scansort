@@ -1,4 +1,4 @@
-"""Unit tests for scansort.config and folder_hints modules (TDD Cycle 2)."""
+"""Unit tests for scansort.config and folder_hints modules."""
 
 import json
 from pathlib import Path
