@@ -49,7 +49,9 @@ def scan_documents_folders(
     if not docs_root.exists() or not docs_root.is_dir():
         return []
 
-    ignored = ignored_folders if ignored_folders is not None else DEFAULT_IGNORED_FOLDERS
+    ignored = (
+        ignored_folders if ignored_folders is not None else DEFAULT_IGNORED_FOLDERS
+    )
     discovered: list[str] = []
 
     def _walk(current: Path, current_depth: int) -> None:
@@ -139,7 +141,9 @@ class FolderMapper:
                 "documents_root": str(self.docs_root),
                 "folders": self._cached_folders,
             }
-            self.cache_path.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
+            self.cache_path.write_text(
+                json.dumps(cache_data, indent=2), encoding="utf-8"
+            )
         except (OSError, ValueError) as e:
             logger.warning("Failed to write folder cache to %s: %s", self.cache_path, e)
 

@@ -71,7 +71,9 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             data["documents_root"] = Path(data["documents_root"])
         return AppConfig(**data)
     except (json.JSONDecodeError, OSError, ValueError) as e:
-        logger.warning("Error reading config at %s (%s). Using default configuration.", path, e)
+        logger.warning(
+            "Error reading config at %s (%s). Using default configuration.", path, e
+        )
         return AppConfig()
 
 

@@ -74,18 +74,31 @@ class DocumentClassification(BaseModel):
     """Structured classification and metadata returned by Gemini."""
 
     document_date: str = Field(description="Date in YYMMDD format")
-    description: str = Field(description="Concise description in Title_Case_With_Underscores (English)")
-    target_folder: str = Field(description="Matching relative folder from taxonomy, or _Review_Needed")
-    confidence: float = Field(default=0.0, description="Confidence score from 0.0 to 1.0")
-    orientation_correction: int = Field(default=0, description="Degrees to rotate clockwise (0, 90, 180, 270)")
-    document_type: str = Field(default="Other", description="Type: Invoice, Statement, Receipt, Letter, Medical, Blank, Other")
+    description: str = Field(
+        description="Concise description in Title_Case_With_Underscores (English)"
+    )
+    target_folder: str = Field(
+        description="Matching relative folder from taxonomy, or _Review_Needed"
+    )
+    confidence: float = Field(
+        default=0.0, description="Confidence score from 0.0 to 1.0"
+    )
+    orientation_correction: int = Field(
+        default=0, description="Degrees to rotate clockwise (0, 90, 180, 270)"
+    )
+    document_type: str = Field(
+        default="Other",
+        description="Type: Invoice, Statement, Receipt, Letter, Medical, Blank, Other",
+    )
     summary: str = Field(default="", description="1-sentence summary of the document")
 
 
 class GeminiClassifier:
     """Client for classifying documents using Google Gemini 2.5 Flash."""
 
-    def __init__(self, api_key: str | None = None, model: str = "gemini-2.5-flash") -> None:
+    def __init__(
+        self, api_key: str | None = None, model: str = "gemini-2.5-flash"
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self._client: genai.Client | None = None
@@ -156,7 +169,10 @@ class GeminiClassifier:
 
             response = client.models.generate_content(
                 model=self.model,
-                contents=[part, "Extract document metadata and determine the deepest destination folder."],
+                contents=[
+                    part,
+                    "Extract document metadata and determine the deepest destination folder.",
+                ],
                 config=config,
             )
 
@@ -192,7 +208,10 @@ class GeminiClassifier:
             raise
         except (OSError, RuntimeError, TypeError, json.JSONDecodeError) as e:
             redacted_err = redact_secrets_from_text(str(e), self.api_key)
-            logger.warning("Gemini classification failed: %s. Routing to _Review_Needed.", redacted_err)
+            logger.warning(
+                "Gemini classification failed: %s. Routing to _Review_Needed.",
+                redacted_err,
+            )
             return DocumentClassification(
                 document_date=datetime.now(UTC).strftime("%y%m%d"),
                 description="Failed_Scan_Classification",

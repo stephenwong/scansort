@@ -104,6 +104,7 @@ def test_get_default_app_dir_windows(monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setenv("APPDATA", "C:\\Users\\Test\\AppData\\Roaming")
     from scansort.config import get_default_app_dir
+
     app_dir = get_default_app_dir()
     assert "ScanSort" in str(app_dir)
     assert "AppData" in str(app_dir)
@@ -119,6 +120,7 @@ def test_load_config_corrupt_json_fallback(tmp_path: Path):
 
 def test_get_default_hints_path():
     from scansort.folder_hints import get_default_hints_path
+
     path = get_default_hints_path()
     assert path.name == "folder_hints.json"
 

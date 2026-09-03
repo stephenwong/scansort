@@ -55,16 +55,31 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
         try:
             with open(input_path, "rb") as src, open(target_pdf, "wb") as dst:
                 img2pdf.convert(src, outputstream=dst)
-            logger.debug("Wrapped JPEG %s into PDF %s losslessly.", input_path.name, target_pdf.name)
+            logger.debug(
+                "Wrapped JPEG %s into PDF %s losslessly.",
+                input_path.name,
+                target_pdf.name,
+            )
             return target_pdf
-        except (img2pdf.ImageOpenError, img2pdf.PdfTooLargeError, OSError, ValueError) as e:
-            logger.warning("img2pdf failed on %s (%s). Falling back to Pillow.", input_path.name, e)
+        except (
+            img2pdf.ImageOpenError,
+            img2pdf.PdfTooLargeError,
+            OSError,
+            ValueError,
+        ) as e:
+            logger.warning(
+                "img2pdf failed on %s (%s). Falling back to Pillow.", input_path.name, e
+            )
 
     # For PNG, TIFF, or fallback: use Pillow
     with Image.open(input_path) as img:
         # Convert RGBA or CMYK to RGB
         rgb_img = img.convert("RGB")
-        rgb_img.save(target_pdf, format="PDF", resolution=img.info.get("dpi", (300, 300))[0])
+        rgb_img.save(
+            target_pdf, format="PDF", resolution=img.info.get("dpi", (300, 300))[0]
+        )
 
-    logger.debug("Converted image %s to PDF %s via Pillow.", input_path.name, target_pdf.name)
+    logger.debug(
+        "Converted image %s to PDF %s via Pillow.", input_path.name, target_pdf.name
+    )
     return target_pdf

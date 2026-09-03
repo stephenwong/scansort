@@ -82,5 +82,7 @@ def wait_for_file_stability(
 
         time.sleep(poll_interval)
 
-    logger.warning("File %s failed to stabilize within %.1fs timeout.", path.name, timeout)
+    logger.warning(
+        "File %s failed to stabilize within %.1fs timeout.", path.name, timeout
+    )
     return False

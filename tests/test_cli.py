@@ -19,7 +19,10 @@ def test_build_parser():
 
 
 def test_cli_config_show(capsys):
-    with patch("scansort.__main__.get_api_key", return_value="AIzaSyTest1234567890"), patch("scansort.__main__.load_config", return_value=AppConfig()):
+    with (
+        patch("scansort.__main__.get_api_key", return_value="AIzaSyTest1234567890"),
+        patch("scansort.__main__.load_config", return_value=AppConfig()),
+    ):
         exit_code = main_cli(["config", "--show"])
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -36,7 +39,9 @@ def test_cli_config_set_key():
 
 
 def test_cli_undo(tmp_path: Path):
-    with patch("scansort.__main__.undo_last_move", return_value=Path("/inbox/doc.pdf")) as mock_undo:
+    with patch(
+        "scansort.__main__.undo_last_move", return_value=Path("/inbox/doc.pdf")
+    ) as mock_undo:
         exit_code = main_cli(["undo"])
         assert exit_code == 0
         mock_undo.assert_called_once()
@@ -45,12 +50,16 @@ def test_cli_undo(tmp_path: Path):
 def test_cli_watch_overrides(capsys, tmp_path: Path):
     custom_inbox = tmp_path / "MyInbox"
     custom_docs = tmp_path / "MyDocs"
-    exit_code = main_cli([
-        "watch",
-        "--watch-folder", str(custom_inbox),
-        "--documents-root", str(custom_docs),
-        "--dry-run",
-    ])
+    exit_code = main_cli(
+        [
+            "watch",
+            "--watch-folder",
+            str(custom_inbox),
+            "--documents-root",
+            str(custom_docs),
+            "--dry-run",
+        ]
+    )
     assert exit_code == 0
     captured = capsys.readouterr()
     assert str(custom_inbox) in captured.out
@@ -71,11 +80,17 @@ def test_cli_config_update_folders(tmp_path: Path):
 
 
 def test_cli_config_autostart_toggle():
-    with patch("scansort.__main__.enable_autorun") as mock_enable, patch("scansort.__main__.save_config"):
+    with (
+        patch("scansort.__main__.enable_autorun") as mock_enable,
+        patch("scansort.__main__.save_config"),
+    ):
         assert main_cli(["config", "--autostart", "enable"]) == 0
         mock_enable.assert_called_once()
 
-    with patch("scansort.__main__.disable_autorun") as mock_disable, patch("scansort.__main__.save_config"):
+    with (
+        patch("scansort.__main__.disable_autorun") as mock_disable,
+        patch("scansort.__main__.save_config"),
+    ):
         assert main_cli(["config", "--autostart", "disable"]) == 0
         mock_disable.assert_called_once()
 

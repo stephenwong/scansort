@@ -19,7 +19,9 @@ def test_compute_file_sha256(tmp_path: Path):
 
 def test_check_duplicate_not_found(tmp_path: Path):
     history_file = tmp_path / "history.jsonl"
-    history_file.write_text('{"sha256": "aaaa1111", "new_filename": "doc1.pdf"}\n', encoding="utf-8")
+    history_file.write_text(
+        '{"sha256": "aaaa1111", "new_filename": "doc1.pdf"}\n', encoding="utf-8"
+    )
 
     result = check_duplicate("bbbb2222", history_file)
     assert result is None
@@ -27,8 +29,16 @@ def test_check_duplicate_not_found(tmp_path: Path):
 
 def test_check_duplicate_found(tmp_path: Path):
     history_file = tmp_path / "history.jsonl"
-    record1 = {"sha256": "aaaa1111", "new_filename": "260901_Origin_Energy.pdf", "status": "SUCCESS"}
-    record2 = {"sha256": "cccc3333", "new_filename": "260902_Tax_Notice.pdf", "status": "SUCCESS"}
+    record1 = {
+        "sha256": "aaaa1111",
+        "new_filename": "260901_Origin_Energy.pdf",
+        "status": "SUCCESS",
+    }
+    record2 = {
+        "sha256": "cccc3333",
+        "new_filename": "260902_Tax_Notice.pdf",
+        "status": "SUCCESS",
+    }
     history_file.write_text(
         f"{json.dumps(record1)}\n{json.dumps(record2)}\n", encoding="utf-8"
     )
@@ -41,12 +51,18 @@ def test_check_duplicate_found(tmp_path: Path):
 def test_check_duplicate_missing_history_file(tmp_path: Path):
     missing_history = tmp_path / "no_history.jsonl"
     assert check_duplicate("somehash", missing_history) is None
+
+
 from unittest.mock import patch
 
 
 def test_check_duplicate_skips_empty_and_corrupt_lines(tmp_path: Path):
     history_file = tmp_path / "history.jsonl"
-    content = "\n\n{invalid json\n" + json.dumps({"sha256": "target_hash", "new_filename": "found.pdf"}) + "\n"
+    content = (
+        "\n\n{invalid json\n"
+        + json.dumps({"sha256": "target_hash", "new_filename": "found.pdf"})
+        + "\n"
+    )
     history_file.write_text(content, encoding="utf-8")
 
     result = check_duplicate("target_hash", history_file)

@@ -15,10 +15,16 @@ from scansort.gemini_client import (
 
 
 def test_sanitize_description():
-    assert sanitize_description("Origin Energy Electricity Bill") == "Origin_Energy_Electricity_Bill"
-    assert sanitize_description("medical / dental bill: Dr. Smith?") == "Medical_Dental_Bill_Dr_Smith"
+    assert (
+        sanitize_description("Origin Energy Electricity Bill")
+        == "Origin_Energy_Electricity_Bill"
+    )
+    assert (
+        sanitize_description("medical / dental bill: Dr. Smith?")
+        == "Medical_Dental_Bill_Dr_Smith"
+    )
     assert sanitize_description("invoice   with   spaces") == "Invoice_With_Spaces"
-    assert sanitize_description("invalid < > : \" / \\ | ? * chars") == "Invalid_Chars"
+    assert sanitize_description('invalid < > : " / \\ | ? * chars') == "Invalid_Chars"
 
     long_title = "A" * 100
     sanitized_long = sanitize_description(long_title)
@@ -142,7 +148,9 @@ def test_analyze_document_api_failure_returns_graceful_fallback(tmp_path: Path):
     dummy_pdf.write_bytes(b"%PDF-1.4 test")
 
     mock_client = MagicMock()
-    mock_client.models.generate_content.side_effect = RuntimeError("API connection timeout")
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "API connection timeout"
+    )
 
     classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
     classifier._client = mock_client

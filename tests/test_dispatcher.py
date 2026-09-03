@@ -65,7 +65,10 @@ def test_dispatch_file_atomic_move(tmp_path: Path):
 
     assert not source_file.exists()
     assert final_path.exists()
-    assert final_path == docs_root / "Utilities" / "Electricity" / "260901_Origin_Energy_Bill.pdf"
+    assert (
+        final_path
+        == docs_root / "Utilities" / "Electricity" / "260901_Origin_Energy_Bill.pdf"
+    )
     assert final_path.read_bytes() == b"%PDF-1.4 test data"
 
 
@@ -75,7 +78,9 @@ def test_audit_logger_records_jsonl_and_csv(tmp_path: Path):
     csv_path = log_dir / "history.csv"
     mirror_csv = tmp_path / "Documents" / "_ScanSort_History.csv"
 
-    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv)
+    logger = AuditLogger(
+        jsonl_path=jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv
+    )
 
     entry = {
         "sha256": "abc1234567890",
@@ -143,6 +148,8 @@ def test_undo_last_move(tmp_path: Path):
     # Check status was updated
     last_line = jsonl_path.read_text(encoding="utf-8").strip().splitlines()[-1]
     assert json.loads(last_line)["status"] == "UNDONE"
+
+
 from unittest.mock import patch
 
 

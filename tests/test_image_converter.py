@@ -8,7 +8,9 @@ from PIL import Image
 from scansort.image_converter import convert_to_pdf, is_supported_format
 
 
-def _create_sample_image(path: Path, img_format: str = "JPEG", size=(100, 100), color="white"):
+def _create_sample_image(
+    path: Path, img_format: str = "JPEG", size=(100, 100), color="white"
+):
     img = Image.new("RGB", size, color=color)
     img.save(path, format=img_format)
 
@@ -59,6 +61,8 @@ def test_unsupported_format_raises(tmp_path: Path):
 
     with pytest.raises(ValueError, match="Unsupported file format"):
         convert_to_pdf(text_file)
+
+
 from unittest.mock import patch
 
 

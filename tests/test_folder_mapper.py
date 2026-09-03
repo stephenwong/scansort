@@ -103,6 +103,8 @@ def test_folder_mapper_class_caching(tmp_path: Path):
     # Load from cache
     saved_data = json.loads(cache_file.read_text(encoding="utf-8"))
     assert "Work/Contracts" in saved_data["folders"]
+
+
 from unittest.mock import patch
 
 

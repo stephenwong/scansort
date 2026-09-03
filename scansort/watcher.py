@@ -57,7 +57,11 @@ class DropFolderWatcher:
         with self._lock:
             if self.watch_folder == new_folder:
                 return
-            logger.info("Switching monitored folder from %s to %s", self.watch_folder, new_folder)
+            logger.info(
+                "Switching monitored folder from %s to %s",
+                self.watch_folder,
+                new_folder,
+            )
             self.watch_folder = new_folder
             self._restart_event.set()
 
@@ -82,7 +86,11 @@ class DropFolderWatcher:
                     current_folder = self.watch_folder
 
                 current_folder.mkdir(parents=True, exist_ok=True)
-                logger.info("DropFolderWatcher listening on %s (debounce: %dms)", current_folder, self.debounce_ms)
+                logger.info(
+                    "DropFolderWatcher listening on %s (debounce: %dms)",
+                    current_folder,
+                    self.debounce_ms,
+                )
 
                 try:
                     for changes in watch(
@@ -101,7 +109,9 @@ class DropFolderWatcher:
 
                 except (OSError, RuntimeError) as e:
                     if not self._stop_event.is_set():
-                        logger.warning("Watcher encountered error on %s: %s", current_folder, e)
+                        logger.warning(
+                            "Watcher encountered error on %s: %s", current_folder, e
+                        )
         finally:
             self._running = False
             logger.info("DropFolderWatcher stopped.")

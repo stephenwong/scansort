@@ -20,11 +20,17 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # watch command
-    watch_p = subparsers.add_parser("watch", help="Start background drop folder monitor")
+    watch_p = subparsers.add_parser(
+        "watch", help="Start background drop folder monitor"
+    )
     watch_p.add_argument("--watch-folder", type=Path, help="Override drop folder")
     watch_p.add_argument("--documents-root", type=Path, help="Override documents root")
-    watch_p.add_argument("--dry-run", action="store_true", help="Simulate actions without moving files")
-    watch_p.add_argument("--minimized", action="store_true", help="Start minimized to tray")
+    watch_p.add_argument(
+        "--dry-run", action="store_true", help="Simulate actions without moving files"
+    )
+    watch_p.add_argument(
+        "--minimized", action="store_true", help="Start minimized to tray"
+    )
 
     # undo command
     subparsers.add_parser("undo", help="Reverse the last filed document move")
@@ -33,12 +39,24 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("rescan", help="Rescan and display Documents folder taxonomy")
 
     # config command
-    cfg_p = subparsers.add_parser("config", help="Manage application settings and secrets")
-    cfg_p.add_argument("--show", action="store_true", help="Display current configuration")
-    cfg_p.add_argument("--set-key", type=str, help="Store Gemini API key securely in credential vault")
-    cfg_p.add_argument("--watch-folder", type=Path, help="Set default scanner drop folder")
-    cfg_p.add_argument("--documents-folder", type=Path, help="Set default documents destination folder")
-    cfg_p.add_argument("--autostart", choices=["enable", "disable"], help="Toggle auto-start on boot")
+    cfg_p = subparsers.add_parser(
+        "config", help="Manage application settings and secrets"
+    )
+    cfg_p.add_argument(
+        "--show", action="store_true", help="Display current configuration"
+    )
+    cfg_p.add_argument(
+        "--set-key", type=str, help="Store Gemini API key securely in credential vault"
+    )
+    cfg_p.add_argument(
+        "--watch-folder", type=Path, help="Set default scanner drop folder"
+    )
+    cfg_p.add_argument(
+        "--documents-folder", type=Path, help="Set default documents destination folder"
+    )
+    cfg_p.add_argument(
+        "--autostart", choices=["enable", "disable"], help="Toggle auto-start on boot"
+    )
 
     return parser
 
@@ -93,7 +111,12 @@ def main_cli(args: list[str] | None = None) -> int:
                 save_config(cfg)
                 print("Auto-start on boot: DISABLED")
 
-        if parsed.show or (not parsed.set_key and not parsed.watch_folder and not parsed.documents_folder and not parsed.autostart):
+        if parsed.show or (
+            not parsed.set_key
+            and not parsed.watch_folder
+            and not parsed.documents_folder
+            and not parsed.autostart
+        ):
             api_key = get_api_key()
             masked = mask_api_key(api_key)
             autorun_status = "Enabled" if is_autorun_enabled() else "Disabled"
@@ -124,7 +147,9 @@ def main_cli(args: list[str] | None = None) -> int:
         cfg = load_config()
         mapper = FolderMapper(docs_root=cfg.documents_root)
         taxonomy = mapper.refresh()
-        print(f"Discovered {len(taxonomy)} destination folders in {cfg.documents_root}:")
+        print(
+            f"Discovered {len(taxonomy)} destination folders in {cfg.documents_root}:"
+        )
         for f in taxonomy:
             print(f"  - {f}")
         return 0

@@ -11,12 +11,19 @@ def test_wait_for_file_stability_immediate_for_static_file(tmp_path: Path):
     test_file = tmp_path / "sample.pdf"
     test_file.write_text("fixed content", encoding="utf-8")
 
-    assert wait_for_file_stability(test_file, timeout=1.0, poll_interval=0.01, stable_count=2) is True
+    assert (
+        wait_for_file_stability(
+            test_file, timeout=1.0, poll_interval=0.01, stable_count=2
+        )
+        is True
+    )
 
 
 def test_wait_for_file_stability_nonexistent_file(tmp_path: Path):
     missing_file = tmp_path / "ghost.pdf"
-    assert wait_for_file_stability(missing_file, timeout=0.1, poll_interval=0.01) is False
+    assert (
+        wait_for_file_stability(missing_file, timeout=0.1, poll_interval=0.01) is False
+    )
 
 
 def test_wait_for_file_stability_zero_byte_file_waits_for_data(tmp_path: Path):
@@ -67,5 +74,11 @@ def test_wait_for_file_stability_stat_os_error(tmp_path: Path):
     test_file = tmp_path / "stat_err.pdf"
     test_file.write_text("data", encoding="utf-8")
 
-    with patch.object(Path, "stat", side_effect=OSError("Read error")), patch.object(Path, "exists", return_value=True):
-        assert wait_for_file_stability(test_file, timeout=0.05, poll_interval=0.01) is False
+    with (
+        patch.object(Path, "stat", side_effect=OSError("Read error")),
+        patch.object(Path, "exists", return_value=True),
+    ):
+        assert (
+            wait_for_file_stability(test_file, timeout=0.05, poll_interval=0.01)
+            is False
+        )

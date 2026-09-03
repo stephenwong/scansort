@@ -58,7 +58,11 @@ def test_pipeline_e2e_successful_flow(tmp_path: Path):
     # Verify audit log
     history_file = log_dir / "history.jsonl"
     assert history_file.exists()
-    records = [json.loads(line) for line in history_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = [
+        json.loads(line)
+        for line in history_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     assert len(records) == 1
     assert records[0]["status"] == "SUCCESS"
     assert records[0]["new_filename"] == "260901_Origin_Energy_Bill.pdf"
@@ -99,7 +103,11 @@ def test_pipeline_e2e_duplicate_detection(tmp_path: Path):
 
     # Verify second record logged as DUPLICATE
     history_file = log_dir / "history.jsonl"
-    records = [json.loads(line) for line in history_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = [
+        json.loads(line)
+        for line in history_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     assert len(records) == 2
     assert records[1]["status"] == "DUPLICATE"
 
@@ -137,6 +145,8 @@ def test_pipeline_e2e_dry_run_mode(tmp_path: Path):
     assert scan_file.exists()
     # And target file should NOT exist on disk
     assert not (docs_root / "Taxes" / "260901_ATO_Notice.pdf").exists()
+
+
 import queue
 import threading
 import time
@@ -171,7 +181,9 @@ def test_pipeline_conversion_error_returns_none(tmp_path: Path):
     cfg = AppConfig(watch_folder=inbox, documents_root=tmp_path / "Docs")
     pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
 
-    with patch("scansort.pipeline.convert_to_pdf", side_effect=ValueError("Corrupted image")):
+    with patch(
+        "scansort.pipeline.convert_to_pdf", side_effect=ValueError("Corrupted image")
+    ):
         assert pipeline.process_file(corrupt_file) is None
 
 
@@ -192,7 +204,9 @@ def test_pipeline_run_worker_processes_queue(tmp_path: Path):
     file_queue.put(test_file)
 
     with patch.object(pipeline, "process_file") as mock_process:
-        worker_thread = threading.Thread(target=pipeline.run_worker, args=(file_queue, stop_event))
+        worker_thread = threading.Thread(
+            target=pipeline.run_worker, args=(file_queue, stop_event)
+        )
         worker_thread.start()
 
         # Wait for item to be processed

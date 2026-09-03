@@ -38,7 +38,9 @@ def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
         for folder, keywords in data.items():
             norm_folder = folder.replace("\\", "/").strip().strip("/")
             if isinstance(keywords, list):
-                clean_keywords = [str(kw).strip().lower() for kw in keywords if str(kw).strip()]
+                clean_keywords = [
+                    str(kw).strip().lower() for kw in keywords if str(kw).strip()
+                ]
                 if clean_keywords:
                     normalized[norm_folder] = clean_keywords
 

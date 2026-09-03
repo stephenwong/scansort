@@ -54,7 +54,9 @@ class AuditLogger:
         record = dict(entry)
         now_utc = datetime.now(UTC)
         record.setdefault("timestamp", now_utc.isoformat())
-        record.setdefault("local_time", now_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S"))
+        record.setdefault(
+            "local_time", now_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        )
 
         # Write to JSONL
         try:

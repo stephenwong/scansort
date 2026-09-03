@@ -73,7 +73,9 @@ class ScanSortPipeline:
             return None
 
         # 1. Wait for physical scanner to finish writing and release locks
-        if not wait_for_file_stability(file_path, timeout=10.0, poll_interval=0.1, stable_count=2):
+        if not wait_for_file_stability(
+            file_path, timeout=10.0, poll_interval=0.1, stable_count=2
+        ):
             logger.warning("File %s did not stabilize. Skipping.", file_path.name)
             return None
 
@@ -82,24 +84,32 @@ class ScanSortPipeline:
         existing_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
 
         if existing_record:
-            logger.info("Duplicate scan detected for %s (hash: %s).", file_path.name, file_hash[:8])
-            dup_dest_dir = self.config.documents_root / self.config.fallback_folder / "Duplicates"
+            logger.info(
+                "Duplicate scan detected for %s (hash: %s).",
+                file_path.name,
+                file_hash[:8],
+            )
+            dup_dest_dir = (
+                self.config.documents_root / self.config.fallback_folder / "Duplicates"
+            )
             dup_dest_dir.mkdir(parents=True, exist_ok=True)
             dup_dest = resolve_collision(dup_dest_dir, file_path.name)
 
             if not self.config.dry_run:
                 shutil.move(str(file_path), str(dup_dest))
 
-            self.audit_logger.log_scan({
-                "sha256": file_hash,
-                "original_filename": file_path.name,
-                "original_path": str(file_path),
-                "new_filename": dup_dest.name,
-                "destination_folder": f"{self.config.fallback_folder}/Duplicates",
-                "destination_path": str(dup_dest),
-                "summary": f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}",
-                "status": "DUPLICATE",
-            })
+            self.audit_logger.log_scan(
+                {
+                    "sha256": file_hash,
+                    "original_filename": file_path.name,
+                    "original_path": str(file_path),
+                    "new_filename": dup_dest.name,
+                    "destination_folder": f"{self.config.fallback_folder}/Duplicates",
+                    "destination_path": str(dup_dest),
+                    "summary": f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}",
+                    "status": "DUPLICATE",
+                }
+            )
             return dup_dest
 
         # 3. Convert image to PDF if necessary
@@ -113,7 +123,9 @@ class ScanSortPipeline:
         # 4. Multimodal analysis and classification via Gemini
         taxonomy = self.folder_mapper.get_taxonomy()
         hints = load_folder_hints(self.hints_path)
-        classification = self.classifier.classify_document(pdf_path, taxonomy=taxonomy, hints=hints)
+        classification = self.classifier.classify_document(
+            pdf_path, taxonomy=taxonomy, hints=hints
+        )
 
         # 5. Apply auto-rotation and embed XMP metadata
         keywords = [classification.document_type, classification.target_folder]
@@ -144,16 +156,18 @@ class ScanSortPipeline:
             file_path.unlink()
 
         # 8. Record audit log
-        self.audit_logger.log_scan({
-            "sha256": file_hash,
-            "original_filename": file_path.name,
-            "original_path": str(file_path),
-            "new_filename": final_dest.name,
-            "destination_folder": classification.target_folder,
-            "destination_path": str(final_dest),
-            "summary": classification.summary,
-            "status": "SUCCESS",
-        })
+        self.audit_logger.log_scan(
+            {
+                "sha256": file_hash,
+                "original_filename": file_path.name,
+                "original_path": str(file_path),
+                "new_filename": final_dest.name,
+                "destination_folder": classification.target_folder,
+                "destination_path": str(final_dest),
+                "summary": classification.summary,
+                "status": "SUCCESS",
+            }
+        )
 
         logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
         return final_dest

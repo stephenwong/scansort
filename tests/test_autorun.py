@@ -29,20 +29,26 @@ def test_autorun_windows(monkeypatch):
     mock_winreg = MagicMock()
     mock_key = MagicMock()
     mock_winreg.OpenKey.return_value = mock_key
-    mock_winreg.QueryValueEx.return_value = ('"C:\\Programs\\ScanSort.exe" --minimized', 1)
+    mock_winreg.QueryValueEx.return_value = (
+        '"C:\\Programs\\ScanSort.exe" --minimized',
+        1,
+    )
 
-    with patch.dict("sys.modules", {"winreg": mock_winreg}), patch("scansort.autorun._winreg", mock_winreg, create=True):
-            # Test enabled check
-            enabled = is_autorun_enabled()
-            assert enabled is True
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.autorun._winreg", mock_winreg, create=True),
+    ):
+        # Test enabled check
+        enabled = is_autorun_enabled()
+        assert enabled is True
 
-            # Test enable
-            enable_autorun("C:\\Programs\\ScanSort.exe")
-            mock_winreg.SetValueEx.assert_called()
+        # Test enable
+        enable_autorun("C:\\Programs\\ScanSort.exe")
+        mock_winreg.SetValueEx.assert_called()
 
-            # Test disable
-            disable_autorun()
-            mock_winreg.DeleteValue.assert_called()
+        # Test disable
+        disable_autorun()
+        mock_winreg.DeleteValue.assert_called()
 
 
 def test_autorun_windows_exceptions(monkeypatch):
@@ -53,7 +59,10 @@ def test_autorun_windows_exceptions(monkeypatch):
     mock_winreg.SetValueEx.side_effect = OSError("Write failed")
     mock_winreg.DeleteValue.side_effect = OSError("Delete failed")
 
-    with patch.dict("sys.modules", {"winreg": mock_winreg}), patch("scansort.autorun._winreg", mock_winreg, create=True):
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.autorun._winreg", mock_winreg, create=True),
+    ):
         assert is_autorun_enabled() is False
         assert enable_autorun("C:\\app.exe") is False
         assert disable_autorun() is False

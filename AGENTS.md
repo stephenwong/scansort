@@ -126,3 +126,33 @@ uv run pyinstaller scansort.spec
    - Never write to real OS credential managers during test execution. Mock `keyring.get_password`, `keyring.set_password`, and `keyring.delete_password`.
    - Use `tmp_path` fixtures for all filesystem tests.
 3. **Style & Linting:** Code must adhere to strict Ruff rules (`E`, `F`, `I`, `B`, `SIM`, `DTZ`, `BLE`). Do not use bare `except Exception:` unless re-raising or wrapping specific expected I/O and network exceptions.
+
+---
+
+## 6. CI/CD Build Pipeline & Pre-Push Verification Protocol
+
+GitHub Actions runs the `.github/workflows/ci.yml` pipeline on a `windows-latest` runner for every pull request and push to `main`. To ensure the build **NEVER goes red**, agents and contributors must execute and verify the exact 3 gates that CI checks before pushing:
+
+### The 3 Mandatory CI Gates (Run before every push):
+```bash
+# Gate 1: Lint check (Must exit 0 with 0 errors)
+uv run ruff check .
+
+# Gate 2: Code formatting check (Must exit 0 with 0 unformatted files)
+# IMPORTANT: Always run `uv run ruff format .` before pushing!
+uv run ruff format --check .
+
+# Gate 3: Test suite & Coverage check (Must exit 0, 100% tests passing, >=95% coverage)
+uv run pytest
+```
+
+### Why Builds Fail & How to Prevent It:
+1. **Unformatted Code (`ruff format --check` failure):**
+   - *Cause:* Code or tests were written/edited without running `uv run ruff format .`.
+   - *Fix:* Always run `uv run ruff format .` before staging files with `git add`.
+2. **Coverage Drop below 95% (`--cov-fail-under=95` failure):**
+   - *Cause:* New branches, conditions, or exception blocks were introduced without corresponding test coverage.
+   - *Fix:* Add unit tests for both happy and error paths so coverage stays $\ge 95\%$.
+3. **OS-Specific Assumptions (Windows Runner):**
+   - *Cause:* Paths hardcoded as strings instead of `pathlib.Path`, or platform-specific modules invoked without `sys.platform == "win32"` checks.
+   - *Fix:* Use `pathlib.Path` objects everywhere and mock platform-specific APIs (`winreg`, `msvcrt`) properly.

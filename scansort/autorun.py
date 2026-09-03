@@ -19,8 +19,11 @@ def is_autorun_enabled() -> bool:
     if sys.platform == "win32":
         try:
             import winreg
+
             reg = getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
-            with reg.OpenKey(reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_READ) as key:
+            with reg.OpenKey(
+                reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_READ
+            ) as key:
                 reg.QueryValueEx(key, RUN_KEY_NAME)
                 return True
         except (OSError, FileNotFoundError, AttributeError):
@@ -44,8 +47,11 @@ def enable_autorun(executable_path: str | None = None) -> bool:
     if sys.platform == "win32":
         try:
             import winreg
+
             reg = getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
-            with reg.OpenKey(reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE) as key:
+            with reg.OpenKey(
+                reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE
+            ) as key:
                 reg.SetValueEx(key, RUN_KEY_NAME, 0, reg.REG_SZ, f'"{cmd}" --minimized')
                 logger.info("Enabled Windows autorun registry key for %s", cmd)
                 return True
@@ -79,8 +85,11 @@ def disable_autorun() -> bool:
     if sys.platform == "win32":
         try:
             import winreg
+
             reg = getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
-            with reg.OpenKey(reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE) as key:
+            with reg.OpenKey(
+                reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE
+            ) as key:
                 reg.DeleteValue(key, RUN_KEY_NAME)
                 logger.info("Removed Windows autorun registry key.")
                 return True

@@ -51,10 +51,12 @@ def test_watcher_ignores_temporary_and_unsupported(tmp_path: Path):
     txt_file = inbox / "notes.txt"
     txt_file.touch()
 
-    watcher._handle_changes([
-        (Change.added, str(tmp_file)),
-        (Change.modified, str(txt_file)),
-    ])
+    watcher._handle_changes(
+        [
+            (Change.added, str(tmp_file)),
+            (Change.modified, str(txt_file)),
+        ]
+    )
 
     assert file_queue.empty()
 

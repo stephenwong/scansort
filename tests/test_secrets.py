@@ -40,7 +40,9 @@ def test_get_api_key_strips_whitespace(monkeypatch):
 def test_set_api_key_stores_in_keyring():
     with patch("keyring.set_password") as mock_set:
         set_api_key("AIzaSyValidKey123")
-        mock_set.assert_called_once_with("ScanSort", "GeminiApiKey", "AIzaSyValidKey123")
+        mock_set.assert_called_once_with(
+            "ScanSort", "GeminiApiKey", "AIzaSyValidKey123"
+        )
 
 
 def test_set_api_key_raises_on_empty_or_whitespace():
@@ -60,7 +62,9 @@ def test_delete_api_key_removes_from_keyring():
 
 
 def test_delete_api_key_handles_nonexistent_gracefully():
-    with patch("keyring.delete_password", side_effect=keyring.errors.PasswordDeleteError):
+    with patch(
+        "keyring.delete_password", side_effect=keyring.errors.PasswordDeleteError
+    ):
         delete_api_key()
 
 
@@ -95,5 +99,8 @@ def test_redact_secrets_regex_fallback():
 
 def test_delete_api_key_keyring_error(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    with patch("keyring.delete_password", side_effect=keyring.errors.KeyringError("Keyring locked")):
+    with patch(
+        "keyring.delete_password",
+        side_effect=keyring.errors.KeyringError("Keyring locked"),
+    ):
         delete_api_key()  # Should not raise exception
