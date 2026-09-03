@@ -232,42 +232,15 @@ The output bundle is produced in `dist/ScanSort/ScanSort.exe`.
 
 ---
 
-## Development & Test-Driven Development (TDD)
-
-ScanSort was developed strictly via **Test-Driven Development (Red $\rightarrow$ Green $\rightarrow$ Refactor)** with strict coverage enforcement:
+## Testing
 
 ```bash
-# Run full test suite with automated >=95% coverage enforcement
+# Run test suite
 uv run pytest
 
-# Check code style and formatting
+# Code quality and formatting check
 uv run ruff check .
-uv run ruff format --check .
 ```
-
-### Coverage Guarantee
-
-The repository enforces a strict **95% minimum coverage threshold** via `pyproject.toml`. The test suite currently achieves **98% overall coverage** across 106 automated tests:
-
-| Component | Coverage |
-| :--- | :---: |
-| `scansort/__init__.py` | **100%** |
-| `scansort/audit_logger.py` | **100%** |
-| `scansort/config.py` | **100%** |
-| `scansort/folder_hints.py` | **100%** |
-| `scansort/hasher.py` | **100%** |
-| `scansort/image_converter.py` | **100%** |
-| `scansort/secrets.py` | **100%** |
-| `scansort/__main__.py` | **98%** |
-| `scansort/autorun.py` | **98%** |
-| `scansort/dispatcher.py` | **98%** |
-| `scansort/folder_mapper.py` | **97%** |
-| `scansort/file_stabilizer.py` | **95%** |
-| `scansort/gemini_client.py` | **95%** |
-| `scansort/pdf_metadata.py` | **95%** |
-| `scansort/pipeline.py` | **95%** |
-| `scansort/watcher.py` | **95%** |
-| **TOTAL** | **98%** |
 
 ---
 
