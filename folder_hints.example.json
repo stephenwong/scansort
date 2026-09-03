@@ -1,0 +1,6 @@
+{
+  "Health/Dental": ["dentist", "teeth", "bupa", "orthodontic"],
+  "Vehicles/Car": ["rego", "service", "mechanic", "tyres"],
+  "Finances/Taxes": ["ato", "tax return", "payment summary", "group certificate"],
+  "Utilities/Electricity": ["energy", "electricity", "power", "origin", "agl"]
+}

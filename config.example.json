@@ -1,0 +1,10 @@
+{
+  "watch_folder": "C:\\Users\\Username\\Scans\\Inbox",
+  "documents_root": "C:\\Users\\Username\\Documents",
+  "fallback_folder": "_Review_Needed",
+  "gemini_model": "gemini-2.5-flash",
+  "start_on_boot": true,
+  "max_folder_depth": 3,
+  "mirror_log_to_documents": false,
+  "dry_run": false
+}

@@ -1,0 +1,45 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Testing & Linting
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+
+# PyInstaller & Build artifacts
+build/
+dist/
+*.manifest
+*.spec.bak
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# CRITICAL: Secrets, Local Configs, and Personal Scan Data
+.env
+.env.*
+*.key
+config.json
+folder_map.json
+history.jsonl
+history.csv
+*.log
+_Review_Needed/
+_ScanSort_History.csv
+Scans/
+Documents/
