@@ -59,3 +59,15 @@ def test_unsupported_format_raises(tmp_path: Path):
 
     with pytest.raises(ValueError, match="Unsupported file format"):
         convert_to_pdf(text_file)
+from unittest.mock import patch
+
+
+def test_convert_jpeg_fallback_to_pillow(tmp_path: Path):
+    jpg_file = tmp_path / "scan_fallback.jpg"
+    _create_sample_image(jpg_file, img_format="JPEG")
+
+    with patch("img2pdf.convert", side_effect=OSError("img2pdf failed")):
+        pdf_result = convert_to_pdf(jpg_file)
+        assert pdf_result.exists()
+        assert pdf_result.suffix.lower() == ".pdf"
+        assert pdf_result.read_bytes().startswith(b"%PDF")

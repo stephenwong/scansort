@@ -21,3 +21,11 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.16.5",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--cov=scansort --cov-report=term-missing --cov-fail-under=95"
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = false

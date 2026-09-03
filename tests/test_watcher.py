@@ -96,3 +96,29 @@ def test_watcher_start_and_stop_cleanly(tmp_path: Path):
         thread.join(timeout=1.0)
         assert not thread.is_alive()
         assert watcher.is_running() is False
+
+
+def test_watcher_switch_same_folder(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=queue.Queue())
+    watcher.switch_folder(inbox)
+    assert watcher.watch_folder == inbox
+
+
+def test_watcher_handles_error_in_watch(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=queue.Queue())
+
+    calls = 0
+
+    def mock_watch_error(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        watcher.stop()
+        raise OSError("Disk disconnected")
+
+    with patch("scansort.watcher.watch", side_effect=mock_watch_error):
+        watcher.start()
+        assert calls == 1
