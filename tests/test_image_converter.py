@@ -75,3 +75,27 @@ def test_convert_jpeg_fallback_to_pillow(tmp_path: Path):
         assert pdf_result.exists()
         assert pdf_result.suffix.lower() == ".pdf"
         assert pdf_result.read_bytes().startswith(b"%PDF")
+
+
+def test_multipage_tiff_preserves_all_pages(tmp_path: Path):
+    from pypdf import PdfReader
+
+    tiff_file = tmp_path / "scan.tiff"
+    f1 = Image.new("RGB", (50, 50), "red")
+    f2 = Image.new("RGB", (50, 50), "green")
+    f1.save(tiff_file, save_all=True, append_images=[f2])
+
+    out_pdf = convert_to_pdf(tiff_file)
+    reader = PdfReader(out_pdf)
+    assert len(reader.pages) == 2
+
+
+def test_convert_pdf_to_custom_output_path(tmp_path: Path):
+    input_pdf = tmp_path / "source.pdf"
+    input_pdf.write_bytes(b"%PDF-1.5 test")
+    dest_pdf = tmp_path / "destination.pdf"
+
+    result = convert_to_pdf(input_pdf, output_path=dest_pdf)
+    assert result == dest_pdf
+    assert dest_pdf.exists()
+    assert dest_pdf.read_bytes() == b"%PDF-1.5 test"

@@ -135,3 +135,45 @@ def test_load_folder_hints_corrupt(tmp_path: Path):
     corrupt_file = tmp_path / "corrupt_hints.json"
     corrupt_file.write_text("{bad json", encoding="utf-8")
     assert load_folder_hints(corrupt_file) == {}
+
+
+def test_fallback_folder_validation():
+    import pytest
+
+    with pytest.raises(ValueError, match="fallback_folder cannot contain absolute"):
+        AppConfig(fallback_folder="/absolute/path")
+
+    with pytest.raises(ValueError, match="fallback_folder cannot contain absolute"):
+        AppConfig(fallback_folder="../../escaped")
+
+    with pytest.raises(ValueError, match="fallback_folder cannot be empty"):
+        AppConfig(fallback_folder="   ")
+
+
+def test_load_config_type_error_handling(tmp_path: Path):
+    null_file = tmp_path / "null_config.json"
+    null_file.write_text("null", encoding="utf-8")
+    cfg = load_config(null_file)
+    assert isinstance(cfg, AppConfig)
+
+    list_file = tmp_path / "list_config.json"
+    list_file.write_text("[]", encoding="utf-8")
+    cfg = load_config(list_file)
+    assert isinstance(cfg, AppConfig)
+
+    bad_field_file = tmp_path / "bad_field.json"
+    bad_field_file.write_text(
+        '{"watch_folder": null, "documents_root": null}', encoding="utf-8"
+    )
+    cfg = load_config(bad_field_file)
+    assert isinstance(cfg, AppConfig)
+
+
+def test_folder_hints_ignores_none_and_non_strings(tmp_path: Path):
+    hints_file = tmp_path / "hints_with_null.json"
+    data = {"Finances": ["tax", None, 123, "invoice"]}
+    hints_file.write_text(json.dumps(data), encoding="utf-8")
+    hints = load_folder_hints(hints_file)
+    assert hints["Finances"] == ["tax", "invoice"]
+    assert "none" not in hints["Finances"]
+    assert "123" not in hints["Finances"]

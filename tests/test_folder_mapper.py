@@ -144,7 +144,61 @@ def test_folder_mapper_cache_write_error(tmp_path: Path):
     docs_dir.mkdir()
     cache_file = tmp_path / "cache.json"
     mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
-    with patch.object(Path, "write_text", side_effect=OSError("Read-only filesystem")):
+    with patch.object(Path, "replace", side_effect=OSError("Read-only filesystem")):
         # Should not raise exception
         folders = mapper.refresh()
         assert folders == []
+
+
+def test_scan_folders_case_insensitive_fallback(tmp_path: Path):
+    docs_dir = tmp_path / "Documents"
+    (docs_dir / "Receipts").mkdir(parents=True)
+    (docs_dir / "_review_needed").mkdir(parents=True)
+
+    folders = scan_documents_folders(docs_dir, fallback_folder="_Review_Needed")
+    assert "Receipts" in folders
+    assert "_review_needed" not in folders
+
+
+def test_format_taxonomy_case_insensitive_hints():
+    folders = ["Health/Dental"]
+    hints = {"health/dental": ["teeth", "dentist"]}
+    prompt = format_taxonomy_for_prompt(folders, hints)
+    assert "Health/Dental (Hints: teeth, dentist)" in prompt
+
+
+def test_cache_invalidation_on_docs_root_change(tmp_path: Path):
+    dir_a = tmp_path / "DocsA"
+    dir_b = tmp_path / "DocsB"
+    (dir_a / "FolderA").mkdir(parents=True)
+    (dir_b / "FolderB").mkdir(parents=True)
+    cache_file = tmp_path / "cache.json"
+
+    mapper_a = FolderMapper(docs_root=dir_a, cache_path=cache_file)
+    mapper_a.refresh()
+
+    mapper_b = FolderMapper(docs_root=dir_b, cache_path=cache_file)
+    tax_b = mapper_b.get_taxonomy()
+    assert "FolderB" in tax_b
+    assert "FolderA" not in tax_b
+
+
+def test_cache_corrupt_format_list_handling(tmp_path: Path):
+    docs_dir = tmp_path / "Docs"
+    (docs_dir / "Bills").mkdir(parents=True)
+    cache_file = tmp_path / "cache.json"
+    cache_file.write_text('["not", "a", "dict"]', encoding="utf-8")
+
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    tax = mapper.get_taxonomy()
+    assert "Bills" in tax
+
+
+def test_empty_taxonomy_memory_caching(tmp_path: Path):
+    docs_dir = tmp_path / "EmptyDocs"
+    docs_dir.mkdir()
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=tmp_path / "cache.json")
+    assert mapper.get_taxonomy() == []
+    # Verify second call returns the cached empty list
+    assert mapper._cached_folders == []
+    assert mapper.get_taxonomy() == []

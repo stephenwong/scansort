@@ -187,3 +187,77 @@ def test_audit_logger_os_error_handling(tmp_path: Path):
     with patch("builtins.open", side_effect=OSError("Disk full")):
         # Should not raise exception
         logger.log_scan({"status": "SUCCESS"})
+
+
+def test_dispatch_blocks_path_traversal(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    src = tmp_path / "scan.pdf"
+    src.write_bytes(b"%PDF-1.4")
+    meta = DocumentClassification(
+        document_date="260901",
+        description="Escape",
+        target_folder="_Review_Needed/../../Escaped",
+    )
+    dest = dispatch_file(src, docs_root, meta)
+    assert dest.resolve().is_relative_to(docs_root.resolve())
+    assert "_Review_Needed" in str(dest)
+
+
+def test_undo_does_not_clobber_existing_file(tmp_path: Path):
+    history_file = tmp_path / "history.jsonl"
+    filed_pdf = tmp_path / "docs" / "260901_Bill.pdf"
+    filed_pdf.parent.mkdir(parents=True)
+    filed_pdf.write_bytes(b"OLD FILED BILL")
+    drop_file = tmp_path / "inbox" / "scan.pdf"
+    drop_file.parent.mkdir(parents=True)
+    drop_file.write_bytes(b"NEW ARRIVING SCAN")
+    record = {
+        "status": "SUCCESS",
+        "destination_path": str(filed_pdf),
+        "original_path": str(drop_file),
+        "new_filename": "260901_Bill.pdf",
+    }
+    history_file.write_text(json.dumps(record) + "\n")
+    restored = undo_last_move(history_file)
+    assert drop_file.read_bytes() == b"NEW ARRIVING SCAN"
+    assert restored != drop_file
+    assert restored.read_bytes() == b"OLD FILED BILL"
+
+
+def test_undo_preserves_pdf_extension_for_converted_images(tmp_path: Path):
+    history_file = tmp_path / "history.jsonl"
+    dest_pdf = tmp_path / "docs" / "filed.pdf"
+    dest_pdf.parent.mkdir(parents=True)
+    dest_pdf.write_bytes(b"%PDF-1.4")
+    orig_jpg = tmp_path / "inbox" / "scan.jpg"
+    record = {
+        "status": "SUCCESS",
+        "destination_path": str(dest_pdf),
+        "original_path": str(orig_jpg),
+    }
+    history_file.write_text(json.dumps(record) + "\n")
+    restored = undo_last_move(history_file)
+    assert restored.suffix == ".pdf"
+
+
+def test_undo_multiple_moves(tmp_path: Path):
+    hist = tmp_path / "history.jsonl"
+    f1 = tmp_path / "d1.pdf"
+    f1.touch()
+    f2 = tmp_path / "d2.pdf"
+    f2.touch()
+    r1 = {
+        "status": "SUCCESS",
+        "destination_path": str(f1),
+        "original_path": str(tmp_path / "o1.pdf"),
+    }
+    r2 = {
+        "status": "SUCCESS",
+        "destination_path": str(f2),
+        "original_path": str(tmp_path / "o2.pdf"),
+    }
+    hist.write_text(f"{json.dumps(r1)}\n{json.dumps(r2)}\n")
+    assert undo_last_move(hist) is not None
+    assert undo_last_move(hist) is not None
+    assert undo_last_move(hist) is None

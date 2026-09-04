@@ -96,13 +96,15 @@ flowchart TD
 - **Zero-Leak Secret Vault:** Your Gemini API key is never written to plaintext config files. It is stored directly in the OS-encrypted credential vault (Windows Credential Manager / DPAPI via `keyring`).
 - **Rust-Powered Filesystem Watcher:** Built on `watchfiles` (wrapping Rust's `notify` crate) with native debouncing to handle scanner buffers and multi-page ADF batch scans.
 - **Deepest Subfolder Matching:** Scans your real `Documents` directory hierarchy and classifies scans into the most specific leaf folder. If no existing folder fits or confidence is below 70%, files route safely to `Documents/_Review_Needed/` (never inventing rogue folders).
+- **Multi-Page TIFF & Image Support:** Automatically normalizes single and multi-page TIFFs, JPEGs, and PNGs into standard searchable PDFs without dropping pages.
 - **Auto Page-Orientation:** Automatically corrects skewed, sideways, or upside-down scans (0°, 90°, 180°, 270°) using `pypdf`.
 - **Native Windows Search Indexing:** Embeds document title, summary, and category keywords into standard PDF DocInfo and XMP metadata streams, enabling instant Windows Start Menu and Explorer search.
 - **SHA-256 Duplicate Interception:** Computes cryptographic SHA-256 hashes for all scans. Re-scans are identified before filing and routed to `_Review_Needed/Duplicates/`, saving Gemini API quota.
-- **Instant Move Reversal ("Undo"):** Provides an immediate single-command undo (`scansort undo`) that reverses the last filed scan back to your drop folder.
+- **Sequential Undo Support:** Provides single-command undo (`scansort undo`) that can be executed repeatedly to roll back successive moves, restoring files safely with collision handling and resetting duplicate status.
+- **Resilient Background Worker:** Robust queue worker designed to handle transient API rate limits (429/503) and network drops by falling back to review folders without terminating the daemon.
 - **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`.
 - **Dry-Run Mode:** Test and preview classification logic on your documents without moving or modifying files (`--dry-run`).
-- **Windows Boot Auto-Start:** Automatically launches on user login via the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key.
+- **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart.
 
 ---
 
@@ -153,37 +155,44 @@ uv run python -m scansort config --watch-folder "C:\Scans\Inbox"
 uv run python -m scansort config --documents-folder "D:\My Documents"
 ```
 
-### 4. Configure Auto-Start on Windows Boot
+### 4. Configure Auto-Start on Boot (Windows & Linux)
 ```bash
-# Enable run-on-startup (sets HKCU registry key)
-uv run python -m scansort config --autostart enable
+# Enable run-on-startup (sets HKCU registry key on Windows, XDG autostart on Linux)
+uv run scansort config --autostart enable
 
 # Disable run-on-startup
-uv run python -m scansort config --autostart disable
+uv run scansort config --autostart disable
 ```
 
 ### 5. Preview Scans in Dry-Run Mode
-Simulate categorization without altering any files:
+Simulate categorization without moving files or modifying PDFs:
 ```bash
-uv run python -m scansort watch --dry-run
+uv run scansort watch --dry-run
 ```
 
 ### 6. Start Live Background Monitoring
 ```bash
-uv run python -m scansort watch
+# Standard interactive foreground monitor
+uv run scansort watch
+
+# Run silently / minimized without banner output
+uv run scansort watch --minimized
+
+# Optional: Override drop folder or documents root for a single session
+uv run scansort watch --watch-folder "C:\Scans\Inbox" --documents-root "D:\Documents"
 ```
 
-### 7. Undo the Last Document Move
-Misplaced a document or want to re-scan? Reverse the last move instantly:
+### 7. Reverse Document Moves (Undo)
+Misplaced a document or want to re-scan? Reverse the last move instantly. You can run `undo` successively to roll back multiple previous filings:
 ```bash
-uv run python -m scansort undo
+uv run scansort undo
 ```
-*Restores the file to its original location in your drop folder and marks the transaction as `UNDONE` in the audit log.*
+*Restores the file to its original location in your drop folder (with automatic numerical collision resolution so existing files are never overwritten) and marks the record as `UNDONE` in `history.jsonl`, enabling re-scanned duplicates to be re-ingested.*
 
 ### 8. Inspect Discovered Taxonomy
-Verify the folders ScanSort will use for classification:
+Verify the folders ScanSort will use for classification (respecting `max_folder_depth` and `fallback_folder` exclusions):
 ```bash
-uv run python -m scansort rescan
+uv run scansort rescan
 ```
 
 ---
@@ -241,9 +250,3 @@ uv run pytest
 # Code quality and formatting check
 uv run ruff check .
 ```
-
----
-
-## Documentation
-
-- Detailed requirements and specifications: [Product Requirements Document (PRD)](docs/PRD.md)

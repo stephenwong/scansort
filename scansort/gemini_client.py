@@ -6,8 +6,10 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 
 from scansort.folder_mapper import format_taxonomy_for_prompt
@@ -28,11 +30,14 @@ def sanitize_description(desc: str, max_length: int = 60) -> str:
     Returns:
         Clean Title_Case_With_Underscores string.
     """
-    if not desc or not desc.strip():
+    if desc is None:
+        return "Scanned_Document"
+    desc_str = str(desc)
+    if not desc_str or not desc_str.strip():
         return "Scanned_Document"
 
     # Replace invalid Windows chars and punctuation with spaces
-    cleaned = _INVALID_CHARS_REGEX.sub(" ", desc)
+    cleaned = _INVALID_CHARS_REGEX.sub(" ", desc_str)
     # Replace dashes and underscores with spaces to split words cleanly
     cleaned = cleaned.replace("-", " ").replace("_", " ")
 
@@ -57,10 +62,10 @@ def sanitize_date(date_str: str) -> str:
         6-digit YYMMDD date string.
     """
     today_yymmdd = datetime.now(UTC).strftime("%y%m%d")
-    if not date_str:
+    if date_str is None:
         return today_yymmdd
 
-    clean = date_str.strip().replace("-", "").replace("/", "")
+    clean = str(date_str).strip().replace("-", "").replace("/", "")
     if len(clean) == 6 and clean.isdigit():
         return clean
     if len(clean) == 8 and clean.isdigit():
@@ -102,11 +107,9 @@ class GeminiClassifier:
         self.api_key = api_key
         self.model = model
         self._client: genai.Client | None = None
+        self._cached_key: str | None = None
 
     def _get_client(self) -> genai.Client:
-        if self._client is not None:
-            return self._client
-
         active_key = self.api_key or get_api_key()
         if not active_key:
             raise ValueError(
@@ -114,6 +117,13 @@ class GeminiClassifier:
                 "Settings wizard, scansort config --set-key, or GEMINI_API_KEY environment variable."
             )
 
+        if self._client is not None and (
+            self._cached_key == active_key or self._cached_key is None
+        ):
+            return self._client
+
+        self.api_key = active_key
+        self._cached_key = active_key
         self._client = genai.Client(api_key=active_key)
         return self._client
 
@@ -177,21 +187,43 @@ class GeminiClassifier:
             )
 
             raw_text = response.text or "{}"
-            data = json.loads(raw_text)
+            try:
+                data = json.loads(raw_text)
+            except json.JSONDecodeError:
+                data = {}
 
-            # Sanitize description and date
+            if not isinstance(data, dict):
+                data = {}
+
+            # Sanitize description and date safely
             desc = sanitize_description(data.get("description", "Document"))
             doc_date = sanitize_date(data.get("document_date", ""))
-            doc_type = data.get("document_type", "Other")
-            target = data.get("target_folder", "_Review_Needed")
-            conf = float(data.get("confidence", 0.8))
-            orient = int(data.get("orientation_correction", 0)) % 360
-            summary = str(data.get("summary", "")).strip()
+            raw_type = data.get("document_type", "Other")
+            doc_type = str(raw_type) if raw_type is not None else "Other"
+            raw_target = data.get("target_folder", "_Review_Needed")
+            target = str(raw_target) if raw_target is not None else "_Review_Needed"
+            try:
+                conf = float(data.get("confidence", 0.8))
+            except (ValueError, TypeError):
+                conf = 0.0
 
-            # Apply folder routing rules
-            if doc_type.lower() == "blank":
+            try:
+                orient_val = int(data.get("orientation_correction", 0))
+                orient = orient_val % 360 if orient_val in {0, 90, 180, 270} else 0
+            except (ValueError, TypeError):
+                orient = 0
+
+            summary = str(data.get("summary", "") or "").strip()
+
+            # Apply folder routing and security rules
+            clean_parts = target.replace("\\", "/").split("/")
+            if target.startswith(("/", "\\")) or ".." in clean_parts:
+                target = "_Review_Needed"
+            elif doc_type.lower() == "blank":
                 target = "_Review_Needed/Blank_Scans"
-            elif target not in taxonomy and not target.startswith("_Review_Needed"):
+            elif conf < 0.70 or (
+                target not in taxonomy and not target.startswith("_Review_Needed")
+            ):
                 target = "_Review_Needed"
 
             return DocumentClassification(
@@ -204,9 +236,15 @@ class GeminiClassifier:
                 summary=summary,
             )
 
-        except ValueError:
-            raise
-        except (OSError, RuntimeError, TypeError, json.JSONDecodeError) as e:
+        except (
+            APIError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            AttributeError,
+        ) as e:
             redacted_err = redact_secrets_from_text(str(e), self.api_key)
             logger.warning(
                 "Gemini classification failed: %s. Routing to _Review_Needed.",
@@ -221,3 +259,6 @@ class GeminiClassifier:
                 document_type="Other",
                 summary=f"Automated classification encountered error: {redacted_err[:100]}",
             )
+        except ValueError:
+            # Re-raise missing API key error
+            raise

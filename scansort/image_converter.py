@@ -1,10 +1,9 @@
-"""Image and document normalization engine converting incoming scans to PDF format."""
-
 import logging
+import shutil
 from pathlib import Path
 
 import img2pdf
-from PIL import Image
+from PIL import Image, ImageSequence
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +42,15 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
             f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
         )
 
-    # If it is already a PDF and no custom output path is requested, passthrough
-    if ext == ".pdf" and (output_path is None or output_path == input_path):
-        return input_path
-
     target_pdf = output_path or input_path.with_suffix(".pdf")
     target_pdf.parent.mkdir(parents=True, exist_ok=True)
+
+    # If it is already a PDF, passthrough or copy
+    if ext == ".pdf":
+        if output_path is None or output_path == input_path:
+            return input_path
+        shutil.copy2(input_path, target_pdf)
+        return target_pdf
 
     if ext in {".jpg", ".jpeg"}:
         # Lossless wrapping of JPEG streams via img2pdf (preserves exact DPI and zero re-compression)
@@ -71,15 +73,26 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
                 "img2pdf failed on %s (%s). Falling back to Pillow.", input_path.name, e
             )
 
-    # For PNG, TIFF, or fallback: use Pillow
+    # For PNG, TIFF, or fallback: use Pillow supporting multi-frame images
     with Image.open(input_path) as img:
-        # Convert RGBA or CMYK to RGB
-        rgb_img = img.convert("RGB")
-        rgb_img.save(
-            target_pdf, format="PDF", resolution=img.info.get("dpi", (300, 300))[0]
+        frames = [frame.convert("RGB") for frame in ImageSequence.Iterator(img)]
+        first_frame = frames[0]
+        append_frames = frames[1:]
+        dpi_info = img.info.get("dpi", (300, 300))
+        res = dpi_info[0] if isinstance(dpi_info, (tuple, list)) else dpi_info
+
+        first_frame.save(
+            target_pdf,
+            format="PDF",
+            save_all=True,
+            append_images=append_frames,
+            resolution=res,
         )
 
     logger.debug(
-        "Converted image %s to PDF %s via Pillow.", input_path.name, target_pdf.name
+        "Converted image %s to PDF %s via Pillow (%d pages).",
+        input_path.name,
+        target_pdf.name,
+        len(frames),
     )
     return target_pdf

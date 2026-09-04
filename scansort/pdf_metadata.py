@@ -1,5 +1,6 @@
 """PDF metadata enrichment and auto-orientation rotation engine using pypdf."""
 
+import io
 import logging
 import tempfile
 from pathlib import Path
@@ -36,11 +37,13 @@ def process_pdf_metadata_and_rotation(
         raise FileNotFoundError(f"PDF file not found at {pdf_path}")
 
     target_path = output_path or pdf_path
-    reader = PdfReader(pdf_path)
+    pdf_bytes = pdf_path.read_bytes()
+    reader = PdfReader(io.BytesIO(pdf_bytes))
     writer = PdfWriter()
 
-    # Normalize orientation angle
-    norm_angle = orientation_angle % 360
+    # Normalize orientation angle to orthogonal multiples
+    raw_norm = orientation_angle % 360
+    norm_angle = raw_norm if raw_norm in {0, 90, 180, 270} else 0
 
     # Add pages with optional rotation
     for page in reader.pages:
@@ -68,13 +71,18 @@ def process_pdf_metadata_and_rotation(
 
     # If updating in place, write to temp file first then replace to avoid corruption
     if target_path == pdf_path:
-        with tempfile.NamedTemporaryFile(
-            dir=pdf_path.parent, delete=False, suffix=".tmp"
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-            writer.write(tmp_file)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=pdf_path.parent, delete=False, suffix=".tmp"
+            ) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                writer.write(tmp_file)
 
-        tmp_path.replace(target_path)
+            tmp_path.replace(target_path)
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
     else:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with open(target_path, "wb") as f:

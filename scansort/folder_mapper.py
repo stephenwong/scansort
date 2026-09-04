@@ -2,6 +2,7 @@
 
 import json
 import logging
+import tempfile
 from pathlib import Path
 
 from scansort.config import get_default_app_dir
@@ -68,8 +69,12 @@ def scan_documents_folders(
             name = subdir.name
             name_lower = name.lower()
 
-            # Skip dotfolders, fallback folder, and noise folders
-            if name.startswith(".") or name == fallback_folder or name_lower in ignored:
+            # Skip dotfolders, fallback folder (case-insensitive), and noise folders
+            if (
+                name.startswith(".")
+                or name_lower == fallback_folder.lower()
+                or name_lower in ignored
+            ):
                 continue
 
             rel_path = subdir.relative_to(docs_root).as_posix()
@@ -96,10 +101,10 @@ def format_taxonomy_for_prompt(
     if not folders:
         return "No pre-existing folders detected."
 
-    active_hints = hints or {}
+    active_hints = {k.lower(): v for k, v in (hints or {}).items()}
     lines = ["AVAILABLE DESTINATION FOLDERS:"]
     for folder in folders:
-        folder_hints = active_hints.get(folder)
+        folder_hints = active_hints.get(folder.lower())
         if folder_hints:
             hints_str = ", ".join(folder_hints)
             lines.append(f"- {folder} (Hints: {hints_str})")
@@ -125,7 +130,7 @@ class FolderMapper:
         self.hints_path = hints_path
         self.max_depth = max_depth
         self.fallback_folder = fallback_folder
-        self._cached_folders: list[str] = []
+        self._cached_folders: list[str] | None = None
 
     def refresh(self) -> list[str]:
         """Scan documents root and write results to the cache file."""
@@ -135,33 +140,47 @@ class FolderMapper:
             fallback_folder=self.fallback_folder,
         )
 
+        tmp_path = None
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_data = {
                 "documents_root": str(self.docs_root),
                 "folders": self._cached_folders,
             }
-            self.cache_path.write_text(
-                json.dumps(cache_data, indent=2), encoding="utf-8"
-            )
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=self.cache_path.parent,
+                delete=False,
+                encoding="utf-8",
+                suffix=".tmp",
+            ) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                json.dump(cache_data, tmp_file, indent=2)
+            tmp_path.replace(self.cache_path)
         except (OSError, ValueError) as e:
             logger.warning("Failed to write folder cache to %s: %s", self.cache_path, e)
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
         return self._cached_folders
 
     def get_taxonomy(self) -> list[str]:
         """Return the current taxonomy, loading from cache if available."""
-        if self._cached_folders:
+        if self._cached_folders is not None:
             return self._cached_folders
 
         if self.cache_path.exists():
             try:
                 data = json.loads(self.cache_path.read_text(encoding="utf-8"))
-                folders = data.get("folders", [])
-                if isinstance(folders, list):
-                    self._cached_folders = [str(f) for f in folders]
-                    return self._cached_folders
-            except (json.JSONDecodeError, OSError, ValueError):
+                if isinstance(data, dict):
+                    cached_root = data.get("documents_root")
+                    if cached_root == str(self.docs_root):
+                        folders = data.get("folders", [])
+                        if isinstance(folders, list):
+                            self._cached_folders = [str(f) for f in folders]
+                            return self._cached_folders
+            except (json.JSONDecodeError, OSError, ValueError, AttributeError):
                 pass
 
         return self.refresh()

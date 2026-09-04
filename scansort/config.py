@@ -4,9 +4,10 @@ import json
 import logging
 import os
 import sys
+import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,19 @@ class AppConfig(BaseModel):
     dry_run: bool = False
     mirror_log_to_documents: bool = False
 
+    @field_validator("fallback_folder")
+    @classmethod
+    def validate_fallback_folder(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("fallback_folder cannot be empty")
+        clean = v.strip()
+        parts = clean.replace("\\", "/").split("/")
+        if clean.startswith(("/", "\\")) or ".." in parts:
+            raise ValueError(
+                "fallback_folder cannot contain absolute paths or '..' traversal segments"
+            )
+        return clean
+
     def ensure_directories(self) -> None:
         """Create watch folder, documents root, and fallback folder if they do not exist."""
         self.watch_folder.mkdir(parents=True, exist_ok=True)
@@ -65,12 +79,21 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     try:
         content = path.read_text(encoding="utf-8")
         data = json.loads(content)
-        if "watch_folder" in data:
+        if not isinstance(data, dict):
+            logger.warning(
+                "Config file at %s is not a dictionary. Using defaults.", path
+            )
+            return AppConfig()
+        if data.get("watch_folder") is not None:
             data["watch_folder"] = Path(data["watch_folder"])
-        if "documents_root" in data:
+        else:
+            data.pop("watch_folder", None)
+        if data.get("documents_root") is not None:
             data["documents_root"] = Path(data["documents_root"])
+        else:
+            data.pop("documents_root", None)
         return AppConfig(**data)
-    except (json.JSONDecodeError, OSError, ValueError) as e:
+    except (json.JSONDecodeError, OSError, ValueError, TypeError) as e:
         logger.warning(
             "Error reading config at %s (%s). Using default configuration.", path, e
         )
@@ -93,5 +116,15 @@ def save_config(config: AppConfig, config_path: Path | None = None) -> None:
         "mirror_log_to_documents": config.mirror_log_to_documents,
     }
 
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    logger.info("Configuration saved to %s", path)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=path.parent, delete=False, encoding="utf-8", suffix=".tmp"
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            json.dump(data, tmp_file, indent=2)
+        tmp_path.replace(path)
+        logger.info("Configuration saved to %s", path)
+    finally:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)

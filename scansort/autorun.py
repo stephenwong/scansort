@@ -42,7 +42,12 @@ def enable_autorun(executable_path: str | None = None) -> bool:
     Returns:
         True if successfully enabled, False otherwise.
     """
-    cmd = executable_path or sys.executable
+    if executable_path:
+        base_cmd = f'"{executable_path}"'
+    elif getattr(sys, "frozen", False):
+        base_cmd = f'"{sys.executable}"'
+    else:
+        base_cmd = f'"{sys.executable}" -m scansort'
 
     if sys.platform == "win32":
         try:
@@ -52,8 +57,10 @@ def enable_autorun(executable_path: str | None = None) -> bool:
             with reg.OpenKey(
                 reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE
             ) as key:
-                reg.SetValueEx(key, RUN_KEY_NAME, 0, reg.REG_SZ, f'"{cmd}" --minimized')
-                logger.info("Enabled Windows autorun registry key for %s", cmd)
+                reg.SetValueEx(
+                    key, RUN_KEY_NAME, 0, reg.REG_SZ, f"{base_cmd} watch --minimized"
+                )
+                logger.info("Enabled Windows autorun registry key for %s", base_cmd)
                 return True
         except (OSError, AttributeError) as e:
             logger.warning("Failed to enable Windows autorun registry key: %s", e)
@@ -67,7 +74,7 @@ def enable_autorun(executable_path: str | None = None) -> bool:
             "[Desktop Entry]\n"
             "Type=Application\n"
             "Name=ScanSort\n"
-            f"Exec={cmd} watch --minimized\n"
+            f"Exec={base_cmd} watch --minimized\n"
             "Hidden=false\n"
             "NoDisplay=false\n"
             "X-GNOME-Autostart-enabled=true\n"
@@ -93,18 +100,21 @@ def disable_autorun() -> bool:
                 reg.DeleteValue(key, RUN_KEY_NAME)
                 logger.info("Removed Windows autorun registry key.")
                 return True
-        except (OSError, FileNotFoundError, AttributeError) as e:
+        except FileNotFoundError:
+            return True
+        except (OSError, AttributeError) as e:
             logger.debug("Autorun key was not present or could not be removed: %s", e)
             return False
 
     desktop_file = _get_linux_autostart_path()
-    if desktop_file.exists():
-        try:
-            desktop_file.unlink()
-            logger.info("Removed Linux autostart file.")
-            return True
-        except OSError as e:
-            logger.warning("Failed to remove Linux autostart file: %s", e)
-            return False
-
-    return True
+    if not desktop_file.exists():
+        return True
+    try:
+        desktop_file.unlink()
+        logger.info("Removed Linux autostart file.")
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError as e:
+        logger.warning("Failed to remove Linux autostart file: %s", e)
+        return False

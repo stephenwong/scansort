@@ -80,3 +80,39 @@ def test_output_to_different_file(tmp_path: Path):
     assert pdf_out.exists()
     reader = PdfReader(pdf_out)
     assert reader.metadata.get("/Title") == "Sample Title"
+
+
+def test_rotate_non_orthogonal_angle_clamped(tmp_path: Path):
+    pdf_in = tmp_path / "angle45.pdf"
+    _create_minimal_pdf(pdf_in)
+
+    res = process_pdf_metadata_and_rotation(pdf_in, orientation_angle=45)
+    reader = PdfReader(res)
+    assert reader.pages[0].rotation == 0
+
+
+def test_missing_pdf_raises_error(tmp_path: Path):
+    import pytest
+
+    missing = tmp_path / "ghost.pdf"
+    with pytest.raises(FileNotFoundError):
+        process_pdf_metadata_and_rotation(missing)
+
+
+def test_inplace_temp_file_cleanup_on_error(tmp_path: Path):
+    from unittest.mock import patch
+
+    import pytest
+
+    pdf_in = tmp_path / "broken_write.pdf"
+    _create_minimal_pdf(pdf_in)
+
+    with (
+        patch("pypdf.PdfWriter.write", side_effect=OSError("Disk full")),
+        pytest.raises(OSError),
+    ):
+        process_pdf_metadata_and_rotation(pdf_in)
+
+    # Verify no .tmp files leaked in the directory
+    tmp_files = list(tmp_path.glob("*.tmp"))
+    assert tmp_files == []

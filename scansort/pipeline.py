@@ -1,10 +1,9 @@
-"""Central pipeline coordinator orchestrating document stabilization, OCR, filing, and audit logging."""
-
 import logging
 import queue
 import shutil
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from scansort.audit_logger import AuditLogger
@@ -37,6 +36,8 @@ class ScanSortPipeline:
         self.config = config
         self.app_dir = app_dir or get_default_app_dir()
         self.app_dir.mkdir(parents=True, exist_ok=True)
+        self.tmp_dir = self.app_dir / "tmp"
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
 
         self.classifier = classifier or GeminiClassifier(model=config.gemini_model)
         self.hints_path = self.app_dir / "folder_hints.json"
@@ -112,13 +113,17 @@ class ScanSortPipeline:
             )
             return dup_dest
 
-        # 3. Convert image to PDF if necessary
+        # 3. Convert image to PDF in isolated app scratch directory if necessary
         is_original_image = file_path.suffix.lower() != ".pdf"
-        try:
-            pdf_path = convert_to_pdf(file_path)
-        except (ValueError, OSError) as e:
-            logger.error("Failed to convert %s to PDF: %s", file_path.name, e)
-            return None
+        pdf_path = file_path
+        if is_original_image:
+            tmp_pdf_name = f"{file_path.stem}_{uuid.uuid4().hex[:8]}.pdf"
+            scratch_pdf = self.tmp_dir / tmp_pdf_name
+            try:
+                pdf_path = convert_to_pdf(file_path, output_path=scratch_pdf)
+            except (ValueError, OSError) as e:
+                logger.error("Failed to convert %s to PDF: %s", file_path.name, e)
+                return None
 
         # 4. Multimodal analysis and classification via Gemini
         taxonomy = self.folder_mapper.get_taxonomy()
@@ -127,17 +132,7 @@ class ScanSortPipeline:
             pdf_path, taxonomy=taxonomy, hints=hints
         )
 
-        # 5. Apply auto-rotation and embed XMP metadata
-        keywords = [classification.document_type, classification.target_folder]
-        process_pdf_metadata_and_rotation(
-            pdf_path=pdf_path,
-            orientation_angle=classification.orientation_correction,
-            title=classification.description,
-            subject=classification.summary,
-            keywords=keywords,
-        )
-
-        # 6. Check Dry-Run Mode
+        # 5. Dry-Run Verification before any file mutation or metadata writing
         target_dir = self.config.documents_root / classification.target_folder
         desired_name = generate_target_filename(classification)
         simulated_dest = resolve_collision(target_dir, desired_name)
@@ -148,10 +143,20 @@ class ScanSortPipeline:
                 pdf_path.unlink()
             return simulated_dest
 
+        # 6. Apply auto-rotation and embed XMP metadata
+        keywords = [classification.document_type, classification.target_folder]
+        process_pdf_metadata_and_rotation(
+            pdf_path=pdf_path,
+            orientation_angle=classification.orientation_correction,
+            title=classification.description,
+            subject=classification.summary,
+            keywords=keywords,
+        )
+
         # 7. Atomic Dispatch to destination folder
         final_dest = dispatch_file(pdf_path, self.config.documents_root, classification)
 
-        # If we converted an image to a separate PDF in the drop folder, remove the source image
+        # If we converted an image to a separate PDF in temp, remove the source image from drop folder
         if is_original_image and file_path.exists():
             file_path.unlink()
 
@@ -183,7 +188,7 @@ class ScanSortPipeline:
 
             try:
                 self.process_file(item)
-            except (OSError, ValueError, RuntimeError) as e:
+            except Exception as e:  # noqa: BLE001 - Worker loop must survive unexpected task errors
                 logger.error("Unexpected error processing %s: %s", item, e)
             finally:
                 file_queue.task_done()

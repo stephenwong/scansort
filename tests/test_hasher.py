@@ -75,3 +75,12 @@ def test_check_duplicate_handles_os_error(tmp_path: Path):
     history_file.touch()
     with patch("builtins.open", side_effect=OSError("Read error")):
         assert check_duplicate("somehash", history_file) is None
+
+
+def test_check_duplicate_ignores_undone(tmp_path: Path):
+    hist = tmp_path / "history.jsonl"
+    h = "a" * 64
+    r1 = {"sha256": h, "status": "SUCCESS"}
+    r2 = {"sha256": h, "status": "UNDONE"}
+    hist.write_text(f"{json.dumps(r1)}\n{json.dumps(r2)}\n")
+    assert check_duplicate(h, hist) is None

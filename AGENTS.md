@@ -21,7 +21,7 @@ This document defines repository instructions, architectural invariants, coding 
 ```
 scansort/
 ├── .github/workflows/          # CI and Release workflows (Windows runners)
-├── docs/
+├── working-docs/               # Working documentation & PRD
 │   └── PRD.md                  # Comprehensive technical specification & requirements
 ├── scansort/                   # Core Python package (Python >=3.12)
 │   ├── __init__.py             # Version definition
@@ -79,6 +79,26 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - If Gemini returns non-zero `orientation_correction` (90°, 180°, 270°), rotate pages using `pypdf`.
 - Embed DocInfo and XMP metadata (`Title`, `Subject`, `Keywords`, `Author`) into every output PDF to enable native Windows Start Menu search indexing.
 
+### F. In-Place PDF Modification on Windows
+- Always buffer PDF bytes into `io.BytesIO` before parsing with `pypdf` when replacing files in-place. On Windows, active file handles cause `PermissionError: [WinError 32]` during atomic replacement (`tmp_path.replace(target_path)`).
+- Always clean up temporary files in `try...finally` blocks.
+
+### G. Path Traversal Defenses
+- Never trust model-generated `target_folder` values or user-specified `fallback_folder` settings. Reject leading slashes and `..` traversal segments.
+- Verify that destination directories satisfy `target_dir.is_relative_to(docs_root)`.
+
+### H. Intermediate File Isolation
+- Never write intermediate PDFs or temporary conversion files into the monitored drop folder. Always store working files in the application temp directory (`app_dir / "tmp"`).
+
+### I. Worker Fault Tolerance & Rate Limiting
+- The background processing worker must never crash on transient API rate limits (429/503) or network disconnects.
+- Route failing items to `_Review_Needed/` with diagnostic logging and keep the queue worker alive.
+
+### J. Strict Test-Driven Development (TDD) & Zero "Test Slop"
+- **Always write tests first:** For any new feature, bug fix, or behavioral change, write failing automated tests before writing production code.
+- **Purposeful & Functional Tests:** Every test must have a distinct functional purpose and test a real contract, behavior, edge condition, or failure mode.
+- **Zero Test Slop:** Never write shallow, hollow, or meaningless tests purely to inflate coverage metrics (e.g., testing tautologies, over-mocking until no production logic executes, or executing code paths without meaningful assertions). All tests must rigorously validate expected outputs and side-effects.
+
 ---
 
 ## 4. Development Toolchain & Commands
@@ -116,16 +136,24 @@ uv run pyinstaller scansort.spec
 
 ## 5. Testing & Code Quality Standards
 
-1. **Coverage Threshold:** Every file in `scansort/` must maintain at least **95% line coverage**. Total repository coverage must not fall below **95%**. This is strictly enforced in `pyproject.toml` via:
+1. **Mandatory Test-Driven Development (TDD):**
+   - **Step 1 (Red):** Before implementing any bug fix, enhancement, or new feature, write automated unit tests that reproduce the defect or specify the intended behavior. Run `uv run pytest` and verify that the tests fail for the expected reason.
+   - **Step 2 (Green):** Write the minimal clean production code necessary to satisfy the test requirements.
+   - **Step 3 (Refactor):** Refactor for code quality, clarity, and architectural adherence while keeping tests 100% passing.
+2. **Zero Test "Slop" Policy:**
+   - Tests must have a concrete, functional purpose. Every test must validate real business logic, error propagation, safety invariants, or edge conditions.
+   - **No Coverage Hacks / Dummy Tests:** Do not write tests whose only goal is to artificially satisfy coverage lines (e.g., executing code without asserting results, asserting trivial tautologies like `assert True`, or mocking away all actual behavior).
+   - **Meaningful Assertions:** Always assert specific return values, raised exception types and messages, file mutations, and filesystem side-effects.
+3. **Coverage Threshold:** Every file in `scansort/` must maintain at least **95% line coverage**. Total repository coverage must not fall below **95%**. This is strictly enforced in `pyproject.toml` via:
    ```toml
    [tool.pytest.ini_options]
    addopts = "--cov=scansort --cov-report=term-missing --cov-fail-under=95"
    ```
-2. **Mocking Standards:**
+4. **Mocking Standards:**
    - Never make live network requests to Google Gemini in unit tests. Mock `google.genai.Client` and `types.GenerateContentConfig`.
    - Never write to real OS credential managers during test execution. Mock `keyring.get_password`, `keyring.set_password`, and `keyring.delete_password`.
    - Use `tmp_path` fixtures for all filesystem tests.
-3. **Style & Linting:** Code must adhere to strict Ruff rules (`E`, `F`, `I`, `B`, `SIM`, `DTZ`, `BLE`). Do not use bare `except Exception:` unless re-raising or wrapping specific expected I/O and network exceptions.
+5. **Style & Linting:** Code must adhere to strict Ruff rules (`E`, `F`, `I`, `B`, `SIM`, `DTZ`, `BLE`). Do not use bare `except Exception:` unless re-raising or wrapping specific expected I/O and network exceptions.
 
 ---
 

@@ -43,3 +43,9 @@ _Review_Needed/
 _ScanSort_History.csv
 Scans/
 Documents/
+
+# Graphify knowledge graph & caches
+graphify-out/
+
+# Working documentation & generated markdown reports
+working-docs/

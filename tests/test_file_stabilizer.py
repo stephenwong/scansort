@@ -82,3 +82,53 @@ def test_wait_for_file_stability_stat_os_error(tmp_path: Path):
             wait_for_file_stability(test_file, timeout=0.05, poll_interval=0.01)
             is False
         )
+
+
+def test_is_file_locked_readonly_file(tmp_path: Path):
+    ro_file = tmp_path / "readonly.pdf"
+    ro_file.write_bytes(b"some scan data")
+    ro_file.chmod(0o444)
+    try:
+        assert is_file_locked(ro_file) is False
+    finally:
+        ro_file.chmod(0o666)
+
+
+def test_is_file_locked_windows_mock(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    test_file = tmp_path / "win_locked.pdf"
+    test_file.write_bytes(b"content")
+
+    from unittest.mock import MagicMock
+
+    mock_msvcrt = MagicMock()
+    mock_msvcrt.locking.side_effect = OSError("Lock violation")
+    with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}):
+        assert is_file_locked(test_file) is True
+
+    # Windows unlocked branch
+    mock_msvcrt_unlocked = MagicMock()
+    with patch.dict("sys.modules", {"msvcrt": mock_msvcrt_unlocked}):
+        assert is_file_locked(test_file) is False
+        assert mock_msvcrt_unlocked.locking.call_count == 2
+
+
+def test_is_file_locked_posix_flock_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    test_file = tmp_path / "posix_locked.pdf"
+    test_file.write_bytes(b"content")
+
+    import fcntl
+
+    with patch.object(
+        fcntl, "flock", side_effect=OSError("Resource temporarily unavailable")
+    ):
+        assert is_file_locked(test_file) is True
+
+
+def test_is_file_locked_permission_denied(tmp_path: Path):
+    test_file = tmp_path / "perm_denied.pdf"
+    test_file.write_bytes(b"content")
+
+    with patch("builtins.open", side_effect=PermissionError("Permission denied")):
+        assert is_file_locked(test_file) is True

@@ -1,5 +1,6 @@
 """Unit tests for scansort.gemini_client module."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -159,3 +160,169 @@ def test_analyze_document_api_failure_returns_graceful_fallback(tmp_path: Path):
     assert result.target_folder == "_Review_Needed"
     assert result.confidence == 0.0
     assert "Failed" in result.description or "Error" in result.description
+
+
+def test_low_confidence_forces_review_needed(tmp_path: Path):
+    import json
+
+    dummy = tmp_path / "doc.pdf"
+    dummy.write_bytes(b"%PDF-1.4")
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Bill",
+            "target_folder": "Utilities",
+            "confidence": 0.45,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_resp
+    cls = GeminiClassifier(api_key="AIzaSyTest")
+    cls._client = mock_client
+    cls._cached_key = "AIzaSyTest"
+    res = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res.target_folder == "_Review_Needed"
+
+
+def test_path_traversal_target_folder_blocked(tmp_path: Path):
+    import json
+
+    dummy = tmp_path / "doc.pdf"
+    dummy.write_bytes(b"%PDF-1.4")
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Escape",
+            "target_folder": "../../Escaped",
+            "confidence": 0.95,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_resp
+    cls = GeminiClassifier(api_key="AIzaSyTest")
+    cls._client = mock_client
+    cls._cached_key = "AIzaSyTest"
+    res = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res.target_folder == "_Review_Needed"
+
+
+def test_gemini_api_error_handled(tmp_path: Path):
+    from google.genai.errors import APIError
+
+    dummy = tmp_path / "doc.pdf"
+    dummy.write_bytes(b"%PDF-1.4")
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = APIError(
+        429, {"error": {"message": "Quota exceeded"}}
+    )
+    cls = GeminiClassifier(api_key="AIzaSyTest")
+    cls._client = mock_client
+    cls._cached_key = "AIzaSyTest"
+    res = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res.target_folder == "_Review_Needed"
+    assert res.confidence == 0.0
+
+
+def test_gemini_malformed_json_and_non_dict(tmp_path: Path):
+    dummy = tmp_path / "doc.pdf"
+    dummy.write_bytes(b"%PDF-1.4")
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "not json at all"
+    mock_client.models.generate_content.return_value = mock_resp
+    cls = GeminiClassifier(api_key="AIzaSyTest")
+    cls._client = mock_client
+    cls._cached_key = "AIzaSyTest"
+    res = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res.target_folder == "_Review_Needed"
+
+    # Non-dict JSON list
+    mock_resp.text = '["item1", "item2"]'
+    res2 = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res2.target_folder == "_Review_Needed"
+
+
+def test_gemini_non_orthogonal_rotation(tmp_path: Path):
+    import json
+
+    dummy = tmp_path / "doc.pdf"
+    dummy.write_bytes(b"%PDF-1.4")
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Doc",
+            "target_folder": "Utilities",
+            "confidence": 0.9,
+            "orientation_correction": 45,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_resp
+    cls = GeminiClassifier(api_key="AIzaSyTest")
+    cls._client = mock_client
+    cls._cached_key = "AIzaSyTest"
+    res = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res.orientation_correction == 0
+
+
+def test_sanitizers_numeric_types():
+    assert sanitize_description(12345) == "12345"
+    assert sanitize_description(None) == "Scanned_Document"
+    assert sanitize_description("") == "Scanned_Document"
+    assert sanitize_description("   ") == "Scanned_Document"
+    assert sanitize_description("???") == "Scanned_Document"
+    assert sanitize_date(20260901) == "260901"
+    assert sanitize_date(None) == datetime.now(UTC).strftime("%y%m%d")
+
+
+def test_malformed_confidence_and_orientation(tmp_path: Path):
+    dummy = tmp_path / "doc.pdf"
+    dummy.write_bytes(b"%PDF-1.4")
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Doc",
+            "target_folder": "Utilities",
+            "confidence": "not_a_float",
+            "orientation_correction": "not_an_int",
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_resp
+    cls = GeminiClassifier(api_key="AIzaSyTest")
+    cls._client = mock_client
+    cls._cached_key = "AIzaSyTest"
+    res = cls.classify_document(dummy, taxonomy=["Utilities"])
+    assert res.confidence == 0.0
+    assert res.orientation_correction == 0
+    # Because confidence is 0.0, it should be routed to _Review_Needed
+    assert res.target_folder == "_Review_Needed"
+
+
+def test_client_caching_and_key_rotation(monkeypatch):
+    from unittest.mock import patch
+
+    cls = GeminiClassifier()
+    with (
+        patch("scansort.gemini_client.get_api_key", return_value="Key1"),
+        patch("scansort.gemini_client.genai.Client") as mock_client_cls,
+    ):
+        c1 = cls._get_client()
+        assert cls.api_key == "Key1"
+        c2 = cls._get_client()
+        assert c1 == c2
+        assert mock_client_cls.call_count == 1
+
+    # Key rotated in vault
+    with (
+        patch("scansort.gemini_client.get_api_key", return_value="Key2"),
+        patch("scansort.gemini_client.genai.Client") as mock_client_cls2,
+    ):
+        cls.api_key = None  # reset to read from vault
+        _ = cls._get_client()
+        assert cls.api_key == "Key2"
+        assert mock_client_cls2.call_count == 1

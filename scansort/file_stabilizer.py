@@ -1,16 +1,9 @@
-"""File stabilization engine ensuring scanner write completion and releasing of file locks."""
-
 import logging
+import sys
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def _try_open_exclusive(path: Path) -> None:
-    """Attempt opening the file in read/append mode to verify that the scanner process has closed it."""
-    with open(path, "r+b"):
-        pass
 
 
 def is_file_locked(path: Path) -> bool:
@@ -26,7 +19,25 @@ def is_file_locked(path: Path) -> bool:
         return True
 
     try:
-        _try_open_exclusive(path)
+        with open(path, "rb") as f:
+            if sys.platform == "win32":
+                import msvcrt
+
+                size = path.stat().st_size
+                if size > 0:
+                    try:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        return True
+            else:
+                import fcntl
+
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    return True
         return False
     except (OSError, PermissionError):
         return True
@@ -55,12 +66,14 @@ def wait_for_file_stability(
 
     while (time.monotonic() - start_time) < timeout:
         if not path.exists():
+            consecutive_stable = 0
             time.sleep(poll_interval)
             continue
 
         try:
             current_size = path.stat().st_size
         except OSError:
+            consecutive_stable = 0
             time.sleep(poll_interval)
             continue
 

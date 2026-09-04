@@ -80,3 +80,25 @@ def test_autorun_linux_os_errors(tmp_path: Path, monkeypatch):
         desktop_file.touch()
         with patch.object(Path, "unlink", side_effect=OSError("Cannot delete")):
             assert disable_autorun() is False
+
+
+def test_autorun_windows_file_not_found_returns_true(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_winreg = MagicMock()
+    mock_winreg.DeleteValue.side_effect = FileNotFoundError("Value not found")
+
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.autorun._winreg", mock_winreg, create=True),
+    ):
+        assert disable_autorun() is True
+
+
+def test_autorun_command_formatting(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    desktop_file = tmp_path / "autostart" / "app.desktop"
+
+    with patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file):
+        enable_autorun(executable_path="/opt/my path/scansort")
+        content = desktop_file.read_text(encoding="utf-8")
+        assert 'Exec="/opt/my path/scansort" watch --minimized' in content

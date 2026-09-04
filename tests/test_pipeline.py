@@ -215,3 +215,72 @@ def test_pipeline_run_worker_processes_queue(tmp_path: Path):
         worker_thread.join(timeout=1.0)
 
         mock_process.assert_called_once_with(test_file)
+
+
+def test_dry_run_leaves_pdf_unmodified(tmp_path: Path):
+    pdf = tmp_path / "test.pdf"
+    pdf.write_bytes(b"%PDF-1.4 raw scan content")
+    orig = pdf.read_bytes()
+
+    cfg = AppConfig(
+        watch_folder=tmp_path, documents_root=tmp_path / "docs", dry_run=True
+    )
+    p = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+    p.classifier.classify_document = MagicMock(
+        return_value=DocumentClassification(
+            target_folder="Tax",
+            orientation_correction=180,
+            description="Doc",
+            summary="Sum",
+            document_type="Tax",
+            document_date="260901",
+        )
+    )
+    p.process_file(pdf)
+    assert pdf.read_bytes() == orig
+
+
+def test_worker_thread_survives_api_error(tmp_path: Path):
+    from google.genai.errors import APIError
+
+    cfg = AppConfig(watch_folder=tmp_path / "inbox", documents_root=tmp_path / "docs")
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+    pipeline.process_file = MagicMock(
+        side_effect=APIError(429, {"error": {"message": "Quota exceeded"}})
+    )
+    q = queue.Queue()
+    stop_event = threading.Event()
+    q.put(tmp_path / "inbox" / "scan.pdf")
+    t = threading.Thread(target=pipeline.run_worker, args=(q, stop_event))
+    t.start()
+    q.join()
+    assert t.is_alive(), "Worker thread died on APIError!"
+    stop_event.set()
+    t.join(timeout=1.0)
+
+
+def test_intermediate_pdf_in_temp_dir(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    img_file = inbox / "scan.jpg"
+    _create_sample_scan(img_file)
+
+    mock_classification = DocumentClassification(
+        document_date="260901",
+        description="Test",
+        target_folder="_Review_Needed",
+        confidence=0.9,
+    )
+    pipeline.classifier.classify_document = MagicMock(return_value=mock_classification)
+
+    filed = pipeline.process_file(img_file)
+    assert filed is not None
+    # Verify no .pdf was left in the inbox directory
+    assert list(inbox.glob("*.pdf")) == []

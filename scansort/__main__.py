@@ -1,14 +1,25 @@
 """CLI entry point and command router for ScanSort."""
 
 import argparse
+import queue
 import sys
+import threading
 from pathlib import Path
+
+import keyring.errors
 
 from scansort.autorun import disable_autorun, enable_autorun, is_autorun_enabled
 from scansort.config import get_default_config_path, load_config, save_config
 from scansort.dispatcher import undo_last_move
 from scansort.folder_mapper import FolderMapper
-from scansort.secrets import get_api_key, mask_api_key, set_api_key
+from scansort.pipeline import ScanSortPipeline
+from scansort.secrets import (
+    get_api_key,
+    mask_api_key,
+    redact_secrets_from_text,
+    set_api_key,
+)
+from scansort.watcher import DropFolderWatcher
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -16,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scansort",
         description="ScanSort: Intelligent automated desktop document filer powered by Gemini 2.5 Flash.",
+    )
+    parser.add_argument(
+        "--minimized", action="store_true", help="Start minimized to tray"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -68,45 +82,86 @@ def main_cli(args: list[str] | None = None) -> int:
 
     if not parsed.command or parsed.command == "watch":
         cfg = load_config()
-        if parsed.command == "watch":
-            if parsed.watch_folder:
-                cfg.watch_folder = parsed.watch_folder
-            if parsed.documents_root:
-                cfg.documents_root = parsed.documents_root
-            if parsed.dry_run:
-                cfg.dry_run = True
+        if getattr(parsed, "watch_folder", None):
+            cfg.watch_folder = parsed.watch_folder.resolve()
+        if getattr(parsed, "documents_root", None):
+            cfg.documents_root = parsed.documents_root.resolve()
+        if getattr(parsed, "dry_run", False):
+            cfg.dry_run = True
 
-        print(f"Starting ScanSort monitor on: {cfg.watch_folder}")
-        print(f"Destination Documents root: {cfg.documents_root}")
-        if cfg.dry_run:
-            print("[DRY-RUN MODE ACTIVE: No files will be moved]")
+        cfg.ensure_directories()
+
+        if not getattr(parsed, "minimized", False):
+            print(f"Starting ScanSort monitor on: {cfg.watch_folder}")
+            print(f"Destination Documents root: {cfg.documents_root}")
+            if cfg.dry_run:
+                print("[DRY-RUN MODE ACTIVE: No files will be moved]")
+
+        file_queue: queue.Queue = queue.Queue()
+        stop_event = threading.Event()
+        pipeline = ScanSortPipeline(config=cfg)
+        watcher = DropFolderWatcher(
+            watch_folder=cfg.watch_folder, file_queue=file_queue
+        )
+
+        worker_thread = threading.Thread(
+            target=pipeline.run_worker,
+            args=(file_queue, stop_event),
+            daemon=True,
+        )
+        worker_thread.start()
+
+        try:
+            watcher.start()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            watcher.stop()
+            stop_event.set()
+            worker_thread.join(timeout=2.0)
+
         return 0
 
     if parsed.command == "config":
         cfg = load_config()
 
         if parsed.set_key:
-            set_api_key(parsed.set_key)
-            print("Successfully saved Gemini API key to secure OS credential vault.")
+            try:
+                set_api_key(parsed.set_key)
+                print(
+                    "Successfully saved Gemini API key to secure OS credential vault."
+                )
+            except (ValueError, keyring.errors.KeyringError, OSError) as e:
+                redacted = redact_secrets_from_text(str(e), parsed.set_key)
+                print(f"Error saving Gemini API key: {redacted}", file=sys.stderr)
+                return 1
 
         if parsed.watch_folder:
-            cfg.watch_folder = parsed.watch_folder
+            cfg.watch_folder = parsed.watch_folder.resolve()
             save_config(cfg)
             print(f"Updated watch folder to: {cfg.watch_folder}")
 
         if parsed.documents_folder:
-            cfg.documents_root = parsed.documents_folder
+            cfg.documents_root = parsed.documents_folder.resolve()
             save_config(cfg)
             print(f"Updated documents folder to: {cfg.documents_root}")
 
         if parsed.autostart:
             if parsed.autostart == "enable":
-                enable_autorun()
+                if not enable_autorun():
+                    print(
+                        "Error: Failed to enable auto-start on boot.", file=sys.stderr
+                    )
+                    return 1
                 cfg.start_on_boot = True
                 save_config(cfg)
                 print("Auto-start on boot: ENABLED")
             else:
-                disable_autorun()
+                if not disable_autorun():
+                    print(
+                        "Error: Failed to disable auto-start on boot.", file=sys.stderr
+                    )
+                    return 1
                 cfg.start_on_boot = False
                 save_config(cfg)
                 print("Auto-start on boot: DISABLED")
@@ -145,7 +200,11 @@ def main_cli(args: list[str] | None = None) -> int:
 
     if parsed.command == "rescan":
         cfg = load_config()
-        mapper = FolderMapper(docs_root=cfg.documents_root)
+        mapper = FolderMapper(
+            docs_root=cfg.documents_root,
+            max_depth=cfg.max_folder_depth,
+            fallback_folder=cfg.fallback_folder,
+        )
         taxonomy = mapper.refresh()
         print(
             f"Discovered {len(taxonomy)} destination folders in {cfg.documents_root}:"

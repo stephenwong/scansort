@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def should_process_path(path: Path) -> bool:
     """Determine whether a detected filesystem entry should be processed.
 
-    Filters out dotfiles, temporary/swap files, and unsupported formats.
+    Filters out directories, dotfiles, temporary/swap files, and unsupported formats.
 
     Args:
         path: Path to the candidate file.
@@ -23,6 +23,9 @@ def should_process_path(path: Path) -> bool:
     Returns:
         True if the file is a candidate for scan processing, False otherwise.
     """
+    if path.is_dir():
+        return False
+
     name = path.name
     if name.startswith((".", "~")) or ".crdownload" in name or ".part" in name:
         return False
@@ -45,6 +48,7 @@ class DropFolderWatcher:
 
         self._stop_event = threading.Event()
         self._restart_event = threading.Event()
+        self._cycle_stop_event: threading.Event | None = None
         self._running = False
         self._lock = threading.Lock()
 
@@ -64,13 +68,17 @@ class DropFolderWatcher:
             )
             self.watch_folder = new_folder
             self._restart_event.set()
+            if self._cycle_stop_event is not None:
+                self._cycle_stop_event.set()
 
     def _handle_changes(self, changes) -> None:
         """Process a batch of debounced change events from watchfiles."""
+        seen_paths: set[Path] = set()
         for change_type, path_str in changes:
             if change_type in {Change.added, Change.modified}:
                 candidate = Path(path_str)
-                if should_process_path(candidate):
+                if candidate not in seen_paths and should_process_path(candidate):
+                    seen_paths.add(candidate)
                     logger.info("Detected incoming scan: %s", candidate.name)
                     self.file_queue.put(candidate)
 
@@ -82,6 +90,7 @@ class DropFolderWatcher:
         try:
             while not self._stop_event.is_set():
                 self._restart_event.clear()
+                self._cycle_stop_event = threading.Event()
                 with self._lock:
                     current_folder = self.watch_folder
 
@@ -96,7 +105,7 @@ class DropFolderWatcher:
                     for changes in watch(
                         current_folder,
                         debounce=self.debounce_ms,
-                        stop_event=self._stop_event,
+                        stop_event=self._cycle_stop_event,
                         recursive=False,
                     ):
                         if self._stop_event.is_set():
@@ -112,6 +121,7 @@ class DropFolderWatcher:
                         logger.warning(
                             "Watcher encountered error on %s: %s", current_folder, e
                         )
+                        self._stop_event.wait(2.0)
         finally:
             self._running = False
             logger.info("DropFolderWatcher stopped.")
@@ -120,3 +130,5 @@ class DropFolderWatcher:
         """Signal the watcher to exit immediately."""
         self._stop_event.set()
         self._restart_event.set()
+        if self._cycle_stop_event is not None:
+            self._cycle_stop_event.set()

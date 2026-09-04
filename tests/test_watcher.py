@@ -124,3 +124,53 @@ def test_watcher_handles_error_in_watch(tmp_path: Path):
     with patch("scansort.watcher.watch", side_effect=mock_watch_error):
         watcher.start()
         assert calls == 1
+
+
+def test_should_process_path_directory(tmp_path: Path):
+    pdf_dir = tmp_path / "SubFolder.pdf"
+    pdf_dir.mkdir()
+    assert should_process_path(pdf_dir) is False
+
+
+def test_watcher_batch_deduplication(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    scan = inbox / "scan.pdf"
+    scan.touch()
+
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+    watcher._handle_changes(
+        [
+            (Change.added, str(scan)),
+            (Change.modified, str(scan)),
+        ]
+    )
+    assert file_queue.qsize() == 1
+
+
+def test_switch_folder_unblocks_watch(tmp_path: Path):
+    folder_a = tmp_path / "A"
+    folder_b = tmp_path / "B"
+    folder_a.mkdir()
+    folder_b.mkdir()
+
+    w = DropFolderWatcher(watch_folder=folder_a, file_queue=queue.Queue())
+    watched = []
+
+    def mock_watch(folder, *args, **kwargs):
+        watched.append(folder)
+        stop_event = kwargs.get("stop_event")
+        while not (stop_event and stop_event.is_set()):
+            time.sleep(0.01)
+        yield []
+
+    with patch("scansort.watcher.watch", side_effect=mock_watch):
+        t = threading.Thread(target=w.start)
+        t.start()
+        time.sleep(0.05)
+        w.switch_folder(folder_b)
+        time.sleep(0.05)
+        w.stop()
+        t.join(timeout=1.0)
+        assert folder_b in watched
