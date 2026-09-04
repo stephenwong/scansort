@@ -18,6 +18,9 @@ def compute_file_sha256(path: Path, chunk_size: int = 65536) -> str:
     Returns:
         64-character hexadecimal SHA-256 string.
     """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than 0.")
+
     hasher = hashlib.sha256()
     with open(path, "rb") as f:
         while chunk := f.read(chunk_size):
@@ -43,7 +46,7 @@ def check_duplicate(file_hash: str, history_file: Path) -> dict | None:
         with open(history_file, encoding="utf-8") as f:
             for line in f:
                 clean_line = line.strip()
-                if not clean_line:
+                if not clean_line or file_hash not in clean_line:
                     continue
                 try:
                     record = json.loads(clean_line)
@@ -53,6 +56,7 @@ def check_duplicate(file_hash: str, history_file: Path) -> dict | None:
                     continue
     except OSError as e:
         logger.warning("Error reading history file at %s: %s", history_file, e)
+        return None
 
     if latest_record and latest_record.get("status") != "UNDONE":
         return latest_record

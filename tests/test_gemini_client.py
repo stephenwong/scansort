@@ -312,17 +312,97 @@ def test_client_caching_and_key_rotation(monkeypatch):
         patch("scansort.gemini_client.genai.Client") as mock_client_cls,
     ):
         c1 = cls._get_client()
-        assert cls.api_key == "Key1"
+        assert cls.api_key is None
+        assert cls._cached_key == "Key1"
         c2 = cls._get_client()
         assert c1 == c2
         assert mock_client_cls.call_count == 1
 
-    # Key rotated in vault
+    # Key rotated in vault without manual cls.api_key reset
     with (
         patch("scansort.gemini_client.get_api_key", return_value="Key2"),
         patch("scansort.gemini_client.genai.Client") as mock_client_cls2,
     ):
-        cls.api_key = None  # reset to read from vault
-        _ = cls._get_client()
-        assert cls.api_key == "Key2"
+        c3 = cls._get_client()
+        assert cls.api_key is None
+        assert cls._cached_key == "Key2"
+        assert c3 != c1
         assert mock_client_cls2.call_count == 1
+
+
+def test_sanitize_description_null_bytes_and_control_chars():
+    dirty = "Invoice\x00\x01\x1f\x7f_2026\tSpecial"
+    assert sanitize_description(dirty) == "Invoice_2026_Special"
+
+
+def test_analyze_document_safety_block_value_error_handled(tmp_path: Path):
+    from unittest.mock import PropertyMock
+
+    dummy_pdf = tmp_path / "blocked.pdf"
+    dummy_pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    type(mock_response).text = PropertyMock(
+        side_effect=ValueError("Response content was blocked by safety filters.")
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+    classifier._cached_key = "AIzaSyDummyKey123"
+
+    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities"])
+    assert result.target_folder == "_Review_Needed"
+    assert result.confidence == 0.0
+
+
+def test_missing_confidence_defaults_to_zero(tmp_path: Path):
+    dummy_pdf = tmp_path / "doc.pdf"
+    dummy_pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Electric Bill",
+            "target_folder": "Utilities/Electricity",
+            # confidence omitted entirely
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+    classifier._cached_key = "AIzaSyDummyKey123"
+
+    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities/Electricity"])
+    assert result.confidence == 0.0
+    # Because confidence < 0.70, it must route to _Review_Needed
+    assert result.target_folder == "_Review_Needed"
+
+
+def test_windows_backslashes_in_target_folder_normalized(tmp_path: Path):
+    dummy_pdf = tmp_path / "doc.pdf"
+    dummy_pdf.write_bytes(b"%PDF-1.4 test")
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Electric Bill",
+            "target_folder": "Utilities\\Electricity",
+            "confidence": 0.95,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+    classifier._cached_key = "AIzaSyDummyKey123"
+
+    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities/Electricity"])
+    assert result.target_folder == "Utilities/Electricity"
+    assert result.confidence == 0.95

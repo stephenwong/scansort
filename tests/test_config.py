@@ -177,3 +177,62 @@ def test_folder_hints_ignores_none_and_non_strings(tmp_path: Path):
     assert hints["Finances"] == ["tax", "invoice"]
     assert "none" not in hints["Finances"]
     assert "123" not in hints["Finances"]
+
+
+def test_fallback_folder_windows_drive_traversal_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="cannot contain absolute paths"):
+        AppConfig(fallback_folder="C:\\escaped")
+
+    with pytest.raises(ValueError, match="cannot contain absolute paths"):
+        AppConfig(fallback_folder="D:/Review")
+
+
+def test_fallback_folder_trailing_slash_trimmed():
+    cfg = AppConfig(fallback_folder="_Review_Needed/")
+    assert cfg.fallback_folder == "_Review_Needed"
+
+    cfg2 = AppConfig(fallback_folder="_Review_Needed\\")
+    assert cfg2.fallback_folder == "_Review_Needed"
+
+
+def test_config_rejects_identical_watch_and_docs_root(tmp_path: Path):
+    import pytest
+
+    folder = tmp_path / "SharedFolder"
+    with pytest.raises(ValueError, match="cannot be the same directory"):
+        AppConfig(watch_folder=folder, documents_root=folder)
+
+
+def test_config_max_folder_depth_bounds():
+    import pytest
+
+    with pytest.raises(ValueError):
+        AppConfig(max_folder_depth=0)
+
+    with pytest.raises(ValueError):
+        AppConfig(max_folder_depth=-1)
+
+    with pytest.raises(ValueError):
+        AppConfig(max_folder_depth=11)
+
+    assert AppConfig(max_folder_depth=1).max_folder_depth == 1
+    assert AppConfig(max_folder_depth=10).max_folder_depth == 10
+
+
+def test_load_config_utf8_bom(tmp_path: Path):
+    cfg_file = tmp_path / "config_bom.json"
+    content = '{\n  "fallback_folder": "_BOM_Review"\n}'
+    cfg_file.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
+    cfg = load_config(cfg_file)
+    assert cfg.fallback_folder == "_BOM_Review"
+
+
+def test_load_folder_hints_utf8_bom(tmp_path: Path):
+    hints_file = tmp_path / "hints_bom.json"
+    data = '{"Tax/2026": ["ato", "return"]}'
+    hints_file.write_bytes(b"\xef\xbb\xbf" + data.encode("utf-8"))
+    hints = load_folder_hints(hints_file)
+    assert "Tax/2026" in hints
+    assert hints["Tax/2026"] == ["ato", "return"]

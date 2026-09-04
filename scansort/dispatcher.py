@@ -64,15 +64,18 @@ def dispatch_file(
     Returns:
         Path of the filed document in its destination folder.
     """
-    clean_target = classification.target_folder.lstrip("/\\")
+    clean_target = classification.target_folder.strip("/\\")
     resolved_docs = docs_root.resolve()
-    target_dir = (docs_root / clean_target).resolve()
-    if not target_dir.is_relative_to(resolved_docs):
-        logger.warning(
-            "Path traversal attempt: %s. Routing to _Review_Needed.",
-            classification.target_folder,
-        )
+    if not clean_target or clean_target == ".":
         target_dir = (docs_root / "_Review_Needed").resolve()
+    else:
+        target_dir = (docs_root / clean_target).resolve()
+        if not target_dir.is_relative_to(resolved_docs) or target_dir == resolved_docs:
+            logger.warning(
+                "Path traversal attempt or root folder target: %s. Routing to _Review_Needed.",
+                classification.target_folder,
+            )
+            target_dir = (docs_root / "_Review_Needed").resolve()
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,6 +123,10 @@ def undo_last_move(jsonl_path: Path) -> Path | None:
             elif status in {"SUCCESS", "COLLISION_RENAMED"} and dest_p:
                 if dest_p in undone_destinations:
                     continue
+                # Skip missing destination files (e.g. if deleted/moved manually by user)
+                if not Path(dest_p).exists():
+                    logger.debug("Skipping missing file %s during undo search.", dest_p)
+                    continue
                 target_idx = i
                 target_record = record
                 break
@@ -141,10 +148,19 @@ def undo_last_move(jsonl_path: Path) -> Path | None:
     if dest_path.suffix.lower() == ".pdf" and original_path.suffix.lower() != ".pdf":
         target_name = original_path.with_suffix(".pdf").name
 
+    # Prefix with _undone_ to avoid immediate re-ingestion by watcher (S1-07)
+    if not target_name.startswith("_undone_"):
+        target_name = f"_undone_{target_name}"
+
     # Move back to original drop folder with collision handling
     original_path.parent.mkdir(parents=True, exist_ok=True)
     restore_path = resolve_collision(original_path.parent, target_name)
-    shutil.move(str(dest_path), str(restore_path))
+
+    try:
+        shutil.move(str(dest_path), str(restore_path))
+    except (PermissionError, OSError) as e:
+        logger.error("Failed to restore file %s: %s", dest_path, e)
+        return None
 
     # Append an undo marker record to history with current UTC timestamp
     undo_record = dict(target_record)
@@ -154,8 +170,34 @@ def undo_last_move(jsonl_path: Path) -> Path | None:
     undo_record["local_time"] = now_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
     undo_record["note"] = f"Reversed move of {dest_path.name} back to {restore_path}"
 
-    with open(jsonl_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(undo_record) + "\n")
+    try:
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(undo_record) + "\n")
+    except OSError as e:
+        logger.error("Failed to append undo record to %s: %s", jsonl_path, e)
+
+    # Update CSV audit log if it exists (S1-10)
+    csv_path = jsonl_path.with_suffix(".csv")
+    if csv_path.exists():
+        try:
+            import csv
+
+            csv_row = [
+                undo_record.get("timestamp", ""),
+                undo_record.get("local_time", ""),
+                undo_record.get("original_filename", ""),
+                undo_record.get("new_filename", ""),
+                undo_record.get("destination_folder", ""),
+                undo_record.get("destination_path", ""),
+                undo_record.get("sha256", ""),
+                undo_record.get("note", ""),
+                undo_record.get("status", ""),
+            ]
+            with open(csv_path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(csv_row)
+        except OSError as e:
+            logger.warning("Could not append undo record to CSV %s: %s", csv_path, e)
 
     logger.info("Undid filing: %s moved back to %s", dest_path.name, restore_path)
     return restore_path

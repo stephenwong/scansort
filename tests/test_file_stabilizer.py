@@ -132,3 +132,61 @@ def test_is_file_locked_permission_denied(tmp_path: Path):
 
     with patch("builtins.open", side_effect=PermissionError("Permission denied")):
         assert is_file_locked(test_file) is True
+
+
+def test_wait_for_file_stability_directory_fails_fast(tmp_path: Path):
+    sub_dir = tmp_path / "sub_dir"
+    sub_dir.mkdir()
+
+    t0 = time.monotonic()
+    # Should fail fast without waiting for the 2.0s timeout
+    result = wait_for_file_stability(sub_dir, timeout=2.0, poll_interval=0.01)
+    duration = time.monotonic() - t0
+
+    assert result is False
+    assert duration < 0.2
+
+
+def test_is_file_locked_directory(tmp_path: Path):
+    sub_dir = tmp_path / "sub_dir"
+    sub_dir.mkdir()
+    assert is_file_locked(sub_dir) is True
+
+
+def test_wait_for_file_stability_resets_last_size_on_empty(tmp_path: Path):
+    test_file = tmp_path / "delayed.pdf"
+    test_file.touch()  # Starts empty (0 bytes)
+
+    poll_count = 0
+
+    def mock_stat(self, *args, **kwargs):
+        nonlocal poll_count
+        poll_count += 1
+        stat_res = MagicMock()
+        stat_res.st_mode = 0o100644
+        if poll_count == 1:
+            stat_res.st_size = 0  # First poll is 0 bytes
+        elif poll_count == 2:
+            stat_res.st_size = (
+                100  # Second poll wrote 100 bytes (first time seeing 100)
+            )
+        else:
+            stat_res.st_size = (
+                100  # Third poll remains 100 bytes (second time seeing 100)
+            )
+        return stat_res
+
+    from unittest.mock import MagicMock
+
+    with (
+        patch.object(Path, "stat", mock_stat),
+        patch.object(Path, "is_file", return_value=True),
+        patch("scansort.file_stabilizer.is_file_locked", return_value=False),
+    ):
+        result = wait_for_file_stability(
+            test_file, timeout=1.0, poll_interval=0.01, stable_count=2
+        )
+        assert result is True
+        # Must have required 3 polls total (0 bytes, 100 bytes once, 100 bytes twice),
+        # NOT declared stable on poll 2
+        assert poll_count >= 3

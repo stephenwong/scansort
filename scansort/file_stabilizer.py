@@ -1,4 +1,5 @@
 import logging
+import stat
 import sys
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ def is_file_locked(path: Path) -> bool:
     Returns:
         True if locked or inaccessible, False if available for exclusive read.
     """
-    if not path.exists():
+    if not path.exists() or path.is_dir():
         return True
 
     try:
@@ -65,21 +66,23 @@ def wait_for_file_stability(
     last_size = -1
 
     while (time.monotonic() - start_time) < timeout:
-        if not path.exists():
-            consecutive_stable = 0
-            time.sleep(poll_interval)
-            continue
-
         try:
-            current_size = path.stat().st_size
+            st = path.stat()
+            if not stat.S_ISREG(st.st_mode):
+                logger.warning("Path %s is not a regular file to stabilize.", path)
+                return False
+            current_size = st.st_size
+
         except OSError:
             consecutive_stable = 0
+            last_size = -1
             time.sleep(poll_interval)
             continue
 
         if current_size == 0:
             # Scanner created the file handle but has not flushed bytes yet
             consecutive_stable = 0
+            last_size = -1
             time.sleep(poll_interval)
             continue
 

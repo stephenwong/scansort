@@ -149,11 +149,12 @@ uv run python -m scansort config --show
 ### 3. Customize Monitored Folders
 ```bash
 # Set custom scanner drop folder
-uv run python -m scansort config --watch-folder "C:\Scans\Inbox"
+uv run scansort config --watch-folder "C:\Scans\Inbox"
 
 # Set custom documents destination directory
-uv run python -m scansort config --documents-folder "D:\My Documents"
+uv run scansort config --documents-folder "D:\My Documents"
 ```
+*Validation guarantees:* ScanSort prevents configuring regular files as directory endpoints, rejects identical `watch_folder` and `documents_folder` paths, and blocks path traversal or Windows drive letters in `fallback_folder`.
 
 ### 4. Configure Auto-Start on Boot (Windows & Linux)
 ```bash
@@ -167,7 +168,9 @@ uv run scansort config --autostart disable
 ### 5. Preview Scans in Dry-Run Mode
 Simulate categorization without moving files or modifying PDFs:
 ```bash
+# Via subcommand or root flag
 uv run scansort watch --dry-run
+uv run scansort --dry-run
 ```
 
 ### 6. Start Live Background Monitoring
@@ -175,8 +178,9 @@ uv run scansort watch --dry-run
 # Standard interactive foreground monitor
 uv run scansort watch
 
-# Run silently / minimized without banner output
+# Run silently / minimized without banner output (supported via root or subparser)
 uv run scansort watch --minimized
+uv run scansort --minimized watch
 
 # Optional: Override drop folder or documents root for a single session
 uv run scansort watch --watch-folder "C:\Scans\Inbox" --documents-root "D:\Documents"
@@ -187,10 +191,10 @@ Misplaced a document or want to re-scan? Reverse the last move instantly. You ca
 ```bash
 uv run scansort undo
 ```
-*Restores the file to its original location in your drop folder (with automatic numerical collision resolution so existing files are never overwritten) and marks the record as `UNDONE` in `history.jsonl`, enabling re-scanned duplicates to be re-ingested.*
+*Restores the file to its original location in your drop folder prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`) with automatic numerical collision resolution so existing files are never overwritten. The active watcher strictly ignores the `_undone_` prefix to prevent automated re-filing loops, while both `history.jsonl` and `history.csv` are atomically updated with `UNDONE` status.*
 
 ### 8. Inspect Discovered Taxonomy
-Verify the folders ScanSort will use for classification (respecting `max_folder_depth` and `fallback_folder` exclusions):
+Verify the folders ScanSort will use for classification (respecting `max_folder_depth` between 1 and 10, and `fallback_folder` exclusions):
 ```bash
 uv run scansort rescan
 ```
@@ -199,7 +203,7 @@ uv run scansort rescan
 
 ## Folder Hints & Aliases (`folder_hints.json`)
 
-If you have specific taxonomy folders whose purpose may not be obvious from the folder name alone, create a `folder_hints.json` file in `%APPDATA%\ScanSort\`:
+If you have specific taxonomy folders whose purpose may not be obvious from the folder name alone, create a `folder_hints.json` file in `%APPDATA%\ScanSort\` (or `~/.config/scansort/` on Linux):
 
 ```json
 {
@@ -209,7 +213,7 @@ If you have specific taxonomy folders whose purpose may not be obvious from the 
 }
 ```
 
-ScanSort automatically injects these keyword hints into the Gemini classification prompt to ensure 100% filing accuracy.
+ScanSort automatically injects these keyword hints into the Gemini classification prompt to ensure 100% filing accuracy. Both standard UTF-8 and Windows Notepad UTF-8 with BOM (`utf-8-sig`) are supported for both `config.json` and `folder_hints.json`.
 
 ---
 
@@ -241,12 +245,17 @@ The output bundle is produced in `dist/ScanSort/ScanSort.exe`.
 
 ---
 
-## Testing
+## Testing & Quality Gates
+
+ScanSort enforces strict quality and test-driven development standards:
 
 ```bash
-# Run test suite
-uv run pytest
-
-# Code quality and formatting check
+# Gate 1: Code quality & linting
 uv run ruff check .
+
+# Gate 2: Code formatting check
+uv run ruff format --check .
+
+# Gate 3: Test suite & strict >=95% coverage enforcement
+uv run pytest
 ```

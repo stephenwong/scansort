@@ -1,7 +1,7 @@
 """Unit tests for CLI commands in scansort.__main__."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scansort.__main__ import build_parser, main_cli
 from scansort.config import AppConfig
@@ -172,3 +172,138 @@ def test_cli_rescan(capsys, tmp_path: Path):
         captured = capsys.readouterr()
         assert "Discovered 1 destination folders" in captured.out
         assert "Bills" in captured.out
+
+
+def test_cli_root_flags_inherited_by_watch(capsys):
+    with (
+        patch("scansort.__main__.DropFolderWatcher"),
+        patch("scansort.__main__.ScanSortPipeline"),
+    ):
+        # Root --minimized before watch
+        exit_code = main_cli(["--minimized", "watch"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Starting ScanSort monitor" not in captured.out
+
+        # Root --dry-run before watch
+        exit_code = main_cli(["--dry-run", "watch"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "DRY-RUN MODE ACTIVE" in captured.out
+
+        # Root --dry-run without subcommand defaults to watch
+        exit_code = main_cli(["--dry-run"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "DRY-RUN MODE ACTIVE" in captured.out
+
+
+def test_cli_config_rejects_regular_files(tmp_path: Path, capsys):
+    reg_file = tmp_path / "regular_file.txt"
+    reg_file.touch()
+
+    exit_code = main_cli(["config", "--watch-folder", str(reg_file)])
+    assert exit_code == 1
+    assert "cannot be a regular file" in capsys.readouterr().err
+
+    exit_code = main_cli(["config", "--documents-folder", str(reg_file)])
+    assert exit_code == 1
+    assert "cannot be a regular file" in capsys.readouterr().err
+
+
+def test_cli_config_rejects_identical_folders(tmp_path: Path, capsys):
+    shared = tmp_path / "Shared"
+    shared.mkdir()
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=shared)
+
+    with patch("scansort.__main__.load_config", return_value=cfg):
+        exit_code = main_cli(["config", "--watch-folder", str(shared)])
+        assert exit_code == 1
+        assert "cannot be the same directory" in capsys.readouterr().err
+
+
+def test_cli_config_save_config_error(tmp_path: Path, capsys):
+    folder = tmp_path / "ValidFolder"
+    folder.mkdir()
+
+    with patch(
+        "scansort.__main__.save_config", side_effect=OSError("Disk write failure")
+    ):
+        exit_code = main_cli(["config", "--watch-folder", str(folder)])
+        assert exit_code == 1
+        assert "Error saving configuration" in capsys.readouterr().err
+
+
+def test_cli_undo_os_error(capsys):
+    with patch(
+        "scansort.__main__.undo_last_move",
+        side_effect=PermissionError("File locked by process"),
+    ):
+        exit_code = main_cli(["undo"])
+        assert exit_code == 1
+        assert "Error reversing last move" in capsys.readouterr().err
+
+
+def test_cli_watch_worker_join_timeout():
+    mock_thread = MagicMock()
+    mock_thread.is_alive.return_value = True
+    with (
+        patch("scansort.__main__.DropFolderWatcher"),
+        patch("scansort.__main__.ScanSortPipeline"),
+        patch("threading.Thread", return_value=mock_thread),
+    ):
+        exit_code = main_cli(["watch"])
+        assert exit_code == 0
+        mock_thread.join.assert_called_once_with(timeout=20.0)
+
+
+def test_cli_watch_keyboard_interrupt():
+    mock_watcher_cls = MagicMock()
+    mock_watcher_cls.return_value.start.side_effect = KeyboardInterrupt
+    with (
+        patch("scansort.__main__.DropFolderWatcher", mock_watcher_cls),
+        patch("scansort.__main__.ScanSortPipeline"),
+    ):
+        exit_code = main_cli(["watch"])
+        assert exit_code == 0
+
+
+def test_cli_config_rejects_documents_folder_identical(tmp_path: Path, capsys):
+    shared = tmp_path / "Shared"
+    shared.mkdir()
+    cfg = AppConfig(watch_folder=shared, documents_root=tmp_path / "Docs")
+
+    with patch("scansort.__main__.load_config", return_value=cfg):
+        exit_code = main_cli(["config", "--documents-folder", str(shared)])
+        assert exit_code == 1
+        assert "cannot be the same directory" in capsys.readouterr().err
+
+
+def test_cli_config_documents_folder_save_error(tmp_path: Path, capsys):
+    folder = tmp_path / "ValidDocs"
+    folder.mkdir()
+
+    with patch(
+        "scansort.__main__.save_config", side_effect=OSError("Permission denied")
+    ):
+        exit_code = main_cli(["config", "--documents-folder", str(folder)])
+        assert exit_code == 1
+        assert "Error saving configuration" in capsys.readouterr().err
+
+
+def test_cli_config_autostart_save_error(capsys):
+    with (
+        patch("scansort.__main__.enable_autorun", return_value=True),
+        patch("scansort.__main__.save_config", side_effect=OSError("Read-only config")),
+    ):
+        exit_code = main_cli(["config", "--autostart", "enable"])
+        assert exit_code == 1
+        assert "Error saving configuration" in capsys.readouterr().err
+
+    with (
+        patch("scansort.__main__.disable_autorun", return_value=True),
+        patch("scansort.__main__.save_config", side_effect=OSError("Read-only config")),
+    ):
+        exit_code = main_cli(["config", "--autostart", "disable"])
+        assert exit_code == 1
+        assert "Error saving configuration" in capsys.readouterr().err

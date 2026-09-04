@@ -17,7 +17,9 @@ from scansort.secrets import get_api_key, redact_secrets_from_text
 
 logger = logging.getLogger(__name__)
 
-_INVALID_CHARS_REGEX: re.Pattern = re.compile(r'[<>:"/\\|?*,\.;!\'#\$%&\(\)\[\]\{\}=+]')
+_INVALID_CHARS_REGEX: re.Pattern = re.compile(
+    r'[\x00-\x1f\x7f<>:"/\\|?*,\.;!\'#\$%&\(\)\[\]\{\}=+]'
+)
 
 
 def sanitize_description(desc: str, max_length: int = 60) -> str:
@@ -107,7 +109,7 @@ class GeminiClassifier:
         self.api_key = api_key
         self.model = model
         self._client: genai.Client | None = None
-        self._cached_key: str | None = None
+        self._cached_key: str | None = api_key
 
     def _get_client(self) -> genai.Client:
         active_key = self.api_key or get_api_key()
@@ -117,12 +119,9 @@ class GeminiClassifier:
                 "Settings wizard, scansort config --set-key, or GEMINI_API_KEY environment variable."
             )
 
-        if self._client is not None and (
-            self._cached_key == active_key or self._cached_key is None
-        ):
+        if self._client is not None and self._cached_key == active_key:
             return self._client
 
-        self.api_key = active_key
         self._cached_key = active_key
         self._client = genai.Client(api_key=active_key)
         return self._client
@@ -143,6 +142,7 @@ class GeminiClassifier:
         Returns:
             Validated DocumentClassification instance.
         """
+        client = self._get_client()
         taxonomy_block = format_taxonomy_for_prompt(taxonomy, hints)
 
         system_instruction = (
@@ -164,7 +164,6 @@ class GeminiClassifier:
         )
 
         try:
-            client = self._get_client()
             pdf_bytes = pdf_path.read_bytes()
 
             part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
@@ -203,7 +202,7 @@ class GeminiClassifier:
             raw_target = data.get("target_folder", "_Review_Needed")
             target = str(raw_target) if raw_target is not None else "_Review_Needed"
             try:
-                conf = float(data.get("confidence", 0.8))
+                conf = float(data.get("confidence", 0.0))
             except (ValueError, TypeError):
                 conf = 0.0
 
@@ -216,15 +215,18 @@ class GeminiClassifier:
             summary = str(data.get("summary", "") or "").strip()
 
             # Apply folder routing and security rules
-            clean_parts = target.replace("\\", "/").split("/")
+            clean_target = target.replace("\\", "/").strip()
+            clean_parts = [p for p in clean_target.split("/") if p]
             if target.startswith(("/", "\\")) or ".." in clean_parts:
                 target = "_Review_Needed"
-            elif doc_type.lower() == "blank":
-                target = "_Review_Needed/Blank_Scans"
-            elif conf < 0.70 or (
-                target not in taxonomy and not target.startswith("_Review_Needed")
-            ):
-                target = "_Review_Needed"
+            else:
+                target = "/".join(clean_parts)
+                if doc_type.lower() == "blank":
+                    target = "_Review_Needed/Blank_Scans"
+                elif conf < 0.70 or (
+                    target not in taxonomy and not target.startswith("_Review_Needed")
+                ):
+                    target = "_Review_Needed"
 
             return DocumentClassification(
                 document_date=doc_date,
@@ -244,6 +246,7 @@ class GeminiClassifier:
             RuntimeError,
             TypeError,
             AttributeError,
+            ValueError,
         ) as e:
             redacted_err = redact_secrets_from_text(str(e), self.api_key)
             logger.warning(
@@ -259,6 +262,3 @@ class GeminiClassifier:
                 document_type="Other",
                 summary=f"Automated classification encountered error: {redacted_err[:100]}",
             )
-        except ValueError:
-            # Re-raise missing API key error
-            raise

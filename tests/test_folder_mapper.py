@@ -202,3 +202,101 @@ def test_empty_taxonomy_memory_caching(tmp_path: Path):
     # Verify second call returns the cached empty list
     assert mapper._cached_folders == []
     assert mapper.get_taxonomy() == []
+
+
+def test_scan_folders_trailing_slash_fallback(tmp_path: Path):
+    docs_dir = tmp_path / "Documents"
+    (docs_dir / "Bills").mkdir(parents=True)
+    (docs_dir / "_Review_Needed" / "Duplicates").mkdir(parents=True)
+
+    folders = scan_documents_folders(docs_dir, fallback_folder="_Review_Needed/")
+    assert "Bills" in folders
+    for f in folders:
+        assert not f.startswith("_Review_Needed")
+
+
+def test_scan_folders_inaccessible_sibling_does_not_drop_others(tmp_path: Path):
+    docs_dir = tmp_path / "Documents"
+    good1 = docs_dir / "Alpha"
+    bad = docs_dir / "Restricted"
+    good2 = docs_dir / "Beta"
+    good1.mkdir(parents=True)
+    bad.mkdir(parents=True)
+    good2.mkdir(parents=True)
+
+    orig_is_dir = Path.is_dir
+
+    def mock_is_dir(self):
+        if self.name == "Restricted":
+            raise PermissionError("Access Denied")
+        return orig_is_dir(self)
+
+    with patch.object(Path, "is_dir", side_effect=mock_is_dir, autospec=True):
+        folders = scan_documents_folders(docs_dir)
+        assert "Alpha" in folders
+        assert "Beta" in folders
+        assert "Restricted" not in folders
+
+
+def test_folder_mapper_external_cache_mtime_update_reloads(tmp_path: Path):
+    import os
+
+    docs_dir = tmp_path / "Documents"
+    (docs_dir / "Alpha").mkdir(parents=True)
+    cache_file = tmp_path / "folder_map.json"
+
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    assert mapper.get_taxonomy() == ["Alpha"]
+
+    # External modification
+    new_data = {"documents_root": str(docs_dir), "folders": ["Alpha", "Beta"]}
+    cache_file.write_text(json.dumps(new_data), encoding="utf-8")
+    mtime = cache_file.stat().st_mtime + 5.0
+    os.utime(cache_file, (mtime, mtime))
+
+    assert mapper.get_taxonomy() == ["Alpha", "Beta"]
+
+
+def test_format_taxonomy_unnormalized_backslashes_in_hints():
+    folders = ["Tax/2026"]
+    hints = {"Tax\\2026": ["ato"]}
+    prompt = format_taxonomy_for_prompt(folders, hints)
+    assert "Tax/2026 (Hints: ato)" in prompt
+
+
+def test_folder_mapper_docs_root_resolved_cache_hit(tmp_path: Path):
+    docs_dir = tmp_path / "Documents"
+    (docs_dir / "Folder").mkdir(parents=True)
+    cache_file = tmp_path / "cache.json"
+
+    new_data = {"documents_root": str(docs_dir) + "/.", "folders": ["Folder"]}
+    cache_file.write_text(json.dumps(new_data), encoding="utf-8")
+
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    assert mapper.get_taxonomy() == ["Folder"]
+    assert mapper._cached_folders == ["Folder"]
+
+
+def test_cache_invalid_json_fallback(tmp_path: Path):
+    docs_dir = tmp_path / "Docs"
+    (docs_dir / "Bills").mkdir(parents=True)
+    cache_file = tmp_path / "cache.json"
+    cache_file.write_text("{bad json syntax", encoding="utf-8")
+
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    tax = mapper.get_taxonomy()
+    assert "Bills" in tax
+
+
+def test_cache_mtime_stat_oserror(tmp_path: Path):
+    docs_dir = tmp_path / "Docs"
+    (docs_dir / "Alpha").mkdir(parents=True)
+    cache_file = tmp_path / "cache.json"
+
+    mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
+    assert mapper.get_taxonomy() == ["Alpha"]
+
+    # When stat raises OSError
+    with patch.object(Path, "stat", side_effect=OSError("Disk error")):
+        # Should cleanly return in-memory cached folders without crashing
+        assert mapper.get_taxonomy() == ["Alpha"]

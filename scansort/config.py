@@ -5,9 +5,9 @@ import logging
 import os
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class AppConfig(BaseModel):
     fallback_folder: str = "_Review_Needed"
     gemini_model: str = "gemini-2.5-flash"
     start_on_boot: bool = True
-    max_folder_depth: int = 3
+    max_folder_depth: int = Field(default=3, ge=1, le=10)
     dry_run: bool = False
     mirror_log_to_documents: bool = False
 
@@ -55,12 +55,26 @@ class AppConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("fallback_folder cannot be empty")
         clean = v.strip()
-        parts = clean.replace("\\", "/").split("/")
-        if clean.startswith(("/", "\\")) or ".." in parts:
+        parts = clean.replace("\\", "/").strip("/").split("/")
+        p_win = PureWindowsPath(clean)
+        if (
+            clean.startswith(("/", "\\"))
+            or ".." in parts
+            or p_win.is_absolute()
+            or p_win.drive
+        ):
             raise ValueError(
                 "fallback_folder cannot contain absolute paths or '..' traversal segments"
             )
-        return clean
+        return clean.strip("/\\")
+
+    @model_validator(mode="after")
+    def validate_distinct_roots(self) -> "AppConfig":
+        if self.watch_folder.resolve() == self.documents_root.resolve():
+            raise ValueError(
+                "watch_folder and documents_root cannot be the same directory"
+            )
+        return self
 
     def ensure_directories(self) -> None:
         """Create watch folder, documents root, and fallback folder if they do not exist."""
@@ -77,7 +91,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         return AppConfig()
 
     try:
-        content = path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8-sig")
         data = json.loads(content)
         if not isinstance(data, dict):
             logger.warning(

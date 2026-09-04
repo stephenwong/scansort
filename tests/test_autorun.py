@@ -1,5 +1,6 @@
 """Unit tests for scansort.autorun module."""
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -102,3 +103,53 @@ def test_autorun_command_formatting(tmp_path: Path, monkeypatch):
         enable_autorun(executable_path="/opt/my path/scansort")
         content = desktop_file.read_text(encoding="utf-8")
         assert 'Exec="/opt/my path/scansort" watch --minimized' in content
+
+
+def test_autorun_macos_unsupported(monkeypatch):
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    assert is_autorun_enabled() is False
+    assert enable_autorun() is False
+    assert disable_autorun() is True
+
+
+def test_linux_autostart_path_respects_xdg_config_home(tmp_path: Path, monkeypatch):
+    custom_xdg = tmp_path / "custom_xdg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(custom_xdg))
+    monkeypatch.setattr("sys.platform", "linux")
+
+    from scansort.autorun import _get_linux_autostart_path
+
+    path = _get_linux_autostart_path()
+    assert path == custom_xdg / "autostart" / "scansort.desktop"
+
+
+def test_autorun_windows_import_error(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+
+    with (
+        patch("builtins.__import__", side_effect=ImportError("No module winreg")),
+        patch.dict("sys.modules", {"winreg": None}),
+    ):
+        assert is_autorun_enabled() is False
+        assert enable_autorun("C:\\app.exe") is False
+        assert disable_autorun() is False
+
+
+def test_autorun_frozen_executable(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    desktop_file = tmp_path / "autostart" / "app.desktop"
+
+    with patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file):
+        enable_autorun()
+        content = desktop_file.read_text(encoding="utf-8")
+        assert f'Exec="{sys.executable}" watch --minimized' in content
+
+
+def test_autorun_linux_disable_missing_file(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    desktop_file = tmp_path / "autostart" / "nonexistent.desktop"
+
+    with patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file):
+        assert disable_autorun() is True

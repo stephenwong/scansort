@@ -40,10 +40,20 @@ class AuditLogger:
 
     def _ensure_csv_headers(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists() or path.stat().st_size == 0:
-            with open(path, "w", newline="", encoding="utf-8") as f:
+        try:
+            with open(path, "x", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(CSV_HEADERS)
+        except FileExistsError:
+            if path.stat().st_size == 0:
+                try:
+                    with open(path, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(CSV_HEADERS)
+                except OSError:
+                    pass
+        except OSError as e:
+            logger.error("Failed to initialize CSV header at %s: %s", path, e)
 
     def log_scan(self, entry: dict[str, Any]) -> None:
         """Record a scan event to JSONL and CSV log files.

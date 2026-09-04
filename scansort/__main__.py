@@ -1,6 +1,7 @@
 """CLI entry point and command router for ScanSort."""
 
 import argparse
+import logging
 import queue
 import sys
 import threading
@@ -21,6 +22,8 @@ from scansort.secrets import (
 )
 from scansort.watcher import DropFolderWatcher
 
+logger = logging.getLogger(__name__)
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct command-line argument parser."""
@@ -29,7 +32,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="ScanSort: Intelligent automated desktop document filer powered by Gemini 2.5 Flash.",
     )
     parser.add_argument(
-        "--minimized", action="store_true", help="Start minimized to tray"
+        "--minimized",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Start minimized to tray",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Simulate actions without moving files",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -40,10 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     watch_p.add_argument("--watch-folder", type=Path, help="Override drop folder")
     watch_p.add_argument("--documents-root", type=Path, help="Override documents root")
     watch_p.add_argument(
-        "--dry-run", action="store_true", help="Simulate actions without moving files"
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Simulate actions without moving files",
     )
     watch_p.add_argument(
-        "--minimized", action="store_true", help="Start minimized to tray"
+        "--minimized",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Start minimized to tray",
     )
 
     # undo command
@@ -118,7 +136,9 @@ def main_cli(args: list[str] | None = None) -> int:
         finally:
             watcher.stop()
             stop_event.set()
-            worker_thread.join(timeout=2.0)
+            worker_thread.join(timeout=20.0)
+            if worker_thread.is_alive():
+                logger.warning("Worker thread did not terminate within 20 seconds.")
 
         return 0
 
@@ -137,13 +157,47 @@ def main_cli(args: list[str] | None = None) -> int:
                 return 1
 
         if parsed.watch_folder:
-            cfg.watch_folder = parsed.watch_folder.resolve()
-            save_config(cfg)
+            target = parsed.watch_folder.resolve()
+            if target.is_file():
+                print(
+                    f"Error: Watch folder cannot be a regular file: {target}",
+                    file=sys.stderr,
+                )
+                return 1
+            if target == cfg.documents_root.resolve():
+                print(
+                    "Error: Watch folder and documents root cannot be the same directory.",
+                    file=sys.stderr,
+                )
+                return 1
+            cfg.watch_folder = target
+            try:
+                save_config(cfg)
+            except OSError as e:
+                print(f"Error saving configuration: {e}", file=sys.stderr)
+                return 1
             print(f"Updated watch folder to: {cfg.watch_folder}")
 
         if parsed.documents_folder:
-            cfg.documents_root = parsed.documents_folder.resolve()
-            save_config(cfg)
+            target = parsed.documents_folder.resolve()
+            if target.is_file():
+                print(
+                    f"Error: Documents folder cannot be a regular file: {target}",
+                    file=sys.stderr,
+                )
+                return 1
+            if target == cfg.watch_folder.resolve():
+                print(
+                    "Error: Watch folder and documents root cannot be the same directory.",
+                    file=sys.stderr,
+                )
+                return 1
+            cfg.documents_root = target
+            try:
+                save_config(cfg)
+            except OSError as e:
+                print(f"Error saving configuration: {e}", file=sys.stderr)
+                return 1
             print(f"Updated documents folder to: {cfg.documents_root}")
 
         if parsed.autostart:
@@ -154,7 +208,11 @@ def main_cli(args: list[str] | None = None) -> int:
                     )
                     return 1
                 cfg.start_on_boot = True
-                save_config(cfg)
+                try:
+                    save_config(cfg)
+                except OSError as e:
+                    print(f"Error saving configuration: {e}", file=sys.stderr)
+                    return 1
                 print("Auto-start on boot: ENABLED")
             else:
                 if not disable_autorun():
@@ -163,7 +221,11 @@ def main_cli(args: list[str] | None = None) -> int:
                     )
                     return 1
                 cfg.start_on_boot = False
-                save_config(cfg)
+                try:
+                    save_config(cfg)
+                except OSError as e:
+                    print(f"Error saving configuration: {e}", file=sys.stderr)
+                    return 1
                 print("Auto-start on boot: DISABLED")
 
         if parsed.show or (
@@ -191,12 +253,16 @@ def main_cli(args: list[str] | None = None) -> int:
 
     if parsed.command == "undo":
         cfg_path = get_default_config_path().parent / "history.jsonl"
-        restored = undo_last_move(cfg_path)
-        if restored:
-            print(f"Successfully reversed move. File restored to: {restored}")
-        else:
-            print("No reversible document filing action found in history.")
-        return 0
+        try:
+            restored = undo_last_move(cfg_path)
+            if restored:
+                print(f"Successfully reversed move. File restored to: {restored}")
+            else:
+                print("No reversible document filing action found in history.")
+            return 0
+        except OSError as e:
+            print(f"Error reversing last move: {e}", file=sys.stderr)
+            return 1
 
     if parsed.command == "rescan":
         cfg = load_config()

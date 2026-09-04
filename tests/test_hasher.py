@@ -59,7 +59,7 @@ from unittest.mock import patch
 def test_check_duplicate_skips_empty_and_corrupt_lines(tmp_path: Path):
     history_file = tmp_path / "history.jsonl"
     content = (
-        "\n\n{invalid json\n"
+        "\n\n{invalid json target_hash\n"
         + json.dumps({"sha256": "target_hash", "new_filename": "found.pdf"})
         + "\n"
     )
@@ -84,3 +84,47 @@ def test_check_duplicate_ignores_undone(tmp_path: Path):
     r2 = {"sha256": h, "status": "UNDONE"}
     hist.write_text(f"{json.dumps(r1)}\n{json.dumps(r2)}\n")
     assert check_duplicate(h, hist) is None
+
+
+def test_compute_file_sha256_invalid_chunk_size(tmp_path: Path):
+    import pytest
+
+    test_file = tmp_path / "doc.pdf"
+    test_file.write_bytes(b"content")
+
+    with pytest.raises(ValueError, match="chunk_size must be greater than 0"):
+        compute_file_sha256(test_file, chunk_size=0)
+
+    with pytest.raises(ValueError, match="chunk_size must be greater than 0"):
+        compute_file_sha256(test_file, chunk_size=-1024)
+
+
+def test_check_duplicate_mid_stream_os_error_returns_none(tmp_path: Path):
+    hist = tmp_path / "history.jsonl"
+    h = "a" * 64
+    r1 = {"sha256": h, "status": "SUCCESS"}
+    hist.write_text(f"{json.dumps(r1)}\n")
+
+    class FaultyFile:
+        def __init__(self):
+            self.lines = [json.dumps(r1) + "\n"]
+            self.iterated = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.iterated == 0:
+                self.iterated += 1
+                return self.lines[0]
+            raise OSError("I/O device detached mid-read")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    with patch("builtins.open", return_value=FaultyFile()):
+        # Mid-stream error must return None, not r1
+        assert check_duplicate(h, hist) is None

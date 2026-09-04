@@ -284,3 +284,142 @@ def test_intermediate_pdf_in_temp_dir(tmp_path: Path):
     assert filed is not None
     # Verify no .pdf was left in the inbox directory
     assert list(inbox.glob("*.pdf")) == []
+
+
+def test_native_pdf_staged_in_temp_and_cleaned_up_on_error(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    pdf_file = inbox / "native_scan.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 sample content")
+
+    # Simulate classifier failing
+    pipeline.classifier.classify_document = MagicMock(
+        side_effect=RuntimeError("OCR failure")
+    )
+
+    result = pipeline.process_file(pdf_file)
+    assert result is None
+    # Source PDF should remain in inbox on failure
+    assert pdf_file.exists()
+    # And tmp_dir must be cleaned up (no leaked temporary PDFs)
+    assert list(pipeline.tmp_dir.glob("*.pdf")) == []
+
+
+def test_dry_run_duplicate_does_not_mutate_disk_or_history(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs, dry_run=True)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    # Pre-record a scan in history
+    h = "hash12345678"
+    pipeline.audit_logger.log_scan(
+        {
+            "sha256": h,
+            "status": "SUCCESS",
+            "new_filename": "prior.pdf",
+        }
+    )
+    initial_history_lines = len(
+        pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    )
+
+    scan_file = inbox / "dup.pdf"
+    scan_file.write_bytes(b"%PDF-1.4 duplicate")
+
+    with patch("scansort.pipeline.compute_file_sha256", return_value=h):
+        dup_result = pipeline.process_file(scan_file)
+
+    assert dup_result is not None
+    # In dry run, file must NOT be moved
+    assert scan_file.exists()
+    # Duplicates directory must NOT be created on disk
+    dup_dir = docs / "_Review_Needed" / "Duplicates"
+    assert not dup_dir.exists()
+    # History must NOT have a DUPLICATE record logged
+    current_history_lines = len(
+        pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    )
+    assert current_history_lines == initial_history_lines
+
+
+def test_duplicate_routing_blocks_path_traversal(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(
+        watch_folder=inbox,
+        documents_root=docs,
+        dry_run=False,
+    )
+    object.__setattr__(cfg, "fallback_folder", "../../Escaped_Fallback")
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    h = "hash999"
+    pipeline.audit_logger.log_scan(
+        {"sha256": h, "status": "SUCCESS", "new_filename": "first.pdf"}
+    )
+
+    scan_file = inbox / "dup.pdf"
+    scan_file.write_bytes(b"%PDF-1.4 duplicate")
+
+    with patch("scansort.pipeline.compute_file_sha256", return_value=h):
+        result = pipeline.process_file(scan_file)
+
+    assert result is not None
+    assert result.resolve().is_relative_to(docs.resolve())
+    assert "_Review_Needed" in str(result)
+
+
+def test_source_unlink_error_does_not_abort_audit_logging(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    scan_file = inbox / "scan.jpg"
+    _create_sample_scan(scan_file)
+
+    pipeline.classifier.classify_document = MagicMock(
+        return_value=DocumentClassification(
+            document_date="260901",
+            description="Doc",
+            target_folder="_Review_Needed",
+            confidence=0.9,
+        )
+    )
+
+    # Mock Path.unlink to raise OSError when unlinking the source scan_file
+    orig_unlink = Path.unlink
+
+    def mock_unlink(self, *args, **kwargs):
+        if self.name == scan_file.name:
+            raise OSError("File locked by scanner driver")
+        return orig_unlink(self, *args, **kwargs)
+
+    with patch.object(Path, "unlink", mock_unlink):
+        dest = pipeline.process_file(scan_file)
+
+    assert dest is not None
+    assert dest.exists()
+    # Audit log must still be recorded despite unlink error
+    history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    assert any("SUCCESS" in line for line in history_lines)

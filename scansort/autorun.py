@@ -1,6 +1,7 @@
 """Windows and cross-platform boot auto-start manager."""
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,9 @@ WIN_REG_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def _get_linux_autostart_path() -> Path:
-    return Path.home() / ".config" / "autostart" / "scansort.desktop"
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg_config) if xdg_config else Path.home() / ".config"
+    return base / "autostart" / "scansort.desktop"
 
 
 def is_autorun_enabled() -> bool:
@@ -26,11 +29,14 @@ def is_autorun_enabled() -> bool:
             ) as key:
                 reg.QueryValueEx(key, RUN_KEY_NAME)
                 return True
-        except (OSError, FileNotFoundError, AttributeError):
+        except (OSError, FileNotFoundError, AttributeError, ImportError):
             return False
 
-    desktop_file = _get_linux_autostart_path()
-    return desktop_file.exists()
+    if sys.platform.startswith("linux"):
+        desktop_file = _get_linux_autostart_path()
+        return desktop_file.exists()
+
+    return False
 
 
 def enable_autorun(executable_path: str | None = None) -> bool:
@@ -62,29 +68,33 @@ def enable_autorun(executable_path: str | None = None) -> bool:
                 )
                 logger.info("Enabled Windows autorun registry key for %s", base_cmd)
                 return True
-        except (OSError, AttributeError) as e:
+        except (OSError, AttributeError, ImportError) as e:
             logger.warning("Failed to enable Windows autorun registry key: %s", e)
             return False
 
-    # Linux autostart desktop entry
-    desktop_file = _get_linux_autostart_path()
-    try:
-        desktop_file.parent.mkdir(parents=True, exist_ok=True)
-        content = (
-            "[Desktop Entry]\n"
-            "Type=Application\n"
-            "Name=ScanSort\n"
-            f"Exec={base_cmd} watch --minimized\n"
-            "Hidden=false\n"
-            "NoDisplay=false\n"
-            "X-GNOME-Autostart-enabled=true\n"
-        )
-        desktop_file.write_text(content, encoding="utf-8")
-        logger.info("Created Linux autostart file at %s", desktop_file)
-        return True
-    except OSError as e:
-        logger.warning("Failed to create Linux autostart file: %s", e)
-        return False
+    if sys.platform.startswith("linux"):
+        # Linux autostart desktop entry
+        desktop_file = _get_linux_autostart_path()
+        try:
+            desktop_file.parent.mkdir(parents=True, exist_ok=True)
+            content = (
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=ScanSort\n"
+                f"Exec={base_cmd} watch --minimized\n"
+                "Hidden=false\n"
+                "NoDisplay=false\n"
+                "X-GNOME-Autostart-enabled=true\n"
+            )
+            desktop_file.write_text(content, encoding="utf-8")
+            logger.info("Created Linux autostart file at %s", desktop_file)
+            return True
+        except OSError as e:
+            logger.warning("Failed to create Linux autostart file: %s", e)
+            return False
+
+    logger.info("Auto-start on boot is only supported on Windows and Linux.")
+    return False
 
 
 def disable_autorun() -> bool:
@@ -102,19 +112,22 @@ def disable_autorun() -> bool:
                 return True
         except FileNotFoundError:
             return True
-        except (OSError, AttributeError) as e:
+        except (OSError, AttributeError, ImportError) as e:
             logger.debug("Autorun key was not present or could not be removed: %s", e)
             return False
 
-    desktop_file = _get_linux_autostart_path()
-    if not desktop_file.exists():
-        return True
-    try:
-        desktop_file.unlink()
-        logger.info("Removed Linux autostart file.")
-        return True
-    except FileNotFoundError:
-        return True
-    except OSError as e:
-        logger.warning("Failed to remove Linux autostart file: %s", e)
-        return False
+    if sys.platform.startswith("linux"):
+        desktop_file = _get_linux_autostart_path()
+        if not desktop_file.exists():
+            return True
+        try:
+            desktop_file.unlink()
+            logger.info("Removed Linux autostart file.")
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            logger.warning("Failed to remove Linux autostart file: %s", e)
+            return False
+
+    return True

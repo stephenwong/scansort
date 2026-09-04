@@ -27,7 +27,10 @@ def should_process_path(path: Path) -> bool:
         return False
 
     name = path.name
-    if name.startswith((".", "~")) or ".crdownload" in name or ".part" in name:
+    lower_name = name.lower()
+    if name.startswith((".", "~", "_undone_")) or lower_name.endswith(
+        (".crdownload", ".part", ".tmp")
+    ):
         return False
 
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
@@ -89,32 +92,28 @@ class DropFolderWatcher:
 
         try:
             while not self._stop_event.is_set():
-                self._restart_event.clear()
-                self._cycle_stop_event = threading.Event()
                 with self._lock:
+                    self._restart_event.clear()
+                    self._cycle_stop_event = threading.Event()
                     current_folder = self.watch_folder
 
-                current_folder.mkdir(parents=True, exist_ok=True)
-                logger.info(
-                    "DropFolderWatcher listening on %s (debounce: %dms)",
-                    current_folder,
-                    self.debounce_ms,
-                )
-
                 try:
+                    current_folder.mkdir(parents=True, exist_ok=True)
+                    logger.info(
+                        "DropFolderWatcher listening on %s (debounce: %dms)",
+                        current_folder,
+                        self.debounce_ms,
+                    )
+
                     for changes in watch(
                         current_folder,
                         debounce=self.debounce_ms,
                         stop_event=self._cycle_stop_event,
                         recursive=False,
                     ):
-                        if self._stop_event.is_set():
-                            break
-                        if self._restart_event.is_set():
-                            logger.debug("Restarting watcher for new folder.")
-                            break
-
                         self._handle_changes(changes)
+                        if self._stop_event.is_set() or self._restart_event.is_set():
+                            break
 
                 except (OSError, RuntimeError) as e:
                     if not self._stop_event.is_set():
@@ -128,7 +127,8 @@ class DropFolderWatcher:
 
     def stop(self) -> None:
         """Signal the watcher to exit immediately."""
-        self._stop_event.set()
-        self._restart_event.set()
-        if self._cycle_stop_event is not None:
-            self._cycle_stop_event.set()
+        with self._lock:
+            self._stop_event.set()
+            self._restart_event.set()
+            if self._cycle_stop_event is not None:
+                self._cycle_stop_event.set()

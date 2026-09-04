@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 SERVICE_NAME: str = "ScanSort"
 KEY_NAME: str = "GeminiApiKey"
 
-# Regex pattern matching standard Google / Gemini API keys (AIza...)
-_GEMINI_KEY_REGEX: re.Pattern = re.compile(r"AIza[0-9A-Za-z_-]{35}")
+# Regex pattern matching Google / Gemini API keys (AIza followed by 30 or more key chars)
+_GEMINI_KEY_REGEX: re.Pattern = re.compile(r"AIza[0-9A-Za-z_-]{30,}")
 
 
 def get_api_key() -> str | None:
@@ -91,7 +91,7 @@ def redact_secrets_from_text(text: str, key: str | None = None) -> str:
 
     Args:
         text: The message or stack trace to redact.
-        key: Optional known active key to redact explicitly.
+        key: Optional known active key to redact explicitly. If None, queries get_api_key().
 
     Returns:
         Redacted text with keys replaced by redaction placeholders.
@@ -101,9 +101,10 @@ def redact_secrets_from_text(text: str, key: str | None = None) -> str:
 
     redacted = text
 
-    # Redact explicit key if provided
-    if key and key.strip():
-        redacted = redacted.replace(key.strip(), "[REDACTED_KEY]")
+    # Redact explicit key or fallback to vault/env key
+    active_key = key if key is not None else get_api_key()
+    if active_key and active_key.strip():
+        redacted = redacted.replace(active_key.strip(), "[REDACTED_KEY]")
 
     # Redact any string matching Gemini API key pattern
     redacted = _GEMINI_KEY_REGEX.sub("[REDACTED_GEMINI_KEY]", redacted)

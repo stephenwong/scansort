@@ -141,13 +141,142 @@ def test_undo_last_move(tmp_path: Path):
     jsonl_path.write_text(f"{json.dumps(entry)}\n", encoding="utf-8")
 
     undone_path = undo_last_move(jsonl_path)
-    assert undone_path == original_inbox_file
-    assert original_inbox_file.exists()
+    assert undone_path == inbox / f"_undone_{original_inbox_file.name}"
+    assert undone_path.exists()
     assert not moved_file.exists()
 
     # Check status was updated
     last_line = jsonl_path.read_text(encoding="utf-8").strip().splitlines()[-1]
     assert json.loads(last_line)["status"] == "UNDONE"
+
+
+def test_undo_updates_csv_audit_log(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Documents" / "Utilities"
+    docs.mkdir(parents=True)
+
+    moved_file = docs / "260901_Bill.pdf"
+    moved_file.write_bytes(b"content")
+
+    jsonl_path = tmp_path / "history.jsonl"
+    csv_path = tmp_path / "history.csv"
+    orig_file = inbox / "bill.pdf"
+
+    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path)
+    logger.log_scan(
+        {
+            "sha256": "h123",
+            "original_filename": orig_file.name,
+            "original_path": str(orig_file),
+            "new_filename": moved_file.name,
+            "destination_folder": "Utilities",
+            "destination_path": str(moved_file),
+            "summary": "Bill",
+            "status": "SUCCESS",
+        }
+    )
+
+    restored = undo_last_move(jsonl_path)
+    assert restored is not None
+
+    # Verify CSV has UNDONE status recorded
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+        assert len(rows) == 2
+        assert rows[-1]["Status"] == "UNDONE"
+
+
+def test_undo_skips_missing_destination_and_restores_earlier(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Documents" / "Utilities"
+    docs.mkdir(parents=True)
+
+    # Earlier file exists
+    f1 = docs / "260901_Older.pdf"
+    f1.write_bytes(b"older")
+    # Later file does not exist (was deleted manually by user)
+    f2 = docs / "260902_Newer.pdf"
+
+    jsonl_path = tmp_path / "history.jsonl"
+    r1 = {
+        "status": "SUCCESS",
+        "destination_path": str(f1),
+        "original_path": str(inbox / "older.pdf"),
+    }
+    r2 = {
+        "status": "SUCCESS",
+        "destination_path": str(f2),
+        "original_path": str(inbox / "newer.pdf"),
+    }
+    jsonl_path.write_text(f"{json.dumps(r1)}\n{json.dumps(r2)}\n", encoding="utf-8")
+
+    # Should skip missing f2 and restore f1
+    restored = undo_last_move(jsonl_path)
+    assert restored is not None
+    assert restored == inbox / "_undone_older.pdf"
+    assert restored.exists()
+    assert not f1.exists()
+
+
+def test_undo_permission_error_handled_cleanly(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    f = docs / "locked.pdf"
+    f.touch()
+
+    jsonl_path = tmp_path / "history.jsonl"
+    r = {
+        "status": "SUCCESS",
+        "destination_path": str(f),
+        "original_path": str(tmp_path / "inbox" / "scan.pdf"),
+    }
+    jsonl_path.write_text(json.dumps(r) + "\n", encoding="utf-8")
+
+    with patch("shutil.move", side_effect=PermissionError("[WinError 32] File locked")):
+        assert undo_last_move(jsonl_path) is None
+
+    # Ensure no UNDONE status was recorded in history
+    last_line = jsonl_path.read_text(encoding="utf-8").strip().splitlines()[-1]
+    assert json.loads(last_line)["status"] == "SUCCESS"
+
+
+def test_dispatch_empty_or_root_target_routes_to_review(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    src = tmp_path / "scan.pdf"
+    src.write_bytes(b"%PDF-1.4")
+
+    for empty_target in ["", "/", "\\", ".", "///"]:
+        meta = DocumentClassification(
+            document_date="260901",
+            description="Doc",
+            target_folder=empty_target,
+        )
+        dest = dispatch_file(src, docs_root, meta)
+        assert "_Review_Needed" in str(dest)
+        assert dest.resolve().is_relative_to(docs_root.resolve())
+        # Source was moved, recreate for next loop iteration
+        src.write_bytes(b"%PDF-1.4")
+
+
+def test_audit_logger_ensure_csv_headers_atomic(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    csv_file = log_dir / "history.csv"
+
+    logger = AuditLogger(csv_path=csv_file)
+    logger._ensure_csv_headers(csv_file)
+    assert csv_file.exists()
+
+    # Pre-populate some rows
+    with open(csv_file, "a", newline="", encoding="utf-8") as f:
+        f.write("2026-09-01,row1\n")
+
+    # Calling _ensure_csv_headers again MUST NOT truncate or overwrite the existing rows
+    logger._ensure_csv_headers(csv_file)
+    content = csv_file.read_text(encoding="utf-8")
+    assert "row1" in content
 
 
 from unittest.mock import patch
@@ -209,13 +338,13 @@ def test_undo_does_not_clobber_existing_file(tmp_path: Path):
     filed_pdf = tmp_path / "docs" / "260901_Bill.pdf"
     filed_pdf.parent.mkdir(parents=True)
     filed_pdf.write_bytes(b"OLD FILED BILL")
-    drop_file = tmp_path / "inbox" / "scan.pdf"
+    drop_file = tmp_path / "inbox" / "_undone_scan.pdf"
     drop_file.parent.mkdir(parents=True)
     drop_file.write_bytes(b"NEW ARRIVING SCAN")
     record = {
         "status": "SUCCESS",
         "destination_path": str(filed_pdf),
-        "original_path": str(drop_file),
+        "original_path": str(tmp_path / "inbox" / "scan.pdf"),
         "new_filename": "260901_Bill.pdf",
     }
     history_file.write_text(json.dumps(record) + "\n")
@@ -261,3 +390,83 @@ def test_undo_multiple_moves(tmp_path: Path):
     assert undo_last_move(hist) is not None
     assert undo_last_move(hist) is not None
     assert undo_last_move(hist) is None
+
+
+def test_audit_logger_ensure_csv_headers_zero_byte_file(tmp_path: Path):
+    csv_file = tmp_path / "zero.csv"
+    csv_file.touch()  # 0 bytes
+
+    logger = AuditLogger(csv_path=csv_file)
+    logger._ensure_csv_headers(csv_file)
+
+    content = csv_file.read_text(encoding="utf-8")
+    assert "Timestamp" in content
+
+
+def test_audit_logger_ensure_csv_headers_os_error(tmp_path: Path):
+    csv_file = tmp_path / "fail.csv"
+    logger = AuditLogger(csv_path=csv_file)
+    with patch("builtins.open", side_effect=OSError("Disk failure")):
+        logger._ensure_csv_headers(csv_file)  # Must not raise
+
+
+def test_undo_log_write_os_error(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    f = docs / "doc.pdf"
+    f.touch()
+
+    jsonl_path = tmp_path / "hist.jsonl"
+    r = {
+        "status": "SUCCESS",
+        "destination_path": str(f),
+        "original_path": str(inbox / "scan.pdf"),
+    }
+    jsonl_path.write_text(json.dumps(r) + "\n")
+
+    orig_open = open
+
+    def mock_open_append(file, mode="r", *args, **kwargs):
+        if str(file) == str(jsonl_path) and "a" in mode:
+            raise OSError("Read-only filesystem")
+        return orig_open(file, mode, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=mock_open_append):
+        # Even if appending to jsonl fails, undo restores the file
+        restored = undo_last_move(jsonl_path)
+        assert restored is not None
+
+
+def test_undo_csv_write_os_error(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    f = docs / "doc.pdf"
+    f.touch()
+
+    jsonl_path = tmp_path / "hist.jsonl"
+    csv_path = tmp_path / "hist.csv"
+    csv_path.touch()
+
+    r = {
+        "status": "SUCCESS",
+        "destination_path": str(f),
+        "original_path": str(inbox / "scan.pdf"),
+    }
+    jsonl_path.write_text(json.dumps(r) + "\n")
+
+    orig_open = open
+
+    def mock_open_csv_fail(file, mode="r", *args, **kwargs):
+        if str(file) == str(csv_path) and "a" in mode:
+            raise OSError("CSV locked")
+        return orig_open(file, mode, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=mock_open_csv_fail):
+        restored = undo_last_move(jsonl_path)
+        assert restored is not None

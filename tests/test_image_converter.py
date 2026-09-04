@@ -99,3 +99,81 @@ def test_convert_pdf_to_custom_output_path(tmp_path: Path):
     assert result == dest_pdf
     assert dest_pdf.exists()
     assert dest_pdf.read_bytes() == b"%PDF-1.5 test"
+
+
+def test_convert_to_pdf_missing_file_raises_file_not_found(tmp_path: Path):
+    missing = tmp_path / "nonexistent.jpg"
+    with pytest.raises(FileNotFoundError, match="Input file not found"):
+        convert_to_pdf(missing)
+
+
+def test_convert_to_pdf_same_file_syntactic_difference(tmp_path: Path):
+    input_pdf = tmp_path / "doc.pdf"
+    input_pdf.write_bytes(b"%PDF-1.5 content")
+
+    # Relative path vs absolute path to the same file
+    rel_path = Path(input_pdf.name)
+    # Run with cwd = tmp_path
+    import os
+
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        res = convert_to_pdf(rel_path, output_path=input_pdf.resolve())
+        assert res.resolve() == input_pdf.resolve()
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_convert_to_pdf_rgba_composited_on_white_background(tmp_path: Path):
+    from pypdf import PdfReader
+
+    png_path = tmp_path / "transparent.png"
+    # Transparent image (fully transparent red)
+    img = Image.new("RGBA", (10, 10), (255, 0, 0, 0))
+    img.save(png_path, format="PNG")
+
+    pdf_path = tmp_path / "transparent.pdf"
+    convert_to_pdf(png_path, output_path=pdf_path)
+
+    reader = PdfReader(pdf_path)
+    page = reader.pages[0]
+    # Extract image from page and verify background pixel is white (255, 255, 255) not black (0, 0, 0)
+    for img_obj in page.images:
+        extracted = img_obj.image.convert("RGB")
+        pixel = extracted.getpixel((0, 0))
+        assert pixel == (255, 255, 255)
+
+
+def test_convert_to_pdf_malformed_dpi(tmp_path: Path):
+    img_path = tmp_path / "odd_dpi.png"
+
+    # Test empty tuple DPI
+    img = Image.new("RGB", (10, 10), "white")
+    img.info["dpi"] = ()
+    img.save(img_path, format="PNG")
+
+    out_pdf = convert_to_pdf(img_path)
+    assert out_pdf.exists()
+
+    # Test None DPI
+    img.info["dpi"] = None
+    img.save(img_path, format="PNG")
+    out_pdf2 = convert_to_pdf(img_path)
+    assert out_pdf2.exists()
+
+
+def test_convert_to_pdf_failed_conversion_cleans_up_target(tmp_path: Path):
+    img_path = tmp_path / "valid.jpg"
+    _create_sample_image(img_path, img_format="JPEG")
+    target_pdf = tmp_path / "failed.pdf"
+
+    with (
+        patch("img2pdf.convert", side_effect=ValueError("Encoding error")),
+        patch.object(Image.Image, "save", side_effect=RuntimeError("Pillow failed")),
+        pytest.raises(RuntimeError),
+    ):
+        convert_to_pdf(img_path, output_path=target_pdf)
+
+    # Failed conversion must not leak a 0-byte PDF
+    assert not target_pdf.exists()

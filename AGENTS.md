@@ -71,9 +71,10 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Physical scanners write files progressively. **Never** process an incoming file immediately on filesystem notification.
 - Always wait for write stabilization via `file_stabilizer.wait_for_file_stability()` which verifies file size stagnation and non-blocking exclusive file handle availability.
 
-### D. Duplicate Prevention
+### D. Duplicate Prevention & Safe Move Reversal
 - Compute streaming SHA-256 before invoking Gemini OCR.
 - Check against `history.jsonl`. Duplicates must be routed to `Documents/_Review_Needed/Duplicates/` with status `DUPLICATE` without invoking Gemini, saving API quota.
+- When reversing moves via `scansort undo`, restored files in the drop folder are prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`). The drop folder watcher strictly ignores files with this prefix to prevent automated re-filing loops. Both `history.jsonl` and `history.csv` are atomically updated with `UNDONE` status.
 
 ### E. Orientation & Windows Search Indexing
 - If Gemini returns non-zero `orientation_correction` (90°, 180°, 270°), rotate pages using `pypdf`.
@@ -83,9 +84,10 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Always buffer PDF bytes into `io.BytesIO` before parsing with `pypdf` when replacing files in-place. On Windows, active file handles cause `PermissionError: [WinError 32]` during atomic replacement (`tmp_path.replace(target_path)`).
 - Always clean up temporary files in `try...finally` blocks.
 
-### G. Path Traversal Defenses
-- Never trust model-generated `target_folder` values or user-specified `fallback_folder` settings. Reject leading slashes and `..` traversal segments.
-- Verify that destination directories satisfy `target_dir.is_relative_to(docs_root)`.
+### G. Path Traversal & Destination Defenses
+- Never trust model-generated `target_folder` values or user-specified `fallback_folder` settings. Reject leading slashes, Windows drive letters (e.g., `C:\`, `D:/`), and `..` traversal segments.
+- Verify that destination directories strictly satisfy `target_dir.is_relative_to(docs_root)`.
+- Enforce that `watch_folder` and `documents_root` cannot be configured to the same directory (`watch_folder.resolve() != documents_root.resolve()`) to prevent infinite ingestion loops.
 
 ### H. Intermediate File Isolation
 - Never write intermediate PDFs or temporary conversion files into the monitored drop folder. Always store working files in the application temp directory (`app_dir / "tmp"`).
@@ -98,6 +100,12 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - **Always write tests first:** For any new feature, bug fix, or behavioral change, write failing automated tests before writing production code.
 - **Purposeful & Functional Tests:** Every test must have a distinct functional purpose and test a real contract, behavior, edge condition, or failure mode.
 - **Zero Test Slop:** Never write shallow, hollow, or meaningless tests purely to inflate coverage metrics (e.g., testing tautologies, over-mocking until no production logic executes, or executing code paths without meaningful assertions). All tests must rigorously validate expected outputs and side-effects.
+
+### K. Mandatory Documentation Synchronization
+- **Always Update Context & Documentation:** Whenever modifying, adding, or refactoring features, CLI options, architectural invariants, configuration settings, or error handling, you **MUST** update `README.md` and repository context files (`AGENTS.md`) to reflect the changes before committing. Never leave user documentation or agent context files stale or out of sync with production code.
+
+### L. Windows Text File & BOM Compatibility
+- Always use `encoding="utf-8-sig"` when reading user configuration and hint files (`config.json`, `folder_hints.json`) to transparently support files saved with a UTF-8 Byte Order Mark (BOM) by Windows Notepad.
 
 ---
 

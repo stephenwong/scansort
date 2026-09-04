@@ -90,14 +90,37 @@ class ScanSortPipeline:
                 file_path.name,
                 file_hash[:8],
             )
-            dup_dest_dir = (
-                self.config.documents_root / self.config.fallback_folder / "Duplicates"
-            )
-            dup_dest_dir.mkdir(parents=True, exist_ok=True)
-            dup_dest = resolve_collision(dup_dest_dir, file_path.name)
+            clean_fallback = self.config.fallback_folder.strip("/\\")
+            resolved_docs = self.config.documents_root.resolve()
+            if not clean_fallback or clean_fallback == ".":
+                dup_dest_dir = (
+                    self.config.documents_root / "_Review_Needed" / "Duplicates"
+                ).resolve()
+            else:
+                dup_dest_dir = (
+                    self.config.documents_root / clean_fallback / "Duplicates"
+                ).resolve()
+                if (
+                    not dup_dest_dir.is_relative_to(resolved_docs)
+                    or dup_dest_dir == resolved_docs
+                ):
+                    dup_dest_dir = (
+                        self.config.documents_root / "_Review_Needed" / "Duplicates"
+                    ).resolve()
 
-            if not self.config.dry_run:
-                shutil.move(str(file_path), str(dup_dest))
+            desired_dup_name = file_path.name
+            dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
+
+            if self.config.dry_run:
+                logger.info(
+                    "[DRY RUN] Would route duplicate %s -> %s",
+                    file_path.name,
+                    dup_dest,
+                )
+                return dup_dest
+
+            dup_dest_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(file_path), str(dup_dest))
 
             self.audit_logger.log_scan(
                 {
@@ -105,7 +128,9 @@ class ScanSortPipeline:
                     "original_filename": file_path.name,
                     "original_path": str(file_path),
                     "new_filename": dup_dest.name,
-                    "destination_folder": f"{self.config.fallback_folder}/Duplicates",
+                    "destination_folder": str(
+                        dup_dest_dir.relative_to(resolved_docs)
+                    ).replace("\\", "/"),
                     "destination_path": str(dup_dest),
                     "summary": f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}",
                     "status": "DUPLICATE",
@@ -113,69 +138,103 @@ class ScanSortPipeline:
             )
             return dup_dest
 
-        # 3. Convert image to PDF in isolated app scratch directory if necessary
+        # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
         is_original_image = file_path.suffix.lower() != ".pdf"
-        pdf_path = file_path
-        if is_original_image:
-            tmp_pdf_name = f"{file_path.stem}_{uuid.uuid4().hex[:8]}.pdf"
-            scratch_pdf = self.tmp_dir / tmp_pdf_name
-            try:
-                pdf_path = convert_to_pdf(file_path, output_path=scratch_pdf)
-            except (ValueError, OSError) as e:
-                logger.error("Failed to convert %s to PDF: %s", file_path.name, e)
-                return None
+        tmp_pdf_name = f"{file_path.stem}_{uuid.uuid4().hex[:8]}.pdf"
+        staging_pdf = self.tmp_dir / tmp_pdf_name
 
-        # 4. Multimodal analysis and classification via Gemini
-        taxonomy = self.folder_mapper.get_taxonomy()
-        hints = load_folder_hints(self.hints_path)
-        classification = self.classifier.classify_document(
-            pdf_path, taxonomy=taxonomy, hints=hints
-        )
+        try:
+            if is_original_image:
+                staging_pdf = convert_to_pdf(file_path, output_path=staging_pdf)
+            else:
+                shutil.copy2(str(file_path), str(staging_pdf))
+        except (ValueError, OSError) as e:
+            logger.error("Failed to stage %s to temporary PDF: %s", file_path.name, e)
+            staging_pdf.unlink(missing_ok=True)
+            return None
 
-        # 5. Dry-Run Verification before any file mutation or metadata writing
-        target_dir = self.config.documents_root / classification.target_folder
-        desired_name = generate_target_filename(classification)
-        simulated_dest = resolve_collision(target_dir, desired_name)
+        try:
+            # 4. Multimodal analysis and classification via Gemini
+            taxonomy = self.folder_mapper.get_taxonomy()
+            hints = load_folder_hints(self.hints_path)
+            classification = self.classifier.classify_document(
+                staging_pdf, taxonomy=taxonomy, hints=hints
+            )
 
-        if self.config.dry_run:
-            logger.info("[DRY RUN] Would file %s -> %s", file_path.name, simulated_dest)
-            if is_original_image and pdf_path.exists():
-                pdf_path.unlink()
-            return simulated_dest
+            # 5. Dry-Run Verification before any file mutation or metadata writing
+            clean_target = classification.target_folder.strip("/\\")
+            resolved_docs = self.config.documents_root.resolve()
+            if not clean_target or clean_target == ".":
+                target_dir = (self.config.documents_root / "_Review_Needed").resolve()
+            else:
+                target_dir = (self.config.documents_root / clean_target).resolve()
+                if (
+                    not target_dir.is_relative_to(resolved_docs)
+                    or target_dir == resolved_docs
+                ):
+                    target_dir = (
+                        self.config.documents_root / "_Review_Needed"
+                    ).resolve()
 
-        # 6. Apply auto-rotation and embed XMP metadata
-        keywords = [classification.document_type, classification.target_folder]
-        process_pdf_metadata_and_rotation(
-            pdf_path=pdf_path,
-            orientation_angle=classification.orientation_correction,
-            title=classification.description,
-            subject=classification.summary,
-            keywords=keywords,
-        )
+            desired_name = generate_target_filename(classification)
+            simulated_dest = resolve_collision(target_dir, desired_name)
 
-        # 7. Atomic Dispatch to destination folder
-        final_dest = dispatch_file(pdf_path, self.config.documents_root, classification)
+            if self.config.dry_run:
+                logger.info(
+                    "[DRY RUN] Would file %s -> %s", file_path.name, simulated_dest
+                )
+                return simulated_dest
 
-        # If we converted an image to a separate PDF in temp, remove the source image from drop folder
-        if is_original_image and file_path.exists():
-            file_path.unlink()
+            # 6. Apply auto-rotation and embed XMP metadata
+            keywords = [classification.document_type, classification.target_folder]
+            process_pdf_metadata_and_rotation(
+                pdf_path=staging_pdf,
+                orientation_angle=classification.orientation_correction,
+                title=classification.description,
+                subject=classification.summary,
+                keywords=keywords,
+            )
 
-        # 8. Record audit log
-        self.audit_logger.log_scan(
-            {
-                "sha256": file_hash,
-                "original_filename": file_path.name,
-                "original_path": str(file_path),
-                "new_filename": final_dest.name,
-                "destination_folder": classification.target_folder,
-                "destination_path": str(final_dest),
-                "summary": classification.summary,
-                "status": "SUCCESS",
-            }
-        )
+            # 7. Atomic Dispatch to destination folder
+            final_dest = dispatch_file(
+                staging_pdf, self.config.documents_root, classification
+            )
 
-        logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
-        return final_dest
+            # Remove original file from drop folder (S3-14: don't let unlink error abort audit log)
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                except OSError as e:
+                    logger.warning(
+                        "Could not remove source file %s after dispatch: %s",
+                        file_path,
+                        e,
+                    )
+
+            # 8. Record audit log
+            self.audit_logger.log_scan(
+                {
+                    "sha256": file_hash,
+                    "original_filename": file_path.name,
+                    "original_path": str(file_path),
+                    "new_filename": final_dest.name,
+                    "destination_folder": classification.target_folder,
+                    "destination_path": str(final_dest),
+                    "summary": classification.summary,
+                    "status": "SUCCESS",
+                }
+            )
+
+            logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
+            return final_dest
+
+        except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing
+            logger.error("Failed to process scan %s: %s", file_path.name, e)
+            return None
+
+        finally:
+            # Clean up intermediate staged PDF if it still exists in tmp
+            staging_pdf.unlink(missing_ok=True)
 
     def run_worker(self, file_queue: queue.Queue, stop_event: threading.Event) -> None:
         """Sequential background worker processing items from the queue with rate-limiting."""

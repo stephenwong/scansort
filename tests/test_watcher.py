@@ -19,6 +19,14 @@ def test_should_process_path():
     assert should_process_path(Path("C:/Scans/~scan001.pdf")) is False
     assert should_process_path(Path("C:/Scans/.hidden.pdf")) is False
     assert should_process_path(Path("C:/Scans/subfolder")) is False
+    # S2-05: multipart file names like scan.part1.pdf should be allowed
+    assert should_process_path(Path("C:/Scans/scan.part1.pdf")) is True
+    assert should_process_path(Path("C:/Scans/doc.part2.jpg")) is True
+    # S2-05: actual partial downloads should be rejected
+    assert should_process_path(Path("C:/Scans/scan.pdf.part")) is False
+    assert should_process_path(Path("C:/Scans/scan.pdf.crdownload")) is False
+    # S1-07: undone restored files should be ignored to prevent re-ingestion loops
+    assert should_process_path(Path("C:/Scans/_undone_scan001.pdf")) is False
 
 
 def test_watcher_enqueue(tmp_path: Path):
@@ -174,3 +182,46 @@ def test_switch_folder_unblocks_watch(tmp_path: Path):
         w.stop()
         t.join(timeout=1.0)
         assert folder_b in watched
+
+
+def test_watcher_does_not_drop_changes_when_stopped(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    scan = inbox / "final_scan.pdf"
+    scan.touch()
+
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    def mock_watch_yield_and_stop(*args, **kwargs):
+        # Set stop event concurrently before yielding changes
+        watcher._stop_event.set()
+        yield [(Change.added, str(scan))]
+
+    with patch("scansort.watcher.watch", side_effect=mock_watch_yield_and_stop):
+        watcher.start()
+
+    # The yielded file must have been enqueued, not dropped
+    assert file_queue.qsize() == 1
+    assert file_queue.get_nowait() == scan
+
+
+def test_watcher_mkdir_error_retried(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    attempt = 0
+
+    def mock_mkdir(*args, **kwargs):
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            raise OSError("Access denied temporarily")
+        # On second attempt, stop the watcher
+        watcher.stop()
+
+    with patch.object(Path, "mkdir", side_effect=mock_mkdir):
+        watcher.start()
+
+    assert attempt >= 2

@@ -53,6 +53,7 @@ def scan_documents_folders(
     ignored = (
         ignored_folders if ignored_folders is not None else DEFAULT_IGNORED_FOLDERS
     )
+    fallback_norm = fallback_folder.strip("/\\").lower()
     discovered: list[str] = []
 
     def _walk(current: Path, current_depth: int) -> None:
@@ -60,24 +61,34 @@ def scan_documents_folders(
             return
 
         try:
-            subdirs = [p for p in current.iterdir() if p.is_dir()]
+            entries = list(current.iterdir())
         except (OSError, PermissionError) as e:
             logger.debug("Skipping inaccessible directory %s: %s", current, e)
             return
 
+        subdirs: list[Path] = []
+        for p in entries:
+            try:
+                if p.is_dir():
+                    subdirs.append(p)
+            except (OSError, PermissionError) as e:
+                logger.debug("Skipping inaccessible entry %s: %s", p, e)
+
         for subdir in sorted(subdirs):
             name = subdir.name
             name_lower = name.lower()
+            rel_path = subdir.relative_to(docs_root).as_posix()
+            rel_lower = rel_path.lower()
 
             # Skip dotfolders, fallback folder (case-insensitive), and noise folders
             if (
                 name.startswith(".")
-                or name_lower == fallback_folder.lower()
+                or rel_lower == fallback_norm
+                or rel_lower.startswith(f"{fallback_norm}/")
                 or name_lower in ignored
             ):
                 continue
 
-            rel_path = subdir.relative_to(docs_root).as_posix()
             discovered.append(rel_path)
 
             _walk(subdir, current_depth + 1)
@@ -101,7 +112,10 @@ def format_taxonomy_for_prompt(
     if not folders:
         return "No pre-existing folders detected."
 
-    active_hints = {k.lower(): v for k, v in (hints or {}).items()}
+    active_hints = {
+        k.replace("\\", "/").strip().strip("/").lower(): v
+        for k, v in (hints or {}).items()
+    }
     lines = ["AVAILABLE DESTINATION FOLDERS:"]
     for folder in folders:
         folder_hints = active_hints.get(folder.lower())
@@ -131,6 +145,7 @@ class FolderMapper:
         self.max_depth = max_depth
         self.fallback_folder = fallback_folder
         self._cached_folders: list[str] | None = None
+        self._cache_mtime: float | None = None
 
     def refresh(self) -> list[str]:
         """Scan documents root and write results to the cache file."""
@@ -157,6 +172,8 @@ class FolderMapper:
                 tmp_path = Path(tmp_file.name)
                 json.dump(cache_data, tmp_file, indent=2)
             tmp_path.replace(self.cache_path)
+            if self.cache_path.exists():
+                self._cache_mtime = self.cache_path.stat().st_mtime
         except (OSError, ValueError) as e:
             logger.warning("Failed to write folder cache to %s: %s", self.cache_path, e)
         finally:
@@ -168,17 +185,32 @@ class FolderMapper:
     def get_taxonomy(self) -> list[str]:
         """Return the current taxonomy, loading from cache if available."""
         if self._cached_folders is not None:
-            return self._cached_folders
+            try:
+                if self.cache_path.exists():
+                    current_mtime = self.cache_path.stat().st_mtime
+                    if (
+                        self._cache_mtime is not None
+                        and current_mtime != self._cache_mtime
+                    ):
+                        self._cached_folders = None
+            except OSError:
+                pass
+            if self._cached_folders is not None:
+                return self._cached_folders
 
         if self.cache_path.exists():
             try:
                 data = json.loads(self.cache_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     cached_root = data.get("documents_root")
-                    if cached_root == str(self.docs_root):
+                    if (
+                        cached_root
+                        and Path(cached_root).resolve() == self.docs_root.resolve()
+                    ):
                         folders = data.get("folders", [])
                         if isinstance(folders, list):
                             self._cached_folders = [str(f) for f in folders]
+                            self._cache_mtime = self.cache_path.stat().st_mtime
                             return self._cached_folders
             except (json.JSONDecodeError, OSError, ValueError, AttributeError):
                 pass

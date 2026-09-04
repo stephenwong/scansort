@@ -104,3 +104,23 @@ def test_delete_api_key_keyring_error(monkeypatch):
         side_effect=keyring.errors.KeyringError("Keyring locked"),
     ):
         delete_api_key()  # Should not raise exception
+
+
+def test_redact_secrets_variable_length_regex():
+    # Variable length keys (30+ characters after AIza)
+    for length in [30, 39, 45, 50]:
+        key = "AIza" + "aB9_-" * (length // 5)
+        raw = f"Exception using key {key} in request"
+        redacted = redact_secrets_from_text(raw, key=None)
+        assert key not in redacted
+        assert "[REDACTED_GEMINI_KEY]" in redacted
+
+
+def test_redact_secrets_fallback_to_active_vault_key(monkeypatch):
+    active_key = "custom_vault_key_not_matching_regex"
+    monkeypatch.setenv("GEMINI_API_KEY", active_key)
+    raw = f"Error communicating with {active_key} endpoint"
+    # When key=None, it should query get_api_key() and redact the active key
+    redacted = redact_secrets_from_text(raw, key=None)
+    assert active_key not in redacted
+    assert "[REDACTED_KEY]" in redacted

@@ -28,7 +28,7 @@ def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
         return {}
 
     try:
-        content = path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8-sig")
         data = json.loads(content)
         if not isinstance(data, dict):
             logger.warning("Invalid folder_hints.json format, expected dictionary.")

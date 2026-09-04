@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfReadError
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,29 @@ def process_pdf_metadata_and_rotation(
 
     target_path = output_path or pdf_path
     pdf_bytes = pdf_path.read_bytes()
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+    except Exception as e:
+        raise ValueError(f"Corrupted or unreadable PDF {pdf_path.name}: {e}") from e
+
+    # Handle encrypted PDFs (S3-06)
+    if reader.is_encrypted:
+        try:
+            reader.decrypt("")
+        except (PdfReadError, OSError):
+            logger.debug(
+                "Empty password decryption attempt failed for %s", pdf_path.name
+            )
+        try:
+            _ = len(reader.pages)
+            if reader.pages:
+                _ = reader.pages[0]
+        except Exception as e:
+            raise ValueError(
+                f"PDF {pdf_path.name} is password protected and cannot be processed."
+            ) from e
+
     writer = PdfWriter()
 
     # Normalize orientation angle to orthogonal multiples
@@ -51,15 +74,22 @@ def process_pdf_metadata_and_rotation(
             page.rotate(norm_angle)
         writer.add_page(page)
 
-    # Build metadata dictionary
+    # Build metadata dictionary, preserving pre-existing DocInfo (S3-09)
     metadata: dict[str, str] = {}
+    if reader.metadata:
+        for k, v in reader.metadata.items():
+            if k and v:
+                metadata[str(k)] = str(v)
+
     if title:
         metadata["/Title"] = title.strip()
     if subject:
         metadata["/Subject"] = subject.strip()
     if keywords:
-        if isinstance(keywords, list):
-            metadata["/Keywords"] = ", ".join(k.strip() for k in keywords if k.strip())
+        if isinstance(keywords, (list, tuple, set)):
+            metadata["/Keywords"] = ", ".join(
+                sorted(str(k).strip() for k in keywords if str(k).strip())
+            )
         else:
             metadata["/Keywords"] = str(keywords).strip()
     if author:
@@ -69,24 +99,20 @@ def process_pdf_metadata_and_rotation(
     if metadata:
         writer.add_metadata(metadata)
 
-    # If updating in place, write to temp file first then replace to avoid corruption
-    if target_path == pdf_path:
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                dir=pdf_path.parent, delete=False, suffix=".tmp"
-            ) as tmp_file:
-                tmp_path = Path(tmp_file.name)
-                writer.write(tmp_file)
+    # Unified atomic write via temporary file replacement for all targets (S3-08)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=target_path.parent, delete=False, suffix=".tmp"
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            writer.write(tmp_file)
 
-            tmp_path.replace(target_path)
-        finally:
-            if tmp_path and tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
-    else:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(target_path, "wb") as f:
-            writer.write(f)
+        tmp_path.replace(target_path)
+    finally:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
     logger.debug(
         "Embedded metadata and rotation (%d deg) into %s.", norm_angle, target_path.name
