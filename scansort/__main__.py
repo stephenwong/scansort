@@ -1,6 +1,7 @@
 """CLI entry point and command router for ScanSort."""
 
 import argparse
+import ctypes
 import logging
 import os
 import queue
@@ -24,6 +25,7 @@ from scansort.constants import (
 from scansort.dispatcher import undo_last_move
 from scansort.folder_mapper import FolderMapper
 from scansort.instance_guard import instance_guard
+from scansort.logging_setup import configure_file_logging
 from scansort.pipeline import ScanSortPipeline
 from scansort.secrets import (
     get_api_key,
@@ -435,8 +437,46 @@ def _handle_self_update(values: list[str]) -> int:
     return perform_self_update(pid, values[1], values[2], values[3])
 
 
+def _attach_parent_console() -> None:
+    """Bind stdout/stderr to the parent console in frozen windowed builds.
+
+    The packaged ``ScanSort.exe`` is a GUI-subsystem build (``console=False``)
+    whose standard streams are null writers, so CLI output such as
+    ``config --show`` would otherwise be invisible. When the exe is launched
+    from an interactive cmd/PowerShell window, attach to that window's console
+    and re-point the standard streams at it (encoded for the console's output
+    code page). When launched by double-click or auto-start there is no console
+    to attach to: the call fails silently and output stays discarded, exactly
+    as before, so the background tray watcher never flashes a terminal.
+    """
+    if (
+        sys.platform != "win32"
+        or not getattr(sys, "frozen", False)
+        or (sys.stdout is not None and sys.stdout.isatty())
+    ):
+        return
+    try:
+        import msvcrt
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not kernel32.AttachConsole(-1):
+            return
+        output_cp = kernel32.GetConsoleOutputCP()
+        encoding = f"cp{output_cp}" if output_cp else "utf-8"
+        for name, std_handle in (("stdout", -11), ("stderr", -12)):
+            handle = kernel32.GetStdHandle(std_handle)
+            if not handle or handle == -1:
+                continue
+            fd = msvcrt.open_osfhandle(handle, os.O_WRONLY)
+            setattr(sys, name, os.fdopen(fd, "w", encoding=encoding, buffering=1))
+    except AttributeError, ImportError, LookupError, OSError, ValueError:
+        return
+
+
 def main_cli(args: list[str] | None = None) -> int:
     """Main CLI execution router."""
+    _attach_parent_console()
+    configure_file_logging()
     parser = build_parser()
     parsed = parser.parse_args(args)
 

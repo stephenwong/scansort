@@ -39,6 +39,7 @@ scansort/
 │   ├── hasher.py               # Streaming SHA-256 duplicate scan interception
 │   ├── image_converter.py      # Lossless JPEG stream wrapping (img2pdf) & image normalization
 │   ├── instance_guard.py       # Non-blocking single-instance lock (fcntl/msvcrt)
+│   ├── logging_setup.py        # Persistent rotating file + stderr console logging (scansort.log)
 │   ├── models.py               # Vendor-neutral classification domain model & sanitizers
 │   ├── notifications.py        # Reusable filing-lifecycle toast messages (success/failure/stranded)
 │   ├── pdf_metadata.py         # XMP metadata embedding & pypdf auto-rotation
@@ -131,6 +132,14 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Install swaps are rollback-safe: rename the current install aside, rename the staged tree into place, and only then remove the backup; on any step failure rename the backup back and exit nonzero — the auto-start target must never point at a missing directory. Staging lives in a sibling directory of the install directory (same volume).
 - The helper (spawned staged build, hidden `--self-update` mode) waits for the old PID using a native `OpenProcess`/`WaitForSingleObject` handle — never `os.kill(pid, 0)`, which is not an existence probe on Windows. Detached children must use `DETACHED_PROCESS | CREATE_NO_WINDOW` with all standard handles closed.
 - Toasts (`scansort.toasts`) are best-effort and never raise: they no-op off-Windows, lazily import the optional `windows-toasts` extra, and swallow display failures. The "update installed" toast must be fired by the *relaunched* app from the `just_installed` state marker — never by the helper after the swap, whose bundled module paths no longer exist. Filing-lifecycle messages (filed / failed-with-reason / stranded) live in `scansort.notifications` with word-for-word testable builders; failure reasons shown in toasts must be whitespace-collapsed, secret-redacted, and truncated (~140 chars).
+
+### N. Windowed Build Console Attachment (`ScanSort.exe` CLI Visibility)
+- The packaged exe is a GUI-subsystem build (`console=False`) whose standard streams are null writers, so `print()` output is invisible unless attached to a console. `main_cli` must call `scansort.__main__._attach_parent_console()` on entry: in a frozen Windows build only, best-effort `AttachConsole(ATTACH_PARENT_PROCESS)` re-points `sys.stdout`/`sys.stderr` at the launching terminal's console (streams line-buffered and encoded for `GetConsoleOutputCP`, falling back to UTF-8). Every failure mode (no parent console from double-click/auto-start/detached self-update helper, missing/invalid standard handles, Win32 API errors, missing `msvcrt`) must return silently so tray/background operation never raises or flashes a terminal. Attachment must never run in development (`python -m scansort`) — guard on `sys.frozen` and `sys.platform == "win32"`, and only when stdout is not already a TTY.
+
+### O. Persistent File Logging (Diagnostics Reach Background Runs)
+- Every `main_cli` entry (all subcommands, including the detached `--self-update` helper) must call `scansort.logging_setup.configure_file_logging()` so diagnostics survive operation where no console exists. It attaches a rotating `scansort.log` handler (INFO and above, 1 MB × 3 backups, UTF-8) in `app_dir` plus a WARNING-level stderr console handler so terminal launches keep their existing warning stream; repeat calls for the same directory must reuse handlers, never stack duplicates.
+- Root-logger level must be lowered to INFO so INFO records pass logger-level filtering. File logging is best-effort and never raises: `mkdir` or log-file open failures return `None` silently and must not abort any command, filing, update, or self-update path.
+- Secrets stay covered by invariant A: only pre-redacted text (via `scansort.secrets.redact_secrets_from_text()`) may ever reach the log file — audit summaries in `history.jsonl` remain truncated to 100 chars, the full redacted reason lives in `scansort.log`.
 
 ---
 

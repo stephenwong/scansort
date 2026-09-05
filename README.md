@@ -103,6 +103,7 @@ flowchart TD
 - **Sequential Undo Support:** Provides single-command undo (`scansort undo`) that can be executed repeatedly to roll back successive moves, restoring files safely with collision handling and resetting duplicate status. Failed restores are reported to the CLI instead of being silently skipped.
 - **Resilient Background Worker:** Robust queue worker designed to handle transient API rate limits (429/503) and network drops by falling back to review folders without terminating the daemon. Items still queued at shutdown are drained before exit.
 - **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`. CSV cells are neutralized against spreadsheet-formula injection, and the CSV mirror never diverges from the JSONL under concurrent processes.
+- **Persistent Diagnostic Log:** Every `scansort` invocation attaches a rotating `%APPDATA%\ScanSort\scansort.log` (INFO and above, 1 MB × 3 backups) so full, secret-redacted failure details — e.g. the complete Gemini API error behind a `_Review_Needed` routing — survive background tray operation where no console exists. WARNING+ messages also keep flowing to the terminal when one is attached.
 - **Dry-Run Mode:** Test and preview classification logic on your documents without moving or modifying files (`--dry-run`).
 - **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart (written atomically).
 - **Single-Instance Guard:** The watcher holds a non-blocking `instance.lock`, so a manual launch while auto-start is running (or a self-update relaunch) never spawns a second watcher that would double-file the same scans.
@@ -135,6 +136,8 @@ uv sync
 ## Usage & CLI Reference
 
 ScanSort provides an intuitive command-line interface:
+
+> **Packaged `ScanSort.exe`:** the release build is windowed (`console=False`) so it runs quietly in the system tray at boot. When launched from an interactive cmd/PowerShell window, it attaches its standard streams to that window's console, so CLI output such as `config --show`, `undo`, and `rescan` prints where you can read it. Launched by double-click or auto-start there is no console to attach to, and it stays silent as before.
 
 ### 1. Store Your Gemini API Key Securely
 Store your API key in the Windows Credential Manager:
@@ -240,7 +243,7 @@ YYMMDD_<Description>.pdf
 
 - **Write-stability gate:** Incoming files must hold a constant size for ~1 s before processing; the source is re-verified immediately before dispatch. A writer that resumes mid-processing causes the item to be deferred, never partially filed.
 - **Cross-process atomicity:** File moves (`watch` pipeline, duplicate routing, `undo`) are serialized via an advisory lock on `%APPDATA%\ScanSort\operations.lock`, so two processes can never race `resolve_collision` and silently overwrite each other's filed document.
-- **Failed items are never stranded:** Any file that fails hashing, duplicate routing, conversion, or metadata processing is moved to the fallback review folder with a `FAILED` audit record — the background worker never dies and the queue is drained on shutdown.
+- **Failed items are never stranded:** Any file that fails hashing, duplicate routing, conversion, or metadata processing is moved to the fallback review folder with a `FAILED` audit record — the background worker never dies and the queue is drained on shutdown. The full (secret-redacted) reason text behind a failure is in `%APPDATA%\ScanSort\scansort.log` (`~/.config/scansort/scansort.log` on Linux); audit summaries store only a 100-character excerpt.
 - **Startup reconciliation:** Scans left in the drop folder when monitoring starts (app was off, or a crash) are queued automatically.
 - **Config is never silently reset:** A parseable but semantically invalid `config.json` aborts commands with an error naming the offending field; only missing/unreadable files fall back to defaults.
 - **Taxonomy freshness:** The cached folder list is re-scanned automatically when older than 1 hour and pruned of folders that no longer exist.
@@ -272,6 +275,8 @@ uv run pyinstaller scansort.spec
 ```
 
 The output bundle is produced in `dist/ScanSort/ScanSort.exe`.
+
+The exe is a GUI-subsystem build (`console=False`) that never flashes a terminal when started by auto-start or double-click. At CLI startup it best-effort attaches to the launching terminal's console (see [Usage & CLI Reference](#usage--cli-reference)), so commands run from cmd/PowerShell still display their output.
 
 ---
 
