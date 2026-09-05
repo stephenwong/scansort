@@ -7,7 +7,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from scansort.constants import (
     CONFIG_FILENAME,
@@ -42,6 +49,14 @@ def _default_watch_folder() -> Path:
 
 def _default_documents_root() -> Path:
     return Path.home() / "Documents"
+
+
+def _path_has_file_ancestor(path: Path) -> bool:
+    """Return True when the path itself or any existing ancestor is a regular file."""
+    current = path
+    while current != current.parent and not current.exists():
+        current = current.parent
+    return current.is_file()
 
 
 class AppConfig(BaseModel):
@@ -86,14 +101,27 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_distinct_roots(self) -> "AppConfig":
-        if self.watch_folder.resolve() == self.documents_root.resolve():
+        watch_resolved = self.watch_folder.resolve()
+        docs_resolved = self.documents_root.resolve()
+
+        # Containment in either direction can create ingestion feedback loops.
+        if (
+            watch_resolved == docs_resolved
+            or watch_resolved.is_relative_to(docs_resolved)
+            or docs_resolved.is_relative_to(watch_resolved)
+        ):
             raise ValueError(
-                "watch_folder and documents_root cannot be the same directory"
+                "watch_folder and documents_root cannot be the same directory "
+                "or contain each other"
             )
-        if self.watch_folder.resolve().is_file():
-            raise ValueError("watch_folder cannot be a regular file")
-        if self.documents_root.resolve().is_file():
-            raise ValueError("documents_root cannot be a regular file")
+        if _path_has_file_ancestor(self.watch_folder):
+            raise ValueError(
+                "watch_folder cannot be a regular file or located under one"
+            )
+        if _path_has_file_ancestor(self.documents_root):
+            raise ValueError(
+                "documents_root cannot be a regular file or located under one"
+            )
         return self
 
     def ensure_directories(self) -> None:
@@ -104,7 +132,16 @@ class AppConfig(BaseModel):
 
 
 def load_config(config_path: Path | None = None) -> AppConfig:
-    """Load configuration from a JSON file, returning defaults if file doesn't exist."""
+    """Load configuration from a JSON file, returning defaults if file doesn't exist.
+
+    Unreadable or structurally invalid files (missing, undecodable, non-dict)
+    fall back to defaults. A file that parses but contains semantically invalid
+    settings raises ``ValueError`` naming the offending fields so callers can
+    fail fast instead of silently discarding valid user settings.
+
+    Raises:
+        ValueError: If the file parses as JSON but fails model validation.
+    """
     path = config_path or get_default_config_path()
     if not path.exists():
         logger.info("Config file not found at %s, using defaults.", path)
@@ -112,19 +149,33 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     try:
         content = path.read_text(encoding="utf-8-sig")
-        data = json.loads(content)
-        if not isinstance(data, dict):
-            logger.warning(
-                "Config file at %s is not a dictionary. Using defaults.", path
-            )
-            return AppConfig()
-        clean_data = {k: v for k, v in data.items() if v is not None}
-        return AppConfig(**clean_data)
-    except (json.JSONDecodeError, OSError, ValueError, TypeError) as e:
-        logger.warning(
-            "Error reading config at %s (%s). Using default configuration.", path, e
-        )
+    except OSError as e:
+        logger.warning("Error reading config at %s (%s). Using defaults.", path, e)
         return AppConfig()
+
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning("Config file at %s is not valid JSON. Using defaults.", path)
+        logger.debug("JSON decode error: %s", e)
+        return AppConfig()
+    if not isinstance(data, dict):
+        logger.warning("Config file at %s is not a dictionary. Using defaults.", path)
+        return AppConfig()
+
+    clean_data = {k: v for k, v in data.items() if v is not None}
+    try:
+        return AppConfig(**clean_data)
+    except ValidationError as e:
+        invalid_fields = sorted(
+            {str(error.get("loc", ())[0]) for error in e.errors() if error.get("loc")}
+        )
+        details = ", ".join(invalid_fields) if invalid_fields else "invalid values"
+        logger.error("Config file %s has invalid settings: %s", path, details)
+        raise ValueError(
+            f"Config file {path} contains invalid settings ({details}). "
+            "Fix or delete the file before continuing."
+        ) from e
 
 
 def save_config(config: AppConfig, config_path: Path | None = None) -> None:

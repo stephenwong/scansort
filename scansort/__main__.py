@@ -108,9 +108,20 @@ def _try_save_config(cfg: AppConfig) -> bool:
         return False
 
 
+def _load_config_or_exit() -> AppConfig | None:
+    """Load configuration, printing a diagnostic and returning None on failure."""
+    try:
+        return load_config()
+    except ValueError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        return None
+
+
 def _handle_watch(parsed: argparse.Namespace) -> int:
     """Handle 'watch' command to start monitoring the drop folder."""
-    cfg = load_config()
+    cfg = _load_config_or_exit()
+    if cfg is None:
+        return 1
     new_watch = (
         parsed.watch_folder.resolve()
         if getattr(parsed, "watch_folder", None)
@@ -133,7 +144,11 @@ def _handle_watch(parsed: argparse.Namespace) -> int:
         print(f"Configuration error: {e}", file=sys.stderr)
         return 1
 
-    cfg.ensure_directories()
+    try:
+        cfg.ensure_directories()
+    except OSError as e:
+        print(f"Error preparing directories: {e}", file=sys.stderr)
+        return 1
 
     if not getattr(parsed, "minimized", False):
         print(f"Starting ScanSort monitor on: {cfg.watch_folder}")
@@ -143,7 +158,11 @@ def _handle_watch(parsed: argparse.Namespace) -> int:
 
     file_queue: queue.Queue = queue.Queue()
     stop_event = threading.Event()
-    pipeline = ScanSortPipeline(config=cfg)
+    try:
+        pipeline = ScanSortPipeline(config=cfg)
+    except OSError as e:
+        print(f"Error preparing application directories: {e}", file=sys.stderr)
+        return 1
     watcher = DropFolderWatcher(watch_folder=cfg.watch_folder, file_queue=file_queue)
 
     worker_thread = threading.Thread(
@@ -169,7 +188,9 @@ def _handle_watch(parsed: argparse.Namespace) -> int:
 
 def _handle_config(parsed: argparse.Namespace) -> int:
     """Handle 'config' command to view or modify settings."""
-    cfg = load_config()
+    cfg = _load_config_or_exit()
+    if cfg is None:
+        return 1
 
     if parsed.set_key:
         try:
@@ -268,7 +289,9 @@ def _handle_config(parsed: argparse.Namespace) -> int:
 
 def _handle_undo(parsed: argparse.Namespace) -> int:
     """Handle 'undo' command to reverse the most recent file move."""
-    cfg = load_config()
+    cfg = _load_config_or_exit()
+    if cfg is None:
+        return 1
     jsonl_path = get_default_app_dir() / HISTORY_JSONL_NAME
     try:
         restored = undo_last_move(jsonl_path, mirror_csv_path=cfg.mirror_csv_path)
@@ -284,7 +307,9 @@ def _handle_undo(parsed: argparse.Namespace) -> int:
 
 def _handle_rescan(parsed: argparse.Namespace) -> int:
     """Handle 'rescan' command to discover and display taxonomy."""
-    cfg = load_config()
+    cfg = _load_config_or_exit()
+    if cfg is None:
+        return 1
     mapper = FolderMapper(
         docs_root=cfg.documents_root,
         max_depth=cfg.max_folder_depth,

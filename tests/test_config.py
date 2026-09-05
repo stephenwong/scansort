@@ -1,5 +1,6 @@
 """Unit tests for scansort.config module."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,51 @@ def test_config_rejects_regular_file(tmp_path: Path):
 
     with pytest.raises(ValueError, match="documents_root cannot be a regular file"):
         AppConfig(watch_folder=tmp_path / "watch", documents_root=dummy_file)
+
+
+def test_config_rejects_path_under_regular_file(tmp_path: Path):
+    blocker = tmp_path / "blocker.txt"
+    blocker.write_text("a file, not a directory")
+    broken_path = blocker / "Inbox"
+
+    with pytest.raises(ValueError, match="watch_folder cannot be a regular file"):
+        AppConfig(watch_folder=broken_path, documents_root=tmp_path / "docs")
+
+    with pytest.raises(ValueError, match="documents_root cannot be a regular file"):
+        AppConfig(watch_folder=tmp_path / "watch", documents_root=broken_path)
+
+
+def test_config_rejects_nested_watch_folder(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    nested_watch = docs_root / "Scans" / "Inbox"
+
+    with pytest.raises(ValueError, match="cannot be the same directory or contain"):
+        AppConfig(watch_folder=nested_watch, documents_root=docs_root)
+
+    # And containment in the opposite direction is rejected too.
+    with pytest.raises(ValueError, match="cannot be the same directory or contain"):
+        AppConfig(watch_folder=docs_root, documents_root=nested_watch)
+
+
+def test_load_config_semantic_invalid_raises(tmp_path: Path):
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "documents_root": str(tmp_path / "Docs"),
+                "watch_folder": str(tmp_path / "Inbox"),
+                "max_folder_depth": 99,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="max_folder_depth"):
+        load_config(cfg_file)
+
+    # Unreadable / undecodable files still fall back to defaults.
+    cfg_file.write_text("{broken", encoding="utf-8")
+    assert isinstance(load_config(cfg_file), AppConfig)
 
 
 def test_config_assignment_validation(tmp_path: Path):

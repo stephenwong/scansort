@@ -333,3 +333,57 @@ def test_cli_config_autostart_save_error(capsys):
         exit_code = main_cli(["config", "--autostart", "disable"])
         assert exit_code == 1
         assert "Error saving configuration" in capsys.readouterr().err
+
+
+def test_cli_config_refuses_semantically_invalid_config_file(tmp_path: Path, capsys):
+    """A parseable-but-invalid config must never be reset or persisted."""
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        '{"documents_root": "%s/docs", "watch_folder": "%s/inbox", '
+        '"max_folder_depth": 99}' % (tmp_path, tmp_path),
+        encoding="utf-8",
+    )
+
+    with (
+        patch("scansort.__main__.load_config", side_effect=ValueError("bad field")),
+        patch("scansort.__main__.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--watch-folder", str(tmp_path / "NewInbox")]) == 1
+        assert not mock_save.called
+        captured = capsys.readouterr()
+        assert "Configuration error" in captured.err
+
+
+def test_cli_watch_graceful_when_directories_unavailable(tmp_path: Path, capsys):
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+
+    with (
+        patch("scansort.__main__.load_config", return_value=cfg),
+        patch.object(
+            AppConfig, "ensure_directories", side_effect=OSError("Access denied")
+        ),
+        patch("scansort.__main__.DropFolderWatcher") as mock_watcher_cls,
+        patch("scansort.__main__.ScanSortPipeline"),
+    ):
+        exit_code = main_cli(["watch"])
+        assert exit_code == 1
+        mock_watcher_cls.return_value.start.assert_not_called()
+        captured = capsys.readouterr()
+        assert "Error preparing directories" in captured.err
+
+
+def test_cli_config_nested_watch_folder_rejected(tmp_path: Path, capsys):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir(parents=True)
+    initial_cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=docs_root)
+
+    with (
+        patch("scansort.__main__.load_config", return_value=initial_cfg),
+        patch("scansort.__main__.save_config") as mock_save,
+    ):
+        nested = docs_root / "NestedInbox"
+        exit_code = main_cli(["config", "--watch-folder", str(nested)])
+        assert exit_code == 1
+        assert not mock_save.called
+        captured = capsys.readouterr()
+        assert "Configuration error" in captured.err
