@@ -5,8 +5,9 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from scansort.constants import (
     CONFIG_FILENAME,
@@ -24,16 +25,14 @@ def get_default_app_dir() -> Path:
     """Return the platform-appropriate application data directory."""
     if sys.platform == "win32":
         app_data = os.environ.get("APPDATA")
-        base = Path(app_data) if app_data else Path.home() / "AppData" / "Roaming"
-        return base / "ScanSort"
-
-    xdg_config = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config) if xdg_config else Path.home() / ".config"
-    return base / "scansort"
+        if app_data:
+            return Path(app_data) / "ScanSort"
+        return Path.home() / "AppData" / "Roaming" / "ScanSort"
+    return Path.home() / ".config" / "scansort"
 
 
 def get_default_config_path() -> Path:
-    """Return the default path to config.json."""
+    """Return the default configuration file path."""
     return get_default_app_dir() / CONFIG_FILENAME
 
 
@@ -47,6 +46,8 @@ def _default_documents_root() -> Path:
 
 class AppConfig(BaseModel):
     """Application configuration settings."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     watch_folder: Path = Field(default_factory=_default_watch_folder)
     documents_root: Path = Field(default_factory=_default_documents_root)
@@ -63,6 +64,13 @@ class AppConfig(BaseModel):
         if self.mirror_log_to_documents:
             return self.documents_root / MIRROR_HISTORY_CSV_NAME
         return None
+
+    @field_validator("gemini_model", mode="before")
+    @classmethod
+    def validate_gemini_model(cls, v: Any) -> str:
+        if v is None or not str(v).strip():
+            return DEFAULT_GEMINI_MODEL
+        return str(v).strip()
 
     @field_validator("fallback_folder")
     @classmethod
@@ -82,6 +90,10 @@ class AppConfig(BaseModel):
             raise ValueError(
                 "watch_folder and documents_root cannot be the same directory"
             )
+        if self.watch_folder.resolve().is_file():
+            raise ValueError("watch_folder cannot be a regular file")
+        if self.documents_root.resolve().is_file():
+            raise ValueError("documents_root cannot be a regular file")
         return self
 
     def ensure_directories(self) -> None:

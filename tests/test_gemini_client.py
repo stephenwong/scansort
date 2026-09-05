@@ -10,19 +10,13 @@ from google.genai.errors import APIError
 from scansort.gemini_client import GeminiClassifier
 
 
-def test_analyze_document_missing_api_key(tmp_path: Path):
-    dummy_pdf = tmp_path / "doc.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_analyze_document_missing_api_key(minimal_pdf: Path):
     classifier = GeminiClassifier(api_key=None)
     with pytest.raises(ValueError, match="Gemini API key is not configured"):
-        classifier.classify_document(dummy_pdf, taxonomy=["Utilities"])
+        classifier.classify_document(minimal_pdf, taxonomy=["Utilities"])
 
 
-def test_analyze_document_mock_success(tmp_path: Path):
-    dummy_pdf = tmp_path / "bill.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_analyze_document_mock_success(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = """{
@@ -40,19 +34,18 @@ def test_analyze_document_mock_success(tmp_path: Path):
     classifier._client = mock_client
 
     taxonomy = ["Utilities/Electricity", "Finances/Banking"]
-    result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
+    result = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
 
     assert result.document_date == "260901"
     assert result.description == "Origin_Energy_Electricity_Bill"
     assert result.target_folder == "Utilities/Electricity"
-    assert result.orientation_correction == 180
     assert result.confidence == 0.95
+    assert result.orientation_correction == 180
+    assert result.document_type == "Invoice"
+    assert result.summary == "Electricity bill for September"
 
 
-def test_analyze_document_unmatched_folder_falls_back(tmp_path: Path):
-    dummy_pdf = tmp_path / "random.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_analyze_document_unmatched_folder_falls_back(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = """{
@@ -67,16 +60,13 @@ def test_analyze_document_unmatched_folder_falls_back(tmp_path: Path):
     classifier._client = mock_client
 
     taxonomy = ["Utilities/Electricity", "Finances/Banking"]
-    result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
+    result = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
 
     # Since 'NonExistent/Folder' is not in taxonomy, it must fallback to _Review_Needed
     assert result.target_folder == "_Review_Needed"
 
 
-def test_analyze_document_blank_scan_routes_to_blank_subfolder(tmp_path: Path):
-    dummy_pdf = tmp_path / "blank.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_analyze_document_blank_scan_routes_to_blank_subfolder(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = """{
@@ -93,16 +83,13 @@ def test_analyze_document_blank_scan_routes_to_blank_subfolder(tmp_path: Path):
     classifier._client = mock_client
 
     taxonomy = ["Utilities"]
-    result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
+    result = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
 
     assert result.target_folder == "_Review_Needed/Blank_Scans"
     assert result.document_type == "Blank"
 
 
-def test_analyze_document_api_failure_returns_graceful_fallback(tmp_path: Path):
-    dummy_pdf = tmp_path / "fail.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_analyze_document_api_failure_returns_graceful_fallback(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_client.models.generate_content.side_effect = RuntimeError("API down")
 
@@ -110,7 +97,7 @@ def test_analyze_document_api_failure_returns_graceful_fallback(tmp_path: Path):
     classifier._client = mock_client
 
     taxonomy = ["Utilities"]
-    result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
+    result = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
 
     assert result.target_folder == "_Review_Needed"
     assert result.confidence == 0.0
@@ -265,10 +252,7 @@ def test_client_caching_and_key_rotation(monkeypatch):
         assert mock_client_cls2.call_count == 1
 
 
-def test_analyze_document_safety_block_value_error_handled(tmp_path: Path):
-    dummy_pdf = tmp_path / "blocked.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_analyze_document_safety_block_value_error_handled(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_response = MagicMock()
     type(mock_response).text = PropertyMock(
@@ -280,15 +264,12 @@ def test_analyze_document_safety_block_value_error_handled(tmp_path: Path):
     classifier._client = mock_client
     classifier._cached_key = "AIzaSyDummyKey123"
 
-    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities"])
+    result = classifier.classify_document(minimal_pdf, taxonomy=["Utilities"])
     assert result.target_folder == "_Review_Needed"
     assert result.confidence == 0.0
 
 
-def test_missing_confidence_defaults_to_zero(tmp_path: Path):
-    dummy_pdf = tmp_path / "doc.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_missing_confidence_defaults_to_zero(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = json.dumps(
@@ -305,16 +286,15 @@ def test_missing_confidence_defaults_to_zero(tmp_path: Path):
     classifier._client = mock_client
     classifier._cached_key = "AIzaSyDummyKey123"
 
-    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities/Electricity"])
+    result = classifier.classify_document(
+        minimal_pdf, taxonomy=["Utilities/Electricity"]
+    )
     assert result.confidence == 0.0
     # Because confidence < 0.70, it must route to _Review_Needed
     assert result.target_folder == "_Review_Needed"
 
 
-def test_windows_backslashes_in_target_folder_normalized(tmp_path: Path):
-    dummy_pdf = tmp_path / "doc.pdf"
-    dummy_pdf.write_bytes(b"%PDF-1.4 test")
-
+def test_windows_backslashes_in_target_folder_normalized(minimal_pdf: Path):
     mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.text = json.dumps(
@@ -331,6 +311,8 @@ def test_windows_backslashes_in_target_folder_normalized(tmp_path: Path):
     classifier._client = mock_client
     classifier._cached_key = "AIzaSyDummyKey123"
 
-    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities/Electricity"])
+    result = classifier.classify_document(
+        minimal_pdf, taxonomy=["Utilities/Electricity"]
+    )
     assert result.target_folder == "Utilities/Electricity"
     assert result.confidence == 0.95

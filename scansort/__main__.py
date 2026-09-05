@@ -7,8 +7,6 @@ import sys
 import threading
 from pathlib import Path
 
-import keyring.errors
-
 from scansort.autorun import disable_autorun, enable_autorun, is_autorun_enabled
 from scansort.config import (
     AppConfig,
@@ -36,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Construct command-line argument parser."""
     parser = argparse.ArgumentParser(
         prog="scansort",
-        description="ScanSort: Intelligent automated desktop document filer powered by Gemini 2.5 Flash.",
+        description="ScanSort: Intelligent automated desktop document filer powered by Google Gemini.",
     )
     parser.add_argument(
         "--minimized",
@@ -110,43 +108,30 @@ def _try_save_config(cfg: AppConfig) -> bool:
         return False
 
 
-def _update_folder_config(
-    cfg: AppConfig,
-    folder_attr: str,
-    new_path: Path,
-    other_path: Path,
-    display_name: str,
-) -> int:
-    """Validate, assign, and save a folder path configuration setting."""
-    target = new_path.resolve()
-    if target.is_file():
-        print(
-            f"Error: {display_name} cannot be a regular file: {target}",
-            file=sys.stderr,
-        )
-        return 1
-    if target == other_path.resolve():
-        print(
-            "Error: Watch folder and documents root cannot be the same directory.",
-            file=sys.stderr,
-        )
-        return 1
-    setattr(cfg, folder_attr, target)
-    if not _try_save_config(cfg):
-        return 1
-    print(f"Updated {display_name.lower()} to: {target}")
-    return 0
-
-
 def _handle_watch(parsed: argparse.Namespace) -> int:
     """Handle 'watch' command to start monitoring the drop folder."""
     cfg = load_config()
-    if getattr(parsed, "watch_folder", None):
-        cfg.watch_folder = parsed.watch_folder.resolve()
-    if getattr(parsed, "documents_root", None):
-        cfg.documents_root = parsed.documents_root.resolve()
-    if getattr(parsed, "dry_run", False):
-        cfg.dry_run = True
+    new_watch = (
+        parsed.watch_folder.resolve()
+        if getattr(parsed, "watch_folder", None)
+        else cfg.watch_folder
+    )
+    new_docs = (
+        parsed.documents_root.resolve()
+        if getattr(parsed, "documents_root", None)
+        else cfg.documents_root
+    )
+    dry_run = getattr(parsed, "dry_run", False) or cfg.dry_run
+
+    try:
+        updated_dict = cfg.model_dump()
+        updated_dict["watch_folder"] = new_watch
+        updated_dict["documents_root"] = new_docs
+        updated_dict["dry_run"] = dry_run
+        cfg = AppConfig(**updated_dict)
+    except ValueError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        return 1
 
     cfg.ensure_directories()
 
@@ -190,28 +175,56 @@ def _handle_config(parsed: argparse.Namespace) -> int:
         try:
             set_api_key(parsed.set_key)
             print("Successfully saved Gemini API key to secure OS credential vault.")
-        except (ValueError, keyring.errors.KeyringError, OSError) as e:
+        except (ValueError, OSError) as e:
             redacted = redact_secrets_from_text(str(e), parsed.set_key)
             print(f"Error saving Gemini API key: {redacted}", file=sys.stderr)
             return 1
 
-    if parsed.watch_folder:
-        code = _update_folder_config(
-            cfg, "watch_folder", parsed.watch_folder, cfg.documents_root, "Watch folder"
+    if parsed.watch_folder or parsed.documents_folder:
+        new_watch = (
+            parsed.watch_folder.resolve() if parsed.watch_folder else cfg.watch_folder
         )
-        if code != 0:
-            return code
+        new_docs = (
+            parsed.documents_folder.resolve()
+            if parsed.documents_folder
+            else cfg.documents_root
+        )
 
-    if parsed.documents_folder:
-        code = _update_folder_config(
-            cfg,
-            "documents_root",
-            parsed.documents_folder,
-            cfg.watch_folder,
-            "Documents folder",
-        )
-        if code != 0:
-            return code
+        if parsed.watch_folder and parsed.watch_folder.resolve().is_file():
+            print(
+                f"Error: Watch folder cannot be a regular file: {parsed.watch_folder.resolve()}",
+                file=sys.stderr,
+            )
+            return 1
+        if parsed.documents_folder and parsed.documents_folder.resolve().is_file():
+            print(
+                f"Error: Documents folder cannot be a regular file: {parsed.documents_folder.resolve()}",
+                file=sys.stderr,
+            )
+            return 1
+        if new_watch.resolve() == new_docs.resolve():
+            print(
+                "Error: Watch folder and documents root cannot be the same directory.",
+                file=sys.stderr,
+            )
+            return 1
+
+        try:
+            updated_dict = cfg.model_dump()
+            updated_dict["watch_folder"] = new_watch
+            updated_dict["documents_root"] = new_docs
+            cfg = AppConfig(**updated_dict)
+        except ValueError as e:
+            print(f"Configuration error: {e}", file=sys.stderr)
+            return 1
+
+        if not _try_save_config(cfg):
+            return 1
+
+        if parsed.watch_folder:
+            print(f"Updated watch folder to: {new_watch}")
+        if parsed.documents_folder:
+            print(f"Updated documents folder to: {new_docs}")
 
     if parsed.autostart:
         enable = parsed.autostart == "enable"

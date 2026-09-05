@@ -11,11 +11,12 @@ from scansort.config import (
     load_config,
     save_config,
 )
+from scansort.constants import DEFAULT_GEMINI_MODEL
 
 
 def test_default_config():
     cfg = AppConfig()
-    assert cfg.gemini_model == "gemini-2.5-flash"
+    assert cfg.gemini_model == DEFAULT_GEMINI_MODEL
     assert cfg.fallback_folder == "_Review_Needed"
     assert cfg.start_on_boot is True
     assert cfg.max_folder_depth == 3
@@ -33,7 +34,7 @@ def test_save_and_load_config(tmp_path: Path):
     original_cfg = AppConfig(
         watch_folder=custom_watch,
         documents_root=custom_docs,
-        gemini_model="gemini-2.5-flash-lite",
+        gemini_model="custom-test-model",
         fallback_folder="Unsorted",
         start_on_boot=False,
         max_folder_depth=5,
@@ -47,7 +48,7 @@ def test_save_and_load_config(tmp_path: Path):
     loaded_cfg = load_config(cfg_file)
     assert loaded_cfg.watch_folder == custom_watch.resolve()
     assert loaded_cfg.documents_root == custom_docs.resolve()
-    assert loaded_cfg.gemini_model == "gemini-2.5-flash-lite"
+    assert loaded_cfg.gemini_model == "custom-test-model"
     assert loaded_cfg.fallback_folder == "Unsorted"
     assert loaded_cfg.start_on_boot is False
     assert loaded_cfg.max_folder_depth == 5
@@ -107,7 +108,14 @@ def test_load_config_corrupt_json_fallback(tmp_path: Path):
     corrupt_file.write_text("{invalid json", encoding="utf-8")
     cfg = load_config(corrupt_file)
     assert isinstance(cfg, AppConfig)
-    assert cfg.gemini_model == "gemini-2.5-flash"
+    assert cfg.gemini_model == DEFAULT_GEMINI_MODEL
+
+
+def test_config_gemini_model_empty_fallback():
+    assert AppConfig(gemini_model="").gemini_model == DEFAULT_GEMINI_MODEL
+    assert AppConfig(gemini_model="   ").gemini_model == DEFAULT_GEMINI_MODEL
+    assert AppConfig(gemini_model=None).gemini_model == DEFAULT_GEMINI_MODEL
+    assert AppConfig(gemini_model="custom-model").gemini_model == "custom-model"
 
 
 def test_fallback_folder_validation():
@@ -182,3 +190,22 @@ def test_load_config_utf8_bom(tmp_path: Path):
     cfg_file.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
     cfg = load_config(cfg_file)
     assert cfg.fallback_folder == "_BOM_Review"
+
+
+def test_config_rejects_regular_file(tmp_path: Path):
+    dummy_file = tmp_path / "file.txt"
+    dummy_file.write_text("not a directory")
+
+    with pytest.raises(ValueError, match="watch_folder cannot be a regular file"):
+        AppConfig(watch_folder=dummy_file, documents_root=tmp_path / "docs")
+
+    with pytest.raises(ValueError, match="documents_root cannot be a regular file"):
+        AppConfig(watch_folder=tmp_path / "watch", documents_root=dummy_file)
+
+
+def test_config_assignment_validation(tmp_path: Path):
+    cfg = AppConfig(watch_folder=tmp_path / "watch", documents_root=tmp_path / "docs")
+
+    # Assignment validation should catch invalid values
+    with pytest.raises(ValueError):
+        cfg.max_folder_depth = 99

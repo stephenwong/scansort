@@ -1,4 +1,4 @@
-"""Multimodal document classification and OCR client powered by Google Gemini 2.5 Flash."""
+"""Multimodal document classification and OCR client powered by Google Gemini."""
 
 import json
 import logging
@@ -12,11 +12,12 @@ from google.genai.errors import APIError
 
 from scansort.constants import (
     DEFAULT_GEMINI_MODEL,
+    MAX_DESCRIPTION_LENGTH,
     MIN_CONFIDENCE_THRESHOLD,
     REVIEW_NEEDED_DIR,
 )
 from scansort.folder_mapper import format_taxonomy_for_prompt
-from scansort.fs_utils import relative_folder_is_safe
+from scansort.fs_utils import normalize_relative_folder, relative_folder_is_safe
 from scansort.models import DocumentClassification, sanitize_date, sanitize_description
 from scansort.secrets import get_api_key, redact_secrets_from_text
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiClassifier:
-    """Client for classifying documents using Google Gemini 2.5 Flash."""
+    """Client for classifying documents using Google Gemini."""
 
     def __init__(
         self, api_key: str | None = None, model: str = DEFAULT_GEMINI_MODEL
@@ -60,12 +61,12 @@ class GeminiClassifier:
             f"{taxonomy_block}\n\n"
             "CRITICAL INSTRUCTIONS:\n"
             "1. Target Folder: Choose the DEEPEST specific matching leaf folder from the list above.\n"
-            "   - If no pre-existing folder fits or confidence is below 0.70, choose '_Review_Needed'.\n"
+            f"   - If no pre-existing folder fits or confidence is below {MIN_CONFIDENCE_THRESHOLD:.2f}, choose '{REVIEW_NEEDED_DIR}'.\n"
             "   - DO NOT invent new folder names outside the provided list.\n"
             "2. Document Date: Identify the official issuance / billing date. Output in YYMMDD format.\n"
             "   - If no explicit date exists, output today's date in YYMMDD.\n"
             "3. Description: Write a clear, concise title in English using Title_Case_With_Underscores.\n"
-            "   - Strip punctuation, limit to 60 characters (e.g. 'Origin_Energy_Electricity_Bill').\n"
+            f"   - Strip punctuation, limit to {MAX_DESCRIPTION_LENGTH} characters (e.g. 'Origin_Energy_Electricity_Bill').\n"
             "   - If the document is foreign, translate the description to English.\n"
             "4. Orientation: Check if the text is upside-down or sideways. Output orientation_correction in clockwise degrees (0, 90, 180, or 270).\n"
             "5. Blank Detection: If the document is an empty white sheet or blank scan, set document_type to 'Blank'.\n"
@@ -78,23 +79,16 @@ class GeminiClassifier:
         """Parse raw JSON output from Gemini and route to a valid taxonomy folder."""
         try:
             data = json.loads(raw_text)
+            if not isinstance(data, dict):
+                data = {}
         except json.JSONDecodeError:
             data = {}
 
-        if not isinstance(data, dict):
-            data = {}
-
-        desc = sanitize_description(data.get("description", "Document"))
-        doc_date = sanitize_date(data.get("document_date", ""))
-        raw_type = data.get("document_type", "Other")
-        doc_type = str(raw_type) if raw_type is not None else "Other"
-        raw_target = data.get("target_folder", REVIEW_NEEDED_DIR)
-        target = str(raw_target) if raw_target is not None else REVIEW_NEEDED_DIR
-
-        try:
-            conf = float(data.get("confidence", 0.0))
-        except (ValueError, TypeError):
-            conf = 0.0
+        doc_date = sanitize_date(data.get("document_date"))
+        desc = sanitize_description(data.get("description"))
+        target = str(data.get("target_folder", "") or "").strip()
+        conf = float(data.get("confidence", 0.0) or 0.0)
+        doc_type = str(data.get("document_type", "Other") or "Other")
 
         try:
             orient_val = int(data.get("orientation_correction", 0))
@@ -108,9 +102,7 @@ class GeminiClassifier:
         if not relative_folder_is_safe(clean_target):
             target = REVIEW_NEEDED_DIR
         else:
-            target = "/".join(
-                part for part in clean_target.replace("\\", "/").split("/") if part
-            )
+            target = normalize_relative_folder(clean_target)
             if doc_type.lower() == "blank":
                 target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
             elif conf < MIN_CONFIDENCE_THRESHOLD or (
@@ -186,8 +178,6 @@ class GeminiClassifier:
             httpx.HTTPError,
             OSError,
             RuntimeError,
-            TypeError,
-            AttributeError,
             ValueError,
         ) as e:
             redacted_err = redact_secrets_from_text(

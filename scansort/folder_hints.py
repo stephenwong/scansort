@@ -6,13 +6,14 @@ from pathlib import Path
 
 from scansort.config import get_default_app_dir
 from scansort.constants import HINTS_FILENAME
+from scansort.fs_utils import normalize_relative_folder
 
 logger = logging.getLogger(__name__)
 
 
 def normalize_folder_key(folder: str) -> str:
     """Normalize folder path by converting backslashes and stripping whitespace/slashes."""
-    return folder.replace("\\", "/").strip().strip("/")
+    return normalize_relative_folder(folder)
 
 
 def get_default_hints_path() -> Path:

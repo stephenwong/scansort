@@ -46,6 +46,17 @@ def test_set_api_key_stores_in_keyring():
         )
 
 
+def test_set_api_key_keyring_error_raises_oserror():
+    with (
+        patch(
+            "keyring.set_password",
+            side_effect=keyring.errors.KeyringError("Vault locked"),
+        ),
+        pytest.raises(OSError, match="Failed to store API key in OS credential vault"),
+    ):
+        set_api_key("AIzaSyValidKey123")
+
+
 def test_set_api_key_raises_on_empty_or_whitespace():
     with pytest.raises(ValueError, match="API key cannot be empty"):
         set_api_key("")

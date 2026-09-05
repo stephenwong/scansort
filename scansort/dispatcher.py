@@ -2,20 +2,31 @@
 
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
 from scansort.audit_logger import AuditLogger
 from scansort.constants import (
     DUPLICATES_DIR,
+    REVERSIBLE_STATUSES,
     REVIEW_NEEDED_DIR,
     STATUS_UNDONE,
     UNDONE_PREFIX,
 )
-from scansort.fs_utils import relative_folder_is_safe
+from scansort.fs_utils import relative_folder_is_safe, resolve_collision
 from scansort.models import DocumentClassification
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "dispatch_file",
+    "generate_target_filename",
+    "resolve_collision",
+    "resolve_destination_dir",
+    "resolve_duplicates_dir",
+    "undo_last_move",
+]
 
 
 def generate_target_filename(classification: DocumentClassification) -> str:
@@ -27,31 +38,7 @@ def generate_target_filename(classification: DocumentClassification) -> str:
     Returns:
         Standardized filename string.
     """
-    return f"{classification.document_date}_{classification.description}.pdf"
-
-
-def resolve_collision(dest_folder: Path, filename: str) -> Path:
-    """Check if a filename collision exists and append incrementing counter _1, _2 if needed.
-
-    Args:
-        dest_folder: Target destination folder.
-        filename: Proposed filename.
-
-    Returns:
-        Safe, non-colliding destination Path.
-    """
-    target = dest_folder / filename
-    if not target.exists():
-        return target
-
-    stem = target.stem
-    suffix = target.suffix
-    counter = 1
-    while True:
-        candidate = dest_folder / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1
+    return classification.target_filename
 
 
 def _resolve_safe_subfolder(
@@ -117,38 +104,15 @@ def resolve_duplicates_dir(docs_root: Path, fallback_folder: str) -> Path:
 
     Args:
         docs_root: Root of Documents folder.
-        fallback_folder: Configured review folder name (may be empty or unsafe).
+        fallback_folder: User-configured fallback directory.
 
     Returns:
-        Absolute, resolved duplicates directory guaranteed to sit under docs_root.
+        Absolute resolved path to the duplicates directory under docs_root.
     """
-    clean_fallback = fallback_folder.strip("/\\")
-    review_dup = (docs_root / REVIEW_NEEDED_DIR / DUPLICATES_DIR).resolve()
-    if not clean_fallback or clean_fallback == ".":
-        return review_dup
-
-    if not relative_folder_is_safe(clean_fallback):
-        logger.warning(
-            "Unsafe fallback folder %r. Routing duplicates to %s/%s.",
-            fallback_folder,
-            REVIEW_NEEDED_DIR,
-            DUPLICATES_DIR,
-        )
-        return review_dup
-
-    dup_dir = (docs_root / clean_fallback / DUPLICATES_DIR).resolve()
-    if (
-        not dup_dir.is_relative_to(docs_root.resolve())
-        or dup_dir == docs_root.resolve()
-    ):
-        logger.warning(
-            "Unsafe fallback folder %r. Routing duplicates to %s/%s.",
-            fallback_folder,
-            REVIEW_NEEDED_DIR,
-            DUPLICATES_DIR,
-        )
-        return review_dup
-    return dup_dir
+    safe_base = _resolve_safe_subfolder(
+        docs_root, fallback_folder, context_name="fallback folder"
+    )
+    return (safe_base / DUPLICATES_DIR).resolve()
 
 
 def dispatch_file(
@@ -188,7 +152,12 @@ def _find_last_reversible_record(jsonl_path: Path) -> dict[str, object] | None:
     if not jsonl_path.exists():
         return None
 
-    lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+    try:
+        lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        logger.warning("Error reading history file at %s: %s", jsonl_path, e)
+        return None
+
     if not lines:
         return None
 
@@ -204,10 +173,13 @@ def _find_last_reversible_record(jsonl_path: Path) -> dict[str, object] | None:
                 continue
             status = record.get("status")
             dest_p = record.get("destination_path")
-            if status == STATUS_UNDONE and dest_p:
-                undone_destinations.add(str(dest_p))
-            elif status in {"SUCCESS", "COLLISION_RENAMED"} and dest_p:
-                if dest_p in undone_destinations:
+            if not dest_p:
+                continue
+            norm_dest = os.path.normcase(os.path.normpath(str(dest_p)))
+            if status == STATUS_UNDONE:
+                undone_destinations.add(norm_dest)
+            elif status in REVERSIBLE_STATUSES:
+                if norm_dest in undone_destinations:
                     continue
                 if not Path(str(dest_p)).exists():
                     logger.debug("Skipping missing file %s during undo search.", dest_p)
@@ -228,7 +200,6 @@ def _resolve_restored_path(original_path: Path, dest_path: Path) -> Path:
     if not target_name.startswith(UNDONE_PREFIX):
         target_name = f"{UNDONE_PREFIX}{target_name}"
 
-    original_path.parent.mkdir(parents=True, exist_ok=True)
     return resolve_collision(original_path.parent, target_name)
 
 
@@ -257,6 +228,7 @@ def undo_last_move(
     restore_path = _resolve_restored_path(original_path, dest_path)
 
     try:
+        restore_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(dest_path), str(restore_path))
     except (PermissionError, OSError) as e:
         logger.error("Failed to restore file %s: %s", dest_path, e)

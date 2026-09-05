@@ -5,6 +5,8 @@ import json
 import logging
 from pathlib import Path
 
+from scansort.constants import STATUS_UNDONE
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +60,7 @@ def check_duplicate(file_hash: str, history_file: Path) -> dict | None:
         logger.warning("Error reading history file at %s: %s", history_file, e)
         return None
 
-    if latest_record and latest_record.get("status") != "UNDONE":
+    if latest_record and latest_record.get("status") != STATUS_UNDONE:
         return latest_record
 
     return None

@@ -10,12 +10,16 @@ logger = logging.getLogger(__name__)
 RUN_KEY_NAME = "ScanSort"
 WIN_REG_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
+_winreg = None
+
 
 def _get_winreg():
     """Retrieve the winreg module or test mock seam."""
+    if _winreg is not None:
+        return _winreg
     import winreg
 
-    return getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
+    return winreg
 
 
 def _build_autorun_command(executable_path: str | None = None) -> str:
@@ -123,13 +127,9 @@ def disable_autorun() -> bool:
 
     if sys.platform.startswith("linux"):
         desktop_file = _get_linux_autostart_path()
-        if not desktop_file.exists():
-            return True
         try:
-            desktop_file.unlink()
+            desktop_file.unlink(missing_ok=True)
             logger.info("Removed Linux autostart file.")
-            return True
-        except FileNotFoundError:
             return True
         except OSError as e:
             logger.warning("Failed to remove Linux autostart file: %s", e)

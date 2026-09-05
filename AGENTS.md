@@ -6,7 +6,7 @@ This document defines repository instructions, architectural invariants, coding 
 
 ## 1. Project Overview & Philosophy
 
-**ScanSort** is a zero-touch, privacy-conscious desktop document organizer for Windows (with cross-platform support). It monitors a physical scanner drop folder, waits for scan completion, discovers pre-existing `Documents` taxonomies, classifies documents via Google Gemini 2.5 Flash, rights page orientation, embeds XMP metadata for Windows Search, and dispatches files atomically to the deepest matching subfolder.
+**ScanSort** is a zero-touch, privacy-conscious desktop document organizer for Windows (with cross-platform support). It monitors a physical scanner drop folder, waits for scan completion, discovers pre-existing `Documents` taxonomies, classifies documents via Google Gemini, rights page orientation, embeds XMP metadata for Windows Search, and dispatches files atomically to the deepest matching subfolder.
 
 ### Core Tenets
 1. **Zero-Leak Security:** API keys are encrypted at the OS level (Windows Credential Manager / DPAPI via `keyring`). Keys must **NEVER** be written to `config.json`, committed to Git, or exposed in plaintext in logs or exception traces.
@@ -34,8 +34,8 @@ scansort/
 │   ├── file_stabilizer.py      # Exclusive file-lock polling and size growth tracker
 │   ├── folder_hints.py         # User keyword aliases loader (folder_hints.json)
 │   ├── folder_mapper.py        # Recursive taxonomy scanner with noise & dotfile filtering
-│   ├── fs_utils.py             # Atomic temp-file writes & relative-folder safety predicate
-│   ├── gemini_client.py        # Multimodal Gemini 2.5 Flash structured classification
+│   ├── fs_utils.py             # Atomic temp-file writes with streaming & fsync, collision resolution, and path normalization
+│   ├── gemini_client.py        # Multimodal Gemini structured classification
 │   ├── hasher.py               # Streaming SHA-256 duplicate scan interception
 │   ├── image_converter.py      # Lossless JPEG stream wrapping (img2pdf) & image normalization
 │   ├── models.py               # Vendor-neutral classification domain model & sanitizers

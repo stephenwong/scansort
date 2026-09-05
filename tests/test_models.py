@@ -47,6 +47,7 @@ def test_document_classification_model():
     assert model.document_date == "260901"
     assert model.target_folder == "Utilities/Electricity"
     assert model.orientation_correction == 0
+    assert model.target_filename == "260901_Origin_Energy_Bill.pdf"
 
 
 def test_sanitizers_numeric_types():

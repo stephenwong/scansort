@@ -1,8 +1,8 @@
 # ScanSort
 
-> **Intelligent, Automated Desktop Document Organizer Powered by Google Gemini 2.5 Flash**
+> **Intelligent, Automated Desktop Document Organizer Powered by Google Gemini**
 
-ScanSort is a zero-touch Windows desktop utility designed for automated, local document management. It monitors a scanner drop folder, waits for physical scanner writes to complete, indexes your pre-existing `Documents` directory hierarchy, classifies incoming scans via Google Gemini 2.5 Flash, automatically rights upside-down or sideways pages, embeds searchable metadata for native Windows Search indexing, standardizes filenames to `YYMMDD_<Description>.pdf`, and dispatches documents directly into the deepest matching subfolder.
+ScanSort is a zero-touch Windows desktop utility designed for automated, local document management. It monitors a scanner drop folder, waits for physical scanner writes to complete, indexes your pre-existing `Documents` directory hierarchy, classifies incoming scans via Google Gemini, automatically rights upside-down or sideways pages, embeds searchable metadata for native Windows Search indexing, standardizes filenames to `YYMMDD_<Description>.pdf`, and dispatches documents directly into the deepest matching subfolder.
 
 ---
 
@@ -27,7 +27,7 @@ graph TB
         Hasher -->|Duplicate Detected| DupReview["Documents\\_Review_Needed\\Duplicates"]
         
         Converter --> Mapper["Folder Mapper & Taxonomy\n(Documents Tree & folder_hints.json)"]
-        Mapper --> Gemini["Gemini 2.5 Flash Client\n(Multimodal OCR & Classification)"]
+        Mapper --> Gemini["Gemini Client\n(Multimodal OCR & Classification)"]
         
         Gemini --> MetadataEngine["PDF Metadata & Orientation\n(pypdf Auto-Rotate & XMP Embedding)"]
         MetadataEngine --> Dispatcher["Dispatcher\n(Collision Resolution & Atomic Move)"]
@@ -70,7 +70,7 @@ flowchart TD
     K --> M["Load Discovered Taxonomy & folder_hints.json"]
     L --> M
     
-    M --> N["Call Google Gemini 2.5 Flash\n(Multimodal OCR & Classification Schema)"]
+    M --> N["Call Google Gemini\n(Multimodal OCR & Classification Schema)"]
     
     N --> O["Sanitize Metadata & English Title\n(Format: Title_Case_With_Underscores, max 60 chars)"]
     O --> P{"Orientation Correction Needed?\n(90 deg, 180 deg, 270 deg)"}

@@ -7,10 +7,57 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
 
-from scansort.constants import DEFAULT_CREATOR
+from scansort.constants import DEFAULT_AUTHOR, DEFAULT_CREATOR
 from scansort.fs_utils import atomic_write
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_pdf_unlocked(reader: PdfReader, filename: str) -> None:
+    """Verify the PDF is not password-protected, attempting empty password decryption."""
+    if reader.is_encrypted:
+        try:
+            reader.decrypt("")
+        except (PdfReadError, OSError):
+            logger.debug("Empty password decryption attempt failed for %s", filename)
+        try:
+            if reader.pages:
+                _ = reader.pages[0]
+        except Exception as e:
+            raise ValueError(
+                f"PDF {filename} is password protected and cannot be processed."
+            ) from e
+
+
+def _build_docinfo_metadata(
+    existing_metadata: object = None,
+    title: str | None = None,
+    subject: str | None = None,
+    keywords: list[str] | str | None = None,
+    author: str | None = DEFAULT_AUTHOR,
+) -> dict[str, str]:
+    """Construct DocInfo metadata dictionary, preserving pre-existing metadata."""
+    metadata: dict[str, str] = {}
+    if existing_metadata and hasattr(existing_metadata, "items"):
+        for k, v in existing_metadata.items():
+            if k and v:
+                metadata[str(k)] = str(v)
+
+    if title and title.strip():
+        metadata["/Title"] = title.strip()
+    if subject and subject.strip():
+        metadata["/Subject"] = subject.strip()
+    if keywords:
+        if isinstance(keywords, (list, tuple, set)):
+            cleaned = sorted(str(k).strip() for k in keywords if str(k).strip())
+            if cleaned:
+                metadata["/Keywords"] = ", ".join(cleaned)
+        elif str(keywords).strip():
+            metadata["/Keywords"] = str(keywords).strip()
+    if author and author.strip():
+        metadata["/Author"] = author.strip()
+    metadata["/Creator"] = DEFAULT_CREATOR
+    return metadata
 
 
 def process_pdf_metadata_and_rotation(
@@ -20,7 +67,7 @@ def process_pdf_metadata_and_rotation(
     title: str | None = None,
     subject: str | None = None,
     keywords: list[str] | str | None = None,
-    author: str | None = "ScanSort",
+    author: str | None = DEFAULT_AUTHOR,
 ) -> Path:
     """Apply auto-rotation and embed structured metadata into a PDF for Windows Search indexer.
 
@@ -47,21 +94,7 @@ def process_pdf_metadata_and_rotation(
     except Exception as e:
         raise ValueError(f"Corrupted or unreadable PDF {pdf_path.name}: {e}") from e
 
-    # Handle encrypted PDFs (S3-06)
-    if reader.is_encrypted:
-        try:
-            reader.decrypt("")
-        except (PdfReadError, OSError):
-            logger.debug(
-                "Empty password decryption attempt failed for %s", pdf_path.name
-            )
-        try:
-            if reader.pages:
-                _ = reader.pages[0]
-        except Exception as e:
-            raise ValueError(
-                f"PDF {pdf_path.name} is password protected and cannot be processed."
-            ) from e
+    _ensure_pdf_unlocked(reader, pdf_path.name)
 
     writer = PdfWriter()
 
@@ -75,35 +108,18 @@ def process_pdf_metadata_and_rotation(
             page.rotate(norm_angle)
         writer.add_page(page)
 
-    # Build metadata dictionary, preserving pre-existing DocInfo (S3-09)
-    metadata: dict[str, str] = {}
-    if reader.metadata:
-        for k, v in reader.metadata.items():
-            if k and v:
-                metadata[str(k)] = str(v)
-
-    if title and title.strip():
-        metadata["/Title"] = title.strip()
-    if subject and subject.strip():
-        metadata["/Subject"] = subject.strip()
-    if keywords:
-        if isinstance(keywords, (list, tuple, set)):
-            cleaned = sorted(str(k).strip() for k in keywords if str(k).strip())
-            if cleaned:
-                metadata["/Keywords"] = ", ".join(cleaned)
-        elif str(keywords).strip():
-            metadata["/Keywords"] = str(keywords).strip()
-    if author and author.strip():
-        metadata["/Author"] = author.strip()
-    metadata["/Creator"] = DEFAULT_CREATOR
-
+    metadata = _build_docinfo_metadata(
+        existing_metadata=reader.metadata,
+        title=title,
+        subject=subject,
+        keywords=keywords,
+        author=author,
+    )
     if metadata:
         writer.add_metadata(metadata)
 
     # Unified atomic write via temporary file replacement for all targets (S3-08)
-    buf = io.BytesIO()
-    writer.write(buf)
-    atomic_write(target_path, buf.getvalue())
+    atomic_write(target_path, lambda out: writer.write(out))
 
     logger.debug(
         "Embedded metadata and rotation (%d deg) into %s.", norm_angle, target_path.name

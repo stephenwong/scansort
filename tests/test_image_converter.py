@@ -202,3 +202,18 @@ def test_convert_to_pdf_unlinks_existing_target_on_failure(tmp_path: Path):
         convert_to_pdf(img_path, output_path=target_pdf)
 
     assert not target_pdf.exists()
+
+
+def test_convert_to_pdf_failure_never_deletes_input_file(tmp_path: Path):
+    img_path = tmp_path / "original.jpg"
+    _create_sample_image(img_path, img_format="JPEG")
+
+    # If convert_to_pdf fails when output_path resolves to input_path, input must not be deleted
+    with (
+        patch("img2pdf.convert", side_effect=ValueError("Encoding error")),
+        patch.object(Image.Image, "save", side_effect=RuntimeError("Pillow failed")),
+        pytest.raises(RuntimeError),
+    ):
+        convert_to_pdf(img_path, output_path=img_path)
+
+    assert img_path.exists(), "Original input file must not be deleted on failure!"

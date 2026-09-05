@@ -44,12 +44,17 @@ def set_api_key(key: str) -> None:
 
     Raises:
         ValueError: If key is empty or contains only whitespace.
+        OSError: If storing the key in the OS credential vault fails.
     """
     if not key or not key.strip():
         raise ValueError("API key cannot be empty.")
 
     cleaned_key = key.strip()
-    keyring.set_password(SERVICE_NAME, KEY_NAME, cleaned_key)
+    try:
+        keyring.set_password(SERVICE_NAME, KEY_NAME, cleaned_key)
+    except (keyring.errors.KeyringError, OSError) as e:
+        logger.error("Failed to store API key in OS credential vault: %s", e)
+        raise OSError(f"Failed to store API key in OS credential vault: {e}") from e
 
 
 def delete_api_key() -> None:

@@ -125,6 +125,32 @@ def test_cli_config_update_folders(tmp_path: Path):
         assert mock_save.called
 
 
+def test_cli_config_swap_folders(tmp_path: Path):
+    folder_a = tmp_path / "FolderA"
+    folder_b = tmp_path / "FolderB"
+    initial_cfg = AppConfig(watch_folder=folder_a, documents_root=folder_b)
+
+    with (
+        patch("scansort.__main__.load_config", return_value=initial_cfg),
+        patch("scansort.__main__.save_config") as mock_save,
+    ):
+        # Swapping watch_folder and documents_root in a single CLI command
+        exit_code = main_cli(
+            [
+                "config",
+                "--watch-folder",
+                str(folder_b),
+                "--documents-folder",
+                str(folder_a),
+            ]
+        )
+        assert exit_code == 0
+        assert mock_save.called
+        saved_cfg = mock_save.call_args[0][0]
+        assert saved_cfg.watch_folder == folder_b.resolve()
+        assert saved_cfg.documents_root == folder_a.resolve()
+
+
 def test_cli_config_autostart_toggle():
     with (
         patch("scansort.__main__.enable_autorun", return_value=True) as mock_enable,

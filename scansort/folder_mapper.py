@@ -8,10 +8,11 @@ from scansort.config import get_default_app_dir
 from scansort.constants import (
     DEFAULT_IGNORED_FOLDERS,
     DEFAULT_MAX_FOLDER_DEPTH,
+    FOLDER_MAP_FILENAME,
     REVIEW_NEEDED_DIR,
 )
 from scansort.folder_hints import load_folder_hints, normalize_folder_key
-from scansort.fs_utils import atomic_write
+from scansort.fs_utils import atomic_write, normalize_relative_folder
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def scan_documents_folders(
     ignored = (
         ignored_folders if ignored_folders is not None else DEFAULT_IGNORED_FOLDERS
     )
-    fallback_norm = fallback_folder.strip("/\\").lower()
+    fallback_norm = normalize_relative_folder(fallback_folder).lower()
     discovered: list[str] = []
 
     def _walk(current: Path, current_depth: int) -> None:
@@ -132,7 +133,7 @@ class FolderMapper:
         fallback_folder: str = REVIEW_NEEDED_DIR,
     ) -> None:
         self.docs_root = docs_root
-        self.cache_path = cache_path or (get_default_app_dir() / "folder_map.json")
+        self.cache_path = cache_path or (get_default_app_dir() / FOLDER_MAP_FILENAME)
         self.hints_path = hints_path
         self.max_depth = max_depth
         self.fallback_folder = fallback_folder

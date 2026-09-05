@@ -2,7 +2,6 @@ import logging
 import queue
 import shutil
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,8 +9,12 @@ from typing import Any
 from scansort.audit_logger import AuditLogger
 from scansort.config import AppConfig, get_default_app_dir
 from scansort.constants import (
+    FOLDER_MAP_FILENAME,
+    HINTS_FILENAME,
     HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
+    STATUS_DUPLICATE,
+    STATUS_SUCCESS,
 )
 from scansort.dispatcher import (
     dispatch_file,
@@ -26,6 +29,7 @@ from scansort.folder_mapper import FolderMapper
 from scansort.gemini_client import GeminiClassifier
 from scansort.hasher import check_duplicate, compute_file_sha256
 from scansort.image_converter import convert_to_pdf
+from scansort.models import DocumentClassification
 from scansort.pdf_metadata import process_pdf_metadata_and_rotation
 
 logger = logging.getLogger(__name__)
@@ -47,10 +51,10 @@ class ScanSortPipeline:
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
 
         self.classifier = classifier or GeminiClassifier(model=config.gemini_model)
-        self.hints_path = self.app_dir / "folder_hints.json"
+        self.hints_path = self.app_dir / HINTS_FILENAME
         self.folder_mapper = FolderMapper(
             docs_root=config.documents_root,
-            cache_path=self.app_dir / "folder_map.json",
+            cache_path=self.app_dir / FOLDER_MAP_FILENAME,
             hints_path=self.hints_path,
             max_depth=config.max_folder_depth,
             fallback_folder=config.fallback_folder,
@@ -126,7 +130,7 @@ class ScanSortPipeline:
                 destination_path=dup_dest,
                 destination_folder=folder_str,
                 summary=summary_str,
-                status="DUPLICATE",
+                status=STATUS_DUPLICATE,
             )
         )
         return dup_dest
@@ -147,30 +151,80 @@ class ScanSortPipeline:
             staging_pdf.unlink(missing_ok=True)
             return None
 
+    def _classify_scan(self, staging_pdf: Path) -> DocumentClassification:
+        """Query Gemini to classify the staged PDF against taxonomy and hints."""
+        taxonomy = self.folder_mapper.get_taxonomy()
+        hints = load_folder_hints(self.hints_path)
+        return self.classifier.classify_document(
+            staging_pdf, taxonomy=taxonomy, hints=hints
+        )
+
+    def _apply_metadata_and_dispatch(
+        self,
+        staging_pdf: Path,
+        file_path: Path,
+        classification: DocumentClassification,
+        file_hash: str,
+    ) -> Path:
+        """Apply rotation, embed metadata, dispatch to destination, and write audit record."""
+        keywords = [classification.document_type, classification.target_folder]
+        process_pdf_metadata_and_rotation(
+            pdf_path=staging_pdf,
+            orientation_angle=classification.orientation_correction,
+            title=classification.description,
+            subject=classification.summary,
+            keywords=keywords,
+        )
+
+        final_dest = dispatch_file(
+            staging_pdf, self.config.documents_root, classification
+        )
+
+        # Remove original file from drop folder (S3-14: don't let unlink error abort audit log)
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError as e:
+                logger.warning(
+                    "Could not remove source file %s after dispatch: %s",
+                    file_path,
+                    e,
+                )
+
+        # Record audit log
+        self.audit_logger.log_scan(
+            self._build_audit_entry(
+                file_hash=file_hash,
+                file_path=file_path,
+                destination_path=final_dest,
+                destination_folder=classification.target_folder,
+                summary=classification.summary,
+                status=STATUS_SUCCESS,
+            )
+        )
+
+        logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
+        return final_dest
+
     def process_file(self, file_path: Path) -> Path | None:
-        """Run a single incoming document through the full stabilization, OCR, and filing pipeline.
+        """Process an incoming scan file through the full classification pipeline.
 
         Args:
-            file_path: Path to the scanned file in the drop folder.
+            file_path: Absolute path to the incoming file.
 
         Returns:
-            Path of the final filed PDF, or None if processing failed.
+            Destination Path if filed successfully, or None if skipped/failed.
         """
-        if not file_path.exists():
-            logger.warning("File %s disappeared before processing.", file_path)
-            return None
-
-        # 1. Wait for physical scanner to finish writing and release locks
+        # 1. Wait for file write stabilization (Rule 3.C)
         if not wait_for_file_stability(
             file_path, timeout=10.0, poll_interval=0.1, stable_count=2
         ):
             logger.warning("File %s did not stabilize. Skipping.", file_path.name)
             return None
 
-        # 2. SHA-256 duplicate detection
+        # 2. SHA-256 Duplicate Check (Rule 3.D)
         file_hash = compute_file_sha256(file_path)
         existing_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
-
         if existing_record:
             return self._route_duplicate(file_path, file_hash, existing_record)
 
@@ -181,66 +235,27 @@ class ScanSortPipeline:
 
         try:
             # 4. Multimodal analysis and classification via Gemini
-            taxonomy = self.folder_mapper.get_taxonomy()
-            hints = load_folder_hints(self.hints_path)
-            classification = self.classifier.classify_document(
-                staging_pdf, taxonomy=taxonomy, hints=hints
-            )
+            classification = self._classify_scan(staging_pdf)
 
             # 5. Dry-Run Verification before any file mutation or metadata writing
-            target_dir = resolve_destination_dir(
-                self.config.documents_root, classification.target_folder
-            )
-
-            desired_name = generate_target_filename(classification)
-            simulated_dest = resolve_collision(target_dir, desired_name)
-
             if self.config.dry_run:
+                target_dir = resolve_destination_dir(
+                    self.config.documents_root, classification.target_folder
+                )
+                desired_name = generate_target_filename(classification)
+                simulated_dest = resolve_collision(target_dir, desired_name)
                 logger.info(
                     "[DRY RUN] Would file %s -> %s", file_path.name, simulated_dest
                 )
                 return simulated_dest
 
-            # 6. Apply auto-rotation and embed XMP metadata
-            keywords = [classification.document_type, classification.target_folder]
-            process_pdf_metadata_and_rotation(
-                pdf_path=staging_pdf,
-                orientation_angle=classification.orientation_correction,
-                title=classification.description,
-                subject=classification.summary,
-                keywords=keywords,
+            # 6-8. Apply rotation, embed metadata, atomic dispatch, and record audit log
+            return self._apply_metadata_and_dispatch(
+                staging_pdf=staging_pdf,
+                file_path=file_path,
+                classification=classification,
+                file_hash=file_hash,
             )
-
-            # 7. Atomic Dispatch to destination folder
-            final_dest = dispatch_file(
-                staging_pdf, self.config.documents_root, classification
-            )
-
-            # Remove original file from drop folder (S3-14: don't let unlink error abort audit log)
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except OSError as e:
-                    logger.warning(
-                        "Could not remove source file %s after dispatch: %s",
-                        file_path,
-                        e,
-                    )
-
-            # 8. Record audit log
-            self.audit_logger.log_scan(
-                self._build_audit_entry(
-                    file_hash=file_hash,
-                    file_path=file_path,
-                    destination_path=final_dest,
-                    destination_folder=classification.target_folder,
-                    summary=classification.summary,
-                    status="SUCCESS",
-                )
-            )
-
-            logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
-            return final_dest
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing
             logger.error("Failed to process scan %s: %s", file_path.name, e)
@@ -265,6 +280,6 @@ class ScanSortPipeline:
                 logger.error("Unexpected error processing %s: %s", item, e)
             finally:
                 file_queue.task_done()
-                time.sleep(1.0)  # Gentle spacing for API rate limits
+                stop_event.wait(1.0)  # Gentle spacing for API rate limits
 
         logger.info("ScanSort pipeline worker stopped.")

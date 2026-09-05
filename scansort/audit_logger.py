@@ -42,8 +42,8 @@ class AuditLogger:
         self.mirror_csv_path = mirror_csv_path
 
     def _ensure_csv_headers(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists() and path.stat().st_size > 0:
                 return
             with open(path, "w", newline="", encoding="utf-8") as f:

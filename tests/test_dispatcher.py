@@ -161,6 +161,26 @@ def test_dispatch_file_atomic_move(tmp_path: Path):
     assert final_path.read_bytes() == b"%PDF-1.4 test data"
 
 
+def _create_undo_entry(
+    original_path: Path,
+    destination_path: Path,
+    status: str = "SUCCESS",
+    summary: str = "Bill",
+    sha256: str = "hash123",
+) -> dict:
+    return {
+        "timestamp": "2026-09-03T10:00:00Z",
+        "sha256": sha256,
+        "original_filename": original_path.name,
+        "original_path": str(original_path),
+        "new_filename": destination_path.name,
+        "destination_folder": destination_path.parent.name,
+        "destination_path": str(destination_path),
+        "summary": summary,
+        "status": status,
+    }
+
+
 def test_undo_last_move(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
@@ -173,17 +193,7 @@ def test_undo_last_move(tmp_path: Path):
     jsonl_path = tmp_path / "history.jsonl"
     original_inbox_file = inbox / "scan001.pdf"
 
-    entry = {
-        "timestamp": "2026-09-03T10:00:00Z",
-        "sha256": "hash123",
-        "original_filename": "scan001.pdf",
-        "original_path": str(original_inbox_file),
-        "new_filename": "260901_Origin_Energy_Bill.pdf",
-        "destination_folder": "Utilities",
-        "destination_path": str(moved_file),
-        "summary": "Bill",
-        "status": "SUCCESS",
-    }
+    entry = _create_undo_entry(original_inbox_file, moved_file)
     jsonl_path.write_text(f"{json.dumps(entry)}\n", encoding="utf-8")
 
     undone_path = undo_last_move(jsonl_path)
@@ -210,18 +220,7 @@ def test_undo_updates_csv_audit_log(tmp_path: Path):
     orig_file = inbox / "bill.pdf"
 
     logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path)
-    logger.log_scan(
-        {
-            "sha256": "h123",
-            "original_filename": orig_file.name,
-            "original_path": str(orig_file),
-            "new_filename": moved_file.name,
-            "destination_folder": "Utilities",
-            "destination_path": str(moved_file),
-            "summary": "Bill",
-            "status": "SUCCESS",
-        }
-    )
+    logger.log_scan(_create_undo_entry(orig_file, moved_file))
 
     restored = undo_last_move(jsonl_path)
     assert restored is not None
@@ -249,18 +248,7 @@ def test_undo_updates_mirror_csv_audit_log(tmp_path: Path):
 
     AuditLogger(
         jsonl_path=jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv
-    ).log_scan(
-        {
-            "sha256": "h123",
-            "original_filename": orig_file.name,
-            "original_path": str(orig_file),
-            "new_filename": moved_file.name,
-            "destination_folder": "Utilities",
-            "destination_path": str(moved_file),
-            "summary": "Bill",
-            "status": "SUCCESS",
-        }
-    )
+    ).log_scan(_create_undo_entry(orig_file, moved_file))
 
     restored = undo_last_move(jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv)
     assert restored is not None

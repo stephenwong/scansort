@@ -85,3 +85,8 @@ class DocumentClassification(BaseModel):
         description="Type: Invoice, Statement, Receipt, Letter, Medical, Blank, Other",
     )
     summary: str = Field(default="", description="1-sentence summary of the document")
+
+    @property
+    def target_filename(self) -> str:
+        """Standardized YYMMDD_<Description>.pdf filename."""
+        return f"{self.document_date}_{self.description}.pdf"
