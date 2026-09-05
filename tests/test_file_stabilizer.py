@@ -27,6 +27,27 @@ def test_wait_for_file_stability_nonexistent_file(tmp_path: Path):
     )
 
 
+def test_wait_for_file_stability_vanished_file_fails_fast(tmp_path: Path):
+    """A file that vanishes mid-wait (ghost queue item) must not spin the timeout."""
+    ghost = tmp_path / "vanished.pdf"
+    ghost.write_text("content", encoding="utf-8")
+
+    def vanish_then_stat(*args, **kwargs):
+        if ghost.exists():
+            ghost.unlink()
+        raise FileNotFoundError("No such file")
+
+    t0 = time.monotonic()
+    with patch.object(Path, "stat", side_effect=vanish_then_stat):
+        result = wait_for_file_stability(
+            ghost, timeout=5.0, poll_interval=0.1, stable_count=2
+        )
+    duration = time.monotonic() - t0
+
+    assert result is False
+    assert duration < 1.0
+
+
 def test_wait_for_file_stability_zero_byte_file_waits_for_data(tmp_path: Path):
     zero_file = tmp_path / "empty.pdf"
     zero_file.touch()

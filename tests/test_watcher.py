@@ -193,17 +193,40 @@ def test_switch_folder_unblocks_watch(tmp_path: Path):
         assert folder_b in watched
 
 
-def test_watcher_does_not_drop_changes_when_stopped(tmp_path: Path):
+def test_watcher_sweeps_preexisting_files_on_start(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
-    scan = inbox / "final_scan.pdf"
-    scan.touch()
+    stale = inbox / "stale.pdf"
+    stale.write_bytes(b"%PDF-1.4 stale")
+    inbox / "notes.txt"
+    (inbox / "notes.txt").write_text("ignored")
 
     file_queue = queue.Queue()
     watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
 
+    def mock_watch(*args, **kwargs):
+        watcher._stop_event.set()
+        yield []
+
+    with patch("scansort.watcher.watch", side_effect=mock_watch):
+        watcher.start()
+
+    assert file_queue.qsize() == 1
+    assert file_queue.get_nowait() == stale
+
+
+def test_watcher_does_not_drop_changes_when_stopped(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    scan = inbox / "final_scan.pdf"
+
     def mock_watch_yield_and_stop(*args, **kwargs):
-        # Set stop event concurrently before yielding changes
+        # Create the file after the cycle starts, then stop and yield its event.
+        scan.touch()
         watcher._stop_event.set()
         yield [(Change.added, str(scan))]
 

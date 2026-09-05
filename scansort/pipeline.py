@@ -14,9 +14,11 @@ from scansort.constants import (
     HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
     STATUS_DUPLICATE,
+    STATUS_FAILED,
     STATUS_SUCCESS,
 )
 from scansort.dispatcher import (
+    OPERATIONS_LOCK_FILENAME,
     dispatch_file,
     generate_target_filename,
     resolve_collision,
@@ -26,6 +28,7 @@ from scansort.dispatcher import (
 from scansort.file_stabilizer import wait_for_file_stability
 from scansort.folder_hints import load_folder_hints
 from scansort.folder_mapper import FolderMapper
+from scansort.fs_utils import interprocess_file_lock
 from scansort.gemini_client import GeminiClassifier
 from scansort.hasher import check_duplicate, compute_file_sha256
 from scansort.image_converter import convert_to_pdf
@@ -49,6 +52,7 @@ class ScanSortPipeline:
         self.app_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir = self.app_dir / "tmp"
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
+        self.operations_lock = self.app_dir / OPERATIONS_LOCK_FILENAME
 
         self.classifier = classifier or GeminiClassifier(model=config.gemini_model)
         self.hints_path = self.app_dir / HINTS_FILENAME
@@ -106,9 +110,9 @@ class ScanSortPipeline:
         )
 
         desired_dup_name = file_path.name
-        dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
 
         if self.config.dry_run:
+            dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
             logger.info(
                 "[DRY RUN] Would route duplicate %s -> %s",
                 file_path.name,
@@ -116,8 +120,14 @@ class ScanSortPipeline:
             )
             return dup_dest
 
-        dup_dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(file_path), str(dup_dest))
+        with interprocess_file_lock(self.operations_lock):
+            dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
+            dup_dest_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.move(str(file_path), str(dup_dest))
+            except OSError:
+                dup_dest.unlink(missing_ok=True)
+                raise
 
         folder_str = str(dup_dest_dir.relative_to(resolved_docs)).replace("\\", "/")
         summary_str = (
@@ -177,7 +187,10 @@ class ScanSortPipeline:
         )
 
         final_dest = dispatch_file(
-            staging_pdf, self.config.documents_root, classification
+            staging_pdf,
+            self.config.documents_root,
+            classification,
+            lock_path=self.operations_lock,
         )
 
         # Remove original file from drop folder (S3-14: don't let unlink error abort audit log)
@@ -215,25 +228,38 @@ class ScanSortPipeline:
         Returns:
             Destination Path if filed successfully, or None if skipped/failed.
         """
-        # 1. Wait for file write stabilization (Rule 3.C)
+        # 1. Wait for file write stabilization (Rule 3.C). The quiet window is
+        # ~1s: advisory lock probes cannot detect plain write()-based writers
+        # (scanner drivers, SMB), so size quiescence is the effective guard.
         if not wait_for_file_stability(
-            file_path, timeout=10.0, poll_interval=0.1, stable_count=2
+            file_path, timeout=10.0, poll_interval=0.1, stable_count=10
         ):
             logger.warning("File %s did not stabilize. Skipping.", file_path.name)
             return None
 
-        # 2. SHA-256 Duplicate Check (Rule 3.D)
-        file_hash = compute_file_sha256(file_path)
-        existing_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
-        if existing_record:
-            return self._route_duplicate(file_path, file_hash, existing_record)
-
-        # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
-        staging_pdf = self._stage_to_temp(file_path)
-        if staging_pdf is None:
-            return None
-
         try:
+            source_stat = file_path.stat()
+        except OSError:
+            logger.warning(
+                "File %s vanished before processing. Skipping.", file_path.name
+            )
+            return None
+        source_size = source_stat.st_size
+        source_mtime_ns = source_stat.st_mtime_ns
+
+        staging_pdf: Path | None = None
+        try:
+            # 2. SHA-256 Duplicate Check (Rule 3.D)
+            file_hash = compute_file_sha256(file_path)
+            existing_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
+            if existing_record:
+                return self._route_duplicate(file_path, file_hash, existing_record)
+
+            # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
+            staging_pdf = self._stage_to_temp(file_path)
+            if staging_pdf is None:
+                return None
+
             # 4. Multimodal analysis and classification via Gemini
             classification = self._classify_scan(staging_pdf)
 
@@ -249,6 +275,23 @@ class ScanSortPipeline:
                 )
                 return simulated_dest
 
+            # Re-verify the source is unchanged since stabilization before
+            # dispatching; a writer that resumed mid-processing must not have
+            # its partial snapshot filed.
+            try:
+                current_stat = file_path.stat()
+            except OSError:
+                current_stat = None
+            if current_stat is None or (
+                current_stat.st_size,
+                current_stat.st_mtime_ns,
+            ) != (source_size, source_mtime_ns):
+                logger.warning(
+                    "File %s changed while processing. Deferring until stable.",
+                    file_path.name,
+                )
+                return None
+
             # 6-8. Apply rotation, embed metadata, atomic dispatch, and record audit log
             return self._apply_metadata_and_dispatch(
                 staging_pdf=staging_pdf,
@@ -259,19 +302,60 @@ class ScanSortPipeline:
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing
             logger.error("Failed to process scan %s: %s", file_path.name, e)
+            self._route_failed_to_review(file_path)
             return None
 
         finally:
             # Clean up intermediate staged PDF if it still exists in tmp
-            staging_pdf.unlink(missing_ok=True)
+            if staging_pdf is not None:
+                staging_pdf.unlink(missing_ok=True)
+
+    def _route_failed_to_review(self, file_path: Path) -> None:
+        """Best-effort relocation of an unprocessable inbox file to the review folder.
+
+        Only the original inbox file is ever moved (dispatch failures leave it in
+        place); the move and audit write are themselves guarded so routing failure
+        degrades to the previous logged-stranded behavior.
+        """
+        try:
+            if self.config.dry_run or not file_path.exists():
+                return
+            review_dir = resolve_destination_dir(
+                self.config.documents_root, self.config.fallback_folder
+            )
+            review_dir.mkdir(parents=True, exist_ok=True)
+            review_dest = resolve_collision(review_dir, file_path.name)
+            shutil.move(str(file_path), str(review_dest))
+            resolved_docs = self.config.documents_root.resolve()
+            folder_str = str(review_dir.relative_to(resolved_docs)).replace("\\", "/")
+            self.audit_logger.log_scan(
+                self._build_audit_entry(
+                    file_hash="UNKNOWN",
+                    file_path=file_path,
+                    destination_path=review_dest,
+                    destination_folder=folder_str,
+                    summary="Failed processing; routed to review folder.",
+                    status=STATUS_FAILED,
+                )
+            )
+        except (OSError, ValueError) as e:
+            logger.error(
+                "Could not route failed scan %s to review folder: %s", file_path, e
+            )
 
     def run_worker(self, file_queue: queue.Queue, stop_event: threading.Event) -> None:
-        """Sequential background worker processing items from the queue with rate-limiting."""
+        """Sequential background worker processing items from the queue with rate-limiting.
+
+        On shutdown the worker drains everything still queued before exiting so
+        no dropped scan is silently skipped.
+        """
         logger.info("ScanSort pipeline worker started.")
-        while not stop_event.is_set():
+        while True:
             try:
                 item = file_queue.get(timeout=0.5)
             except queue.Empty:
+                if stop_event.is_set():
+                    break
                 continue
 
             try:

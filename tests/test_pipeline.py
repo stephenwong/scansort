@@ -1,8 +1,10 @@
 """End-to-End integration tests for ScanSort pipeline."""
 
+import io
 import json
 import queue
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -220,7 +222,9 @@ def test_dry_run_leaves_pdf_unmodified(tmp_path: Path):
     orig = pdf.read_bytes()
 
     cfg = AppConfig(
-        watch_folder=tmp_path, documents_root=tmp_path / "docs", dry_run=True
+        watch_folder=tmp_path / "inbox",
+        documents_root=tmp_path / "docs",
+        dry_run=True,
     )
     p = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
     p.classifier.classify_document = MagicMock(
@@ -301,8 +305,12 @@ def test_native_pdf_staged_in_temp_and_cleaned_up_on_error(tmp_path: Path):
 
     result = pipeline.process_file(pdf_file)
     assert result is None
-    # Source PDF should remain in inbox on failure
-    assert pdf_file.exists()
+    # Failed scans are routed to the review folder with a FAILED audit record.
+    assert not pdf_file.exists()
+    review_dir = docs / "_Review_Needed"
+    assert (review_dir / "native_scan.pdf").exists()
+    history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    assert any("FAILED" in line for line in history_lines)
     # And tmp_dir must be cleaned up (no leaked temporary PDFs)
     assert list(pipeline.tmp_dir.glob("*.pdf")) == []
 
@@ -418,3 +426,193 @@ def test_source_unlink_error_does_not_abort_audit_logging(tmp_path: Path):
     # Audit log must still be recorded despite unlink error
     history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
     assert any("SUCCESS" in line for line in history_lines)
+
+
+def test_process_file_waits_for_bursty_writer_to_finish(tmp_path: Path):
+    """A writer pausing between bursts must not be dispatched mid-write."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+    log_dir = tmp_path / "appdata"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=log_dir)
+    pipeline.classifier.classify_document = MagicMock(
+        return_value=DocumentClassification(
+            document_date="260901",
+            description="Bursty_Bill",
+            target_folder="Utilities",
+            confidence=0.95,
+        )
+    )
+
+    scan_file = inbox / "bursty.jpg"
+    buf = io.BytesIO()
+    Image.new("RGB", (100, 100), color="white").save(buf, format="JPEG")
+    data = buf.getvalue()
+    chunk1_written = threading.Event()
+    writer_done = threading.Event()
+
+    def bursty_writer() -> None:
+        with open(scan_file, "wb") as f:
+            f.write(data[: len(data) // 2])
+            f.flush()
+            chunk1_written.set()
+            time.sleep(0.6)
+            f.write(data[len(data) // 2 :])
+        writer_done.set()
+
+    writer = threading.Thread(target=bursty_writer, daemon=True)
+    writer.start()
+    assert chunk1_written.wait(timeout=2.0)
+
+    dest = pipeline.process_file(scan_file)
+
+    assert writer_done.is_set(), "process_file dispatched before the writer finished"
+    assert dest is not None
+    assert dest.exists()
+    assert not scan_file.exists()
+
+
+def test_process_file_defers_when_source_changes_during_processing(tmp_path: Path):
+    """A source that keeps growing after staging must not be filed."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+    log_dir = tmp_path / "appdata"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=log_dir)
+
+    scan_file = inbox / "late_writer.jpg"
+    _create_sample_scan(scan_file)
+    original_bytes = scan_file.read_bytes()
+
+    def late_writing_classify(staging_pdf: Path):
+        with open(scan_file, "ab") as f:
+            f.write(b"tail-bytes")
+        return DocumentClassification(
+            document_date="260901",
+            description="Late_Writer",
+            target_folder="Utilities",
+            confidence=0.95,
+        )
+
+    pipeline._classify_scan = late_writing_classify  # type: ignore[method-assign]
+
+    dest = pipeline.process_file(scan_file)
+
+    assert dest is None
+    assert scan_file.read_bytes() == original_bytes + b"tail-bytes"
+    assert not (docs_root / "Utilities" / "260901_Late_Writer.pdf").exists()
+    assert not (log_dir / "history.jsonl").exists()
+
+
+def test_process_file_routes_decompression_bomb_to_review(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    scan_file = inbox / "giant.jpg"
+    _create_sample_scan(scan_file)
+
+    with patch("PIL.Image.MAX_IMAGE_PIXELS", 10):
+        result = pipeline.process_file(scan_file)
+
+    assert result is None
+    assert not scan_file.exists()
+    assert (docs / "_Review_Needed" / "giant.jpg").exists()
+    history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    assert any("FAILED" in line for line in history_lines)
+
+
+def test_process_file_routes_corrupt_pdf_to_review(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+    pipeline.classifier.classify_document = MagicMock(
+        return_value=DocumentClassification(
+            document_date="260901",
+            description="Corrupt",
+            target_folder="Utilities",
+            confidence=0.95,
+        )
+    )
+
+    scan_file = inbox / "broken.pdf"
+    scan_file.write_bytes(b"%PDF-1.4 broken")
+
+    result = pipeline.process_file(scan_file)
+
+    assert result is None
+    assert not scan_file.exists()
+    assert (docs / "_Review_Needed" / "broken.pdf").exists()
+    history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    assert any("FAILED" in line for line in history_lines)
+
+
+def test_process_file_handles_hash_error_and_routes_to_review(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    app_dir = tmp_path / "app"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir)
+
+    scan_file = inbox / "scan.pdf"
+    scan_file.write_bytes(b"%PDF-1.4 data")
+
+    with patch(
+        "scansort.pipeline.compute_file_sha256", side_effect=OSError("I/O error")
+    ):
+        result = pipeline.process_file(scan_file)
+
+    assert result is None
+    assert not scan_file.exists()
+    assert (docs / "_Review_Needed" / "scan.pdf").exists()
+    history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
+    assert any("FAILED" in line for line in history_lines)
+
+
+def test_run_worker_drains_queue_after_stop(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+
+    file_queue = queue.Queue()
+    stop_event = threading.Event()
+    for i in range(3):
+        item = inbox / f"item{i}.pdf"
+        item.write_bytes(b"%PDF-1.4 test")
+        file_queue.put(item)
+
+    with patch.object(pipeline, "process_file") as mock_process:
+        worker_thread = threading.Thread(
+            target=pipeline.run_worker, args=(file_queue, stop_event)
+        )
+        worker_thread.start()
+        stop_event.wait(0.2)
+        stop_event.set()
+        worker_thread.join(timeout=5.0)
+
+    assert not worker_thread.is_alive()
+    assert mock_process.call_count == 3
+    assert file_queue.empty()

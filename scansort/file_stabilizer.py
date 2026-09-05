@@ -67,6 +67,11 @@ def wait_for_file_stability(
                 logger.warning("Path %s is not a regular file to stabilize.", path)
                 return False
             current_size = st.st_size
+        except FileNotFoundError:
+            # The file vanished (e.g. already filed by an earlier queue item);
+            # fail fast instead of spinning the whole timeout.
+            logger.debug("File %s no longer exists; cannot stabilize.", path)
+            return False
         except OSError:
             current_size = 0
 

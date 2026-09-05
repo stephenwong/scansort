@@ -97,6 +97,8 @@ class DropFolderWatcher:
             self.debounce_ms,
         )
 
+        self._sweep_preexisting_files(folder)
+
         for changes in watch(
             folder,
             debounce=self.debounce_ms,
@@ -107,14 +109,34 @@ class DropFolderWatcher:
             if self._stop_event.is_set() or self._restart_event.is_set():
                 break
 
+    def _sweep_preexisting_files(self, folder: Path) -> None:
+        """Enqueue supported files already present when a watch cycle starts.
+
+        watchfiles only reports changes after registration, so scans that arrived
+        while the app was stopped (or were left queued at shutdown) would otherwise
+        never be filed.
+        """
+        try:
+            for candidate in sorted(folder.iterdir()):
+                if should_process_path(candidate):
+                    logger.info("Queuing pre-existing scan: %s", candidate.name)
+                    self.file_queue.put(candidate)
+        except OSError as e:
+            logger.warning("Could not enumerate watch folder %s: %s", folder, e)
+
     def start(self) -> None:
         """Run the blocking watchfiles event loop until stop() is called."""
         self._running = True
         self._stop_event.clear()
 
         try:
-            while not self._stop_event.is_set():
+            while True:
                 with self._lock:
+                    # Re-check the stop signal under the lock: a stop() that
+                    # completed while this thread was between iterations must
+                    # not be lost to a freshly re-armed cycle event.
+                    if self._stop_event.is_set():
+                        break
                     self._restart_event.clear()
                     self._cycle_stop_event = threading.Event()
                     current_folder = self.watch_folder
