@@ -34,9 +34,10 @@ def test_autorun_windows(monkeypatch):
 
     mock_winreg = MagicMock()
     mock_key = MagicMock()
-    mock_winreg.OpenKey.return_value = mock_key
+    # winreg keys return themselves as context managers; mirror that here.
+    mock_winreg.OpenKey.return_value.__enter__.return_value = mock_key
     mock_winreg.QueryValueEx.return_value = (
-        '"C:\\Programs\\ScanSort.exe" --minimized',
+        '"C:\\Programs\\ScanSort.exe" watch --minimized',
         1,
     )
 
@@ -44,17 +45,65 @@ def test_autorun_windows(monkeypatch):
         patch.dict("sys.modules", {"winreg": mock_winreg}),
         patch("scansort.autorun._winreg", mock_winreg, create=True),
     ):
-        # Test enabled check
+        # Test enabled check reads the stored command
         enabled = is_autorun_enabled()
         assert enabled is True
 
-        # Test enable
-        enable_autorun("C:\\Programs\\ScanSort.exe")
-        mock_winreg.SetValueEx.assert_called()
+        # Test enable writes the exact value name/type/command
+        assert enable_autorun("C:\\Programs\\ScanSort.exe") is True
+        mock_winreg.SetValueEx.assert_called_once_with(
+            mock_key,
+            "ScanSort",
+            0,
+            mock_winreg.REG_SZ,
+            '"C:\\Programs\\ScanSort.exe" watch --minimized',
+        )
 
-        # Test disable
-        disable_autorun()
-        mock_winreg.DeleteValue.assert_called()
+        # Test disable removes the exact value name
+        assert disable_autorun() is True
+        mock_winreg.DeleteValue.assert_called_once_with(mock_key, "ScanSort")
+
+
+def test_autorun_windows_empty_stored_value_not_enabled(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+
+    mock_winreg = MagicMock()
+    mock_key = MagicMock()
+    mock_winreg.OpenKey.return_value = mock_key
+    mock_winreg.QueryValueEx.return_value = ("", 1)
+
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.autorun._winreg", mock_winreg, create=True),
+    ):
+        assert is_autorun_enabled() is False
+
+
+def test_autorun_linux_truncated_desktop_not_enabled(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    desktop_file = tmp_path / "autostart" / "scansort.desktop"
+    desktop_file.parent.mkdir(parents=True)
+    desktop_file.write_text("")  # truncated / foreign leftover
+
+    with patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file):
+        assert is_autorun_enabled() is False
+
+
+def test_autorun_linux_enable_failure_leaves_no_corrupt_file(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("sys.platform", "linux")
+    desktop_file = tmp_path / "autostart" / "scansort.desktop"
+
+    with (
+        patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file),
+        patch(
+            "scansort.autorun.atomic_write", side_effect=OSError("Disk full")
+        ) as mock_atomic,
+    ):
+        assert enable_autorun() is False
+        mock_atomic.assert_called_once()
+    assert not desktop_file.exists()
 
 
 def test_autorun_windows_exceptions(monkeypatch):
@@ -79,7 +128,9 @@ def test_autorun_linux_os_errors(tmp_path: Path, monkeypatch):
     desktop_file = tmp_path / "autostart" / "app.desktop"
 
     with patch("scansort.autorun._get_linux_autostart_path", return_value=desktop_file):
-        with patch.object(Path, "write_text", side_effect=OSError("Permission denied")):
+        with patch(
+            "scansort.autorun.atomic_write", side_effect=OSError("Permission denied")
+        ):
             assert enable_autorun() is False
 
         desktop_file.parent.mkdir(parents=True, exist_ok=True)

@@ -5,6 +5,8 @@ import os
 import sys
 from pathlib import Path
 
+from scansort.fs_utils import atomic_write
+
 logger = logging.getLogger(__name__)
 
 RUN_KEY_NAME = "ScanSort"
@@ -47,14 +49,21 @@ def is_autorun_enabled() -> bool:
             with reg.OpenKey(
                 reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_READ
             ) as key:
-                reg.QueryValueEx(key, RUN_KEY_NAME)
-                return True
+                value, _ = reg.QueryValueEx(key, RUN_KEY_NAME)
+                return bool(str(value).strip())
         except (OSError, FileNotFoundError, AttributeError, ImportError):
             return False
 
     if sys.platform.startswith("linux"):
         desktop_file = _get_linux_autostart_path()
-        return desktop_file.exists()
+        if not desktop_file.exists():
+            return False
+        try:
+            content = desktop_file.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        # A truncated/stale file must not report "Enabled".
+        return "Type=Application" in content and "Exec=" in content
 
     return False
 
@@ -97,7 +106,7 @@ def enable_autorun(executable_path: str | None = None) -> bool:
                 "NoDisplay=false\n"
                 "X-GNOME-Autostart-enabled=true\n"
             )
-            desktop_file.write_text(content, encoding="utf-8")
+            atomic_write(desktop_file, content)
             logger.info("Created Linux autostart file at %s", desktop_file)
             return True
         except OSError as e:

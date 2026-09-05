@@ -3,7 +3,7 @@
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scansort.folder_mapper import (
     FolderMapper,
@@ -245,7 +245,8 @@ def test_folder_mapper_external_cache_mtime_update_reloads(tmp_path: Path):
     mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
     assert mapper.get_taxonomy() == ["Alpha"]
 
-    # External modification
+    # External modification (simulating another process running rescan)
+    (docs_dir / "Beta").mkdir()
     new_data = {"documents_root": str(docs_dir), "folders": ["Alpha", "Beta"]}
     cache_file.write_text(json.dumps(new_data), encoding="utf-8")
     mtime = cache_file.stat().st_mtime + 5.0
@@ -297,3 +298,100 @@ def test_cache_mtime_stat_oserror(tmp_path: Path):
     with patch.object(Path, "stat", side_effect=OSError("Disk error")):
         # Should cleanly return in-memory cached folders without crashing
         assert mapper.get_taxonomy() == ["Alpha"]
+
+
+def test_folder_mapper_ttl_picks_up_new_folders(tmp_path: Path, monkeypatch):
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Alpha").mkdir(parents=True)
+    mapper = FolderMapper(
+        docs_root=docs_root,
+        cache_path=tmp_path / "folder_map.json",
+    )
+    mapper.refresh()
+    assert mapper.get_taxonomy() == ["Alpha"]
+
+    # A folder created after the cached scan must be picked up once stale.
+    (docs_root / "Beta").mkdir()
+    monkeypatch.setattr("scansort.folder_mapper.TAXONOMY_CACHE_MAX_AGE_SECONDS", 0.0)
+    taxonomy = mapper.get_taxonomy()
+    assert "Beta" in taxonomy
+    assert "Alpha" in taxonomy
+
+
+def test_folder_mapper_ttl_drops_deleted_folders(tmp_path: Path, monkeypatch):
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Gamma").mkdir(parents=True)
+    mapper = FolderMapper(
+        docs_root=docs_root,
+        cache_path=tmp_path / "folder_map.json",
+    )
+    mapper.refresh()
+    assert mapper.get_taxonomy() == ["Gamma"]
+
+    import shutil
+
+    shutil.rmtree(docs_root / "Gamma")
+    monkeypatch.setattr("scansort.folder_mapper.TAXONOMY_CACHE_MAX_AGE_SECONDS", 0.0)
+    assert mapper.get_taxonomy() == []
+
+
+def test_folder_mapper_load_prunes_deleted_folders(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Keep").mkdir(parents=True)
+    (docs_root / "Ghost").mkdir(parents=True)
+    cache_path = tmp_path / "folder_map.json"
+
+    first = FolderMapper(docs_root=docs_root, cache_path=cache_path)
+    first.refresh()
+
+    import shutil
+
+    shutil.rmtree(docs_root / "Ghost")
+
+    second = FolderMapper(docs_root=docs_root, cache_path=cache_path)
+    assert second.get_taxonomy() == ["Keep"]
+
+
+def test_scan_folders_skips_symlinked_directories(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Real").mkdir(parents=True)
+    external = tmp_path / "ExternalData"
+    (external / "SecretProject").mkdir(parents=True)
+    try:
+        (docs_root / "Linked").symlink_to(external, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        import pytest as _pytest
+
+        _pytest.skip("Symlinks unavailable on this platform")
+
+    result = scan_documents_folders(docs_root)
+    assert result == ["Real"]
+    assert not any("SecretProject" in folder for folder in result)
+
+
+def test_scan_folders_skips_windows_hidden_attribute(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Private").mkdir(parents=True)
+    (docs_root / "Visible").mkdir(parents=True)
+
+    import os as _os
+    import types
+
+    import scansort.folder_mapper as folder_mapper
+
+    def fake_stat(path, *args, **kwargs):
+        if str(path).endswith("Private"):
+            fake = MagicMock()
+            fake.st_file_attributes = 0x2  # FILE_ATTRIBUTE_HIDDEN
+            return fake
+        return _os.stat(path, *args, **kwargs)
+
+    # Swap only folder_mapper's own os binding so pathlib internals stay real.
+    monkeypatch.setattr(folder_mapper, "os", types.SimpleNamespace(stat=fake_stat))
+
+    result = scan_documents_folders(docs_root)
+    assert result == ["Visible"]
+
+    monkeypatch.setattr("sys.platform", "linux")
+    assert scan_documents_folders(docs_root) == ["Private", "Visible"]

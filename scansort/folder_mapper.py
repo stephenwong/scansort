@@ -2,6 +2,9 @@
 
 import json
 import logging
+import os
+import sys
+import time
 from pathlib import Path
 
 from scansort.config import get_default_app_dir
@@ -23,6 +26,21 @@ __all__ = [
     "format_taxonomy_for_prompt",
     "scan_documents_folders",
 ]
+
+TAXONOMY_CACHE_MAX_AGE_SECONDS: float = 3600.0
+
+FILE_ATTRIBUTE_HIDDEN: int = 0x2
+
+
+def _is_hidden_directory(path: Path) -> bool:
+    """Return True on Windows when the directory carries the hidden attribute."""
+    if sys.platform != "win32":
+        return False
+    try:
+        attrs = getattr(os.stat(path, follow_symlinks=False), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attrs & FILE_ATTRIBUTE_HIDDEN)
 
 
 def scan_documents_folders(
@@ -65,6 +83,15 @@ def scan_documents_folders(
         for p in entries:
             try:
                 if p.is_dir():
+                    if p.is_symlink() or p.is_junction():
+                        # A link resolving outside documents_root would be
+                        # advertised but always rejected by the dispatcher,
+                        # silently mis-routing every matching document.
+                        logger.debug("Skipping linked taxonomy entry %s.", p)
+                        continue
+                    if _is_hidden_directory(p):
+                        logger.debug("Skipping hidden taxonomy entry %s.", p)
+                        continue
                     subdirs.append(p)
             except OSError as e:
                 logger.debug("Skipping inaccessible entry %s: %s", p, e)
@@ -175,6 +202,12 @@ class FolderMapper:
             pass
         return self._cached_folders is not None
 
+    def _cache_is_fresh(self) -> bool:
+        """Return True when the cached taxonomy is younger than the TTL."""
+        if self._cache_mtime is None:
+            return False
+        return (time.time() - self._cache_mtime) <= TAXONOMY_CACHE_MAX_AGE_SECONDS
+
     def _load_from_disk_cache(self) -> list[str] | None:
         """Load taxonomy from the disk cache file if valid for the current documents root."""
         if not self.cache_path.exists():
@@ -189,7 +222,14 @@ class FolderMapper:
                 ):
                     folders = data.get("folders", [])
                     if isinstance(folders, list):
-                        self._cached_folders = [str(f) for f in folders]
+                        # Drop cached entries whose folders no longer exist so a
+                        # deleted folder is never advertised or re-created.
+                        existing = [
+                            str(f)
+                            for f in folders
+                            if (self.docs_root / str(f)).is_dir()
+                        ]
+                        self._cached_folders = existing
                         self._cache_mtime = self.cache_path.stat().st_mtime
                         return self._cached_folders
         except (OSError, ValueError):
@@ -197,11 +237,16 @@ class FolderMapper:
         return None
 
     def get_taxonomy(self) -> list[str]:
-        """Return the current taxonomy, loading from cache if available."""
-        if self._is_memory_cache_valid():
+        """Return the current taxonomy, re-scanning when the cache is stale.
+
+        Newly created or renamed folders are picked up automatically once the
+        cached scan is older than the TTL, and stale entries whose directories
+        no longer exist are pruned on load.
+        """
+        if self._is_memory_cache_valid() and self._cache_is_fresh():
             return list(self._cached_folders)
         disk_folders = self._load_from_disk_cache()
-        if disk_folders is not None:
+        if disk_folders is not None and self._cache_is_fresh():
             return list(disk_folders)
         return list(self.refresh())
 

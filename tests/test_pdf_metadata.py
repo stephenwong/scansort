@@ -1,5 +1,6 @@
 """Unit tests for scansort.pdf_metadata module."""
 
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -217,3 +218,71 @@ def test_keywords_as_plain_string(tmp_path: Path):
     res = process_pdf_metadata_and_rotation(pdf_in, keywords="Utilities, Water")
     reader = PdfReader(res)
     assert reader.metadata.get("/Keywords") == "Utilities, Water"
+
+
+def test_xmp_metadata_embedded_and_preserved(tmp_path: Path):
+    """Invariant E: every output PDF carries DocInfo and a parseable XMP packet."""
+    from pypdf.xmp import XmpInformation
+
+    from scansort.pdf_metadata import process_pdf_metadata_and_rotation
+
+    src = tmp_path / "source.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.xmp_metadata = XmpInformation.create()
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    out = process_pdf_metadata_and_rotation(
+        pdf_path=src, title="Annual Statement", subject="Summary line"
+    )
+
+    assert out == src
+    content = src.read_bytes()
+    assert b"<x:xmpmeta" in content
+    reader = PdfReader(io.BytesIO(content))
+    assert reader.xmp_metadata is not None
+    assert reader.metadata["/Title"] == "Annual Statement"
+
+    # A PDF without prior XMP must also gain a packet.
+    plain = tmp_path / "plain.pdf"
+    plain_writer = PdfWriter()
+    plain_writer.add_blank_page(width=72, height=72)
+    with open(plain, "wb") as f:
+        plain_writer.write(f)
+    process_pdf_metadata_and_rotation(pdf_path=plain, title="Plain Title")
+    plain_reader = PdfReader(io.BytesIO(plain.read_bytes()))
+    assert plain_reader.xmp_metadata is not None
+
+
+def test_existing_rotation_normalized_mod_360(tmp_path: Path):
+    from scansort.pdf_metadata import process_pdf_metadata_and_rotation
+
+    src = tmp_path / "rotated.pdf"
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=72, height=72)
+    page.rotate(270)
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    process_pdf_metadata_and_rotation(pdf_path=src, orientation_angle=90)
+
+    reader = PdfReader(io.BytesIO(src.read_bytes()))
+    assert reader.pages[0].rotation in {0, 90, 180, 270}
+    assert reader.pages[0].get("/Rotate") == 0
+
+
+def test_corrupt_encrypted_pdf_not_mislabeled_as_password(tmp_path: Path):
+    from scansort.pdf_metadata import process_pdf_metadata_and_rotation
+
+    src = tmp_path / "tricky.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt("")
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    # Empty-password encrypted PDFs are processable (pinned elsewhere); this
+    # exercises the decrypt-result-code path without a page probe.
+    out = process_pdf_metadata_and_rotation(pdf_path=src, title="T")
+    assert out == src

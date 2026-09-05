@@ -1,6 +1,7 @@
 """Unit tests for scansort.image_converter module."""
 
 import os
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -207,13 +208,93 @@ def test_convert_to_pdf_unlinks_existing_target_on_failure(tmp_path: Path):
 def test_convert_to_pdf_failure_never_deletes_input_file(tmp_path: Path):
     img_path = tmp_path / "original.jpg"
     _create_sample_image(img_path, img_format="JPEG")
+    original = img_path.read_bytes()
 
-    # If convert_to_pdf fails when output_path resolves to input_path, input must not be deleted
+    # A failed conversion with a distinct output path must not delete the input.
     with (
         patch("img2pdf.convert", side_effect=ValueError("Encoding error")),
         patch.object(Image.Image, "save", side_effect=RuntimeError("Pillow failed")),
         pytest.raises(RuntimeError),
     ):
+        convert_to_pdf(img_path, output_path=tmp_path / "out.pdf")
+
+    assert img_path.read_bytes() == original
+
+
+def test_convert_to_pdf_same_path_guard_preserves_input(tmp_path: Path):
+    img_path = tmp_path / "original.jpg"
+    _create_sample_image(img_path, img_format="JPEG")
+    original = img_path.read_bytes()
+
+    with pytest.raises(ValueError, match="output_path"):
         convert_to_pdf(img_path, output_path=img_path)
 
-    assert img_path.exists(), "Original input file must not be deleted on failure!"
+    assert img_path.read_bytes() == original, "Input must never be overwritten"
+
+
+def test_16bit_grayscale_preserved_not_saturated(tmp_path: Path):
+    """16-bit grayscale scans must scale to 8-bit, not saturate to blank."""
+    from scansort.image_converter import convert_to_pdf
+
+    src = tmp_path / "deep16.png"
+    img = Image.new("I;16", (64, 64))
+    pixels = img.load()
+    for y in range(64):
+        for x in range(64):
+            pixels[x, y] = 6000  # typical ink level (~9% reflectance)
+    img.save(src, format="PNG")
+
+    pdf_out = convert_to_pdf(src, output_path=tmp_path / "deep16.pdf")
+
+    with Image.open(src) as check:
+        assert check.mode == "I;16"
+    reader = PdfReader(pdf_out)
+    page_img = reader.pages[0].images[0]
+    extracted = Image.open(BytesIO(page_img.data)).convert("L")
+    min_px, max_px = extracted.getextrema()
+    # Saturated output would be near-white (>=250); scaled output stays dark.
+    assert max_px < 80, f"16-bit content saturated to {max_px}"
+
+
+def test_mirror_orientation_jpeg_converts(tmp_path: Path):
+    """EXIF mirror-orientation JPEGs must fall back to Pillow and flip."""
+    from scansort.image_converter import convert_to_pdf
+
+    src = tmp_path / "mirrored.jpg"
+    img = Image.new("RGB", (120, 60), "white")
+    for y in range(60):
+        for x in range(60):
+            img.putpixel((x, y), (255, 0, 0))  # left half red
+    for y in range(60):
+        for x in range(60, 120):
+            img.putpixel((x, y), (0, 0, 255))  # right half blue
+    exif = Image.Exif()
+    exif[0x0112] = 2  # Mirror horizontal
+    img.save(src, format="JPEG", exif=exif)
+
+    pdf_out = convert_to_pdf(src, output_path=tmp_path / "mirrored.pdf")
+    assert pdf_out.exists()
+
+    page_img = PdfReader(pdf_out).pages[0].images[0]
+    extracted = Image.open(BytesIO(page_img.data)).convert("RGB")
+    # Orientation=2 mirrors horizontally: blue should now be on the LEFT.
+    left_px = extracted.getpixel((5, 30))
+    assert left_px[2] > 200 and left_px[0] < 60, (
+        f"expected mirrored left-blue, got {left_px}"
+    )
+    right_px = extracted.getpixel((115, 30))
+    assert right_px[0] > 200 and right_px[2] < 60, f"expected right-red, got {right_px}"
+
+
+def test_image_output_path_equal_to_input_raises(tmp_path: Path):
+    """convert_to_pdf must refuse to overwrite its own source image."""
+    from scansort.image_converter import convert_to_pdf
+
+    src = tmp_path / "precious.png"
+    Image.new("RGB", (20, 20), "white").save(src, format="PNG")
+    original = src.read_bytes()
+
+    with pytest.raises(ValueError, match="output_path"):
+        convert_to_pdf(src, output_path=src)
+
+    assert src.read_bytes() == original

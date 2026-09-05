@@ -4,8 +4,8 @@ import io
 import logging
 from pathlib import Path
 
-from pypdf import PdfReader, PdfWriter
-from pypdf.errors import PdfReadError
+from pypdf import PasswordType, PdfReader, PdfWriter
+from pypdf.xmp import XmpInformation
 
 from scansort.constants import DEFAULT_AUTHOR, DEFAULT_CREATOR
 from scansort.fs_utils import atomic_write
@@ -15,18 +15,34 @@ logger = logging.getLogger(__name__)
 
 def _ensure_pdf_unlocked(reader: PdfReader, filename: str) -> None:
     """Verify the PDF is not password-protected, attempting empty password decryption."""
-    if reader.is_encrypted:
-        try:
-            reader.decrypt("")
-        except (PdfReadError, OSError):
-            logger.debug("Empty password decryption attempt failed for %s", filename)
-        try:
-            if reader.pages:
-                _ = reader.pages[0]
-        except Exception as e:
-            raise ValueError(
-                f"PDF {filename} is password protected and cannot be processed."
-            ) from e
+    if reader.is_encrypted and reader.decrypt("") == PasswordType.NOT_DECRYPTED:
+        raise ValueError(
+            f"PDF {filename} is password protected and cannot be processed."
+        )
+
+
+def _build_xmp_packet(
+    xmp_bytes: bytes | None,
+    title: str | None,
+    subject: str | None,
+    keywords: list[str] | str | None,
+) -> XmpInformation:
+    """Preserve an existing XMP packet or generate a minimal one from DocInfo fields."""
+    if xmp_bytes is not None:
+        return xmp_bytes
+    xmp = XmpInformation.create()
+    if title and title.strip():
+        xmp.dc_title = {"x-default": title.strip()}
+    if subject and subject.strip():
+        xmp.dc_description = {"x-default": subject.strip()}
+    if keywords:
+        if isinstance(keywords, (list, tuple, set)):
+            cleaned = sorted(str(k).strip() for k in keywords if str(k).strip())
+        else:
+            cleaned = [str(keywords).strip()] if str(keywords).strip() else []
+        if cleaned:
+            xmp.pdf_keywords = ", ".join(cleaned)
+    return xmp
 
 
 def _build_docinfo_metadata(
@@ -96,16 +112,23 @@ def process_pdf_metadata_and_rotation(
 
     _ensure_pdf_unlocked(reader, pdf_path.name)
 
+    existing_xmp: bytes | None = None
+    if reader.xmp_metadata is not None:
+        try:
+            existing_xmp = reader.xmp_metadata.stream.get_data()
+        except (AttributeError, OSError):
+            existing_xmp = None
+
     writer = PdfWriter()
 
     # Normalize orientation angle to orthogonal multiples
     raw_norm = orientation_angle % 360
     norm_angle = raw_norm if raw_norm in {0, 90, 180, 270} else 0
 
-    # Add pages with optional rotation
+    # Add pages with optional rotation (normalizing setter keeps /Rotate canonical)
     for page in reader.pages:
         if norm_angle != 0:
-            page.rotate(norm_angle)
+            page.rotation = page.rotation + norm_angle
         writer.add_page(page)
 
     metadata = _build_docinfo_metadata(
@@ -117,6 +140,9 @@ def process_pdf_metadata_and_rotation(
     )
     if metadata:
         writer.add_metadata(metadata)
+
+    # Preserve any pre-existing XMP packet; otherwise emit one (invariant E).
+    writer.xmp_metadata = _build_xmp_packet(existing_xmp, title, subject, keywords)
 
     # Unified atomic write via temporary file replacement for all targets (S3-08)
     atomic_write(target_path, lambda out: writer.write(out))

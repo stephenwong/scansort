@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 
 import img2pdf
-from PIL import Image, ImageSequence
+from PIL import Image, ImageOps, ImageSequence
 
 from scansort.constants import DEFAULT_DPI, SUPPORTED_EXTENSIONS
 from scansort.fs_utils import atomic_write
@@ -16,8 +16,29 @@ def is_supported_format(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
 
+_HIGH_BIT_GRAY_MODES: tuple[str, ...] = ("I", "I;16", "I;16B", "I;16L")
+
+# img2pdf raises these for inputs it cannot wrap losslessly; Pillow fallback handles them.
+_IMG2PDF_FALLBACK_ERRORS: tuple[type[BaseException], ...] = (
+    img2pdf.ImageOpenError,
+    img2pdf.PdfTooLargeError,
+    img2pdf.ExifOrientationError,
+    img2pdf.AlphaChannelError,
+    img2pdf.JpegColorspaceError,
+    img2pdf.UnsupportedColorspaceError,
+    img2pdf.NegativeDimensionError,
+    OSError,
+    ValueError,
+)
+
+
 def _normalize_frame_to_rgb(frame: Image.Image) -> Image.Image:
     """Safely convert an image frame to RGB, compositing alpha channels onto white."""
+    if frame.mode in _HIGH_BIT_GRAY_MODES:
+        # 16-bit/int grayscale must be scaled 16->8 bits; Pillow's convert("RGB")
+        # saturates every sample >= 256 to 255, blanking real scans.
+        scaled = frame.point(lambda v: v * (255 / 65535))
+        return scaled.convert("L").convert("RGB")
     if frame.mode in ("RGBA", "LA") or (
         frame.mode == "P" and "transparency" in frame.info
     ):
@@ -58,7 +79,8 @@ def _convert_image_via_pillow(input_path: Path, target_pdf: Path) -> int:
     """Convert an image to PDF via Pillow supporting multi-frame images."""
     with Image.open(input_path) as img:
         frames = [
-            _normalize_frame_to_rgb(frame) for frame in ImageSequence.Iterator(img)
+            _normalize_frame_to_rgb(ImageOps.exif_transpose(frame))
+            for frame in ImageSequence.Iterator(img)
         ]
         first_frame = frames[0]
         append_frames = frames[1:]
@@ -121,6 +143,8 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
         return target_pdf
 
     target_pdf = output_path or input_path.with_suffix(".pdf")
+    if output_path is not None and target_pdf.resolve() == input_path.resolve():
+        raise ValueError(f"output_path must differ from the input file: {input_path}")
     target_pdf.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -128,12 +152,7 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
             try:
                 _convert_jpeg_lossless(input_path, target_pdf)
                 return target_pdf
-            except (
-                img2pdf.ImageOpenError,
-                img2pdf.PdfTooLargeError,
-                OSError,
-                ValueError,
-            ) as e:
+            except _IMG2PDF_FALLBACK_ERRORS as e:
                 logger.warning(
                     "img2pdf failed on %s (%s). Falling back to Pillow.",
                     input_path.name,
