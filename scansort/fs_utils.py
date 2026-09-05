@@ -1,8 +1,10 @@
 """Shared atomic file-writing and relative-path safety utilities."""
 
 import os
+import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path, PureWindowsPath
 from typing import BinaryIO
 
@@ -45,6 +47,47 @@ def atomic_write(
     finally:
         if tmp_path is not None and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def interprocess_file_lock(lock_path: Path) -> Iterator[None]:
+    """Hold an exclusive advisory lock shared by all ScanSort processes.
+
+    Uses ``fcntl.flock`` on POSIX and ``msvcrt.locking`` on Windows so that
+    ``resolve_collision``-then-move critical sections cannot race across
+    separate ``watch``/``undo`` processes writing the same destination trees.
+
+    Args:
+        lock_path: Path to the sidecar lock file (e.g. ``app_dir/operations.lock``).
+
+    Yields:
+        None once the exclusive lock is held; the lock is released on exit.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+b") as lock_file:
+        if os.fstat(lock_file.fileno()).st_size == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def relative_folder_is_safe(rel: str) -> bool:

@@ -1,6 +1,7 @@
 """Unit tests for scansort.fs_utils module."""
 
-from unittest.mock import patch
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -104,3 +105,59 @@ def test_resolve_collision(tmp_path):
     path2.write_bytes(b"2")
     path3 = resolve_collision(tmp_path, "doc.pdf")
     assert path3 == tmp_path / "doc_2.pdf"
+
+
+def test_interprocess_file_lock_serializes_concurrent_movers(tmp_path):
+    from scansort.fs_utils import interprocess_file_lock, resolve_collision
+
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    lock_path = tmp_path / "operations.lock"
+    errors: list[BaseException] = []
+
+    def mover(tag: bytes) -> None:
+        try:
+            src = tmp_path / f"src_{tag.decode()}"
+            src.write_bytes(tag * 10)
+            with interprocess_file_lock(lock_path):
+                chosen = resolve_collision(dest_dir, "260901_Doc.pdf")
+                import shutil
+
+                shutil.move(str(src), str(chosen))
+        except OSError as exc:  # pragma: no cover - failure reporting only
+            errors.append(exc)
+
+    threads = [threading.Thread(target=mover, args=(t,)) for t in (b"A", b"B")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    filed = sorted(p.name for p in dest_dir.iterdir())
+    assert filed == ["260901_Doc.pdf", "260901_Doc_1.pdf"]
+    assert (dest_dir / "260901_Doc.pdf").read_bytes() != (
+        dest_dir / "260901_Doc_1.pdf"
+    ).read_bytes()
+
+
+def test_interprocess_file_lock_windows_branch(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_msvcrt = MagicMock()
+    with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}):
+        from scansort.fs_utils import interprocess_file_lock
+
+        with interprocess_file_lock(tmp_path / "operations.lock"):
+            pass
+    assert mock_msvcrt.locking.call_count == 2
+
+
+def test_interprocess_file_lock_posix_branch(tmp_path):
+    from scansort.fs_utils import interprocess_file_lock
+
+    lock_path = tmp_path / "operations.lock"
+    with interprocess_file_lock(lock_path):
+        assert lock_path.exists()
+    # Lock must be released: a second acquisition succeeds immediately.
+    with interprocess_file_lock(lock_path):
+        pass
