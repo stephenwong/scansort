@@ -94,17 +94,18 @@ flowchart TD
 ## Core Features
 
 - **Zero-Leak Secret Vault:** Your Gemini API key is never written to plaintext config files. It is stored directly in the OS-encrypted credential vault (Windows Credential Manager / DPAPI via `keyring`).
-- **Rust-Powered Filesystem Watcher:** Built on `watchfiles` (wrapping Rust's `notify` crate) with native debouncing to handle scanner buffers and multi-page ADF batch scans.
-- **Deepest Subfolder Matching:** Scans your real `Documents` directory hierarchy and classifies scans into the most specific leaf folder. If no existing folder fits or confidence is below 70%, files route safely to `Documents/_Review_Needed/` (never inventing rogue folders).
-- **Multi-Page TIFF & Image Support:** Automatically normalizes single and multi-page TIFFs, JPEGs, and PNGs into standard searchable PDFs without dropping pages.
+- **Rust-Powered Filesystem Watcher:** Built on `watchfiles` (wrapping Rust's `notify` crate) with native debouncing to handle scanner buffers and multi-page ADF batch scans. Files already present when monitoring starts (e.g. scans that arrived while the app was off) are swept and filed automatically.
+- **Deepest Subfolder Matching:** Scans your real `Documents` directory hierarchy and classifies scans into the most specific leaf folder. If no existing folder fits or confidence is below 70%, files route safely to `Documents/_Review_Needed/` (never inventing rogue folders). The taxonomy cache is refreshed hourly and on every `rescan`, so new folders are picked up and deleted folders are never re-created; symlinked/junction and Windows-hidden folders are excluded.
+- **Multi-Page TIFF & Image Support:** Automatically normalizes single and multi-page TIFFs, JPEGs, and PNGs into standard searchable PDFs without dropping pages (including 16-bit grayscale scans, which are scaled rather than clipped).
 - **Auto Page-Orientation:** Automatically corrects skewed, sideways, or upside-down scans (0°, 90°, 180°, 270°) using `pypdf`.
-- **Native Windows Search Indexing:** Embeds document title, summary, and category keywords into standard PDF DocInfo and XMP metadata streams, enabling instant Windows Start Menu and Explorer search.
+- **Native Windows Search Indexing:** Embeds document title, summary, and category keywords into standard PDF DocInfo and XMP metadata streams (XMP generated on every output PDF, pre-existing XMP preserved), enabling instant Windows Start Menu and Explorer search.
 - **SHA-256 Duplicate Interception:** Computes cryptographic SHA-256 hashes for all scans. Re-scans are identified before filing and routed to `_Review_Needed/Duplicates/`, saving Gemini API quota.
-- **Sequential Undo Support:** Provides single-command undo (`scansort undo`) that can be executed repeatedly to roll back successive moves, restoring files safely with collision handling and resetting duplicate status.
-- **Resilient Background Worker:** Robust queue worker designed to handle transient API rate limits (429/503) and network drops by falling back to review folders without terminating the daemon.
-- **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`.
+- **Sequential Undo Support:** Provides single-command undo (`scansort undo`) that can be executed repeatedly to roll back successive moves, restoring files safely with collision handling and resetting duplicate status. Failed restores are reported to the CLI instead of being silently skipped.
+- **Resilient Background Worker:** Robust queue worker designed to handle transient API rate limits (429/503) and network drops by falling back to review folders without terminating the daemon. Items still queued at shutdown are drained before exit.
+- **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`. CSV cells are neutralized against spreadsheet-formula injection, and the CSV mirror never diverges from the JSONL under concurrent processes.
 - **Dry-Run Mode:** Test and preview classification logic on your documents without moving or modifying files (`--dry-run`).
-- **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart.
+- **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart (written atomically).
+- **Australia/Sydney Time:** All user-facing dates and times (filename date stamps and the audit CSV "Local Time" column) use Australia/Sydney wall-clock time regardless of the machine's timezone.
 
 ---
 
@@ -154,7 +155,7 @@ uv run scansort config --watch-folder "C:\Scans\Inbox"
 # Set custom documents destination directory
 uv run scansort config --documents-folder "D:\My Documents"
 ```
-*Validation guarantees:* ScanSort prevents configuring regular files as directory endpoints, rejects identical `watch_folder` and `documents_folder` paths, and blocks path traversal or Windows drive letters in `fallback_folder`.
+*Validation guarantees:* ScanSort prevents configuring regular files (or paths under one) as directory endpoints, rejects identical `watch_folder`/`documents_folder` paths **and containment in either direction** (a drop folder nested inside the documents root would create a filing feedback loop), and blocks path traversal or Windows drive letters in `fallback_folder`. If an existing `config.json` contains semantically invalid settings, every command fails fast with a message naming the offending field instead of silently resetting to defaults.
 
 ### 4. Configure Auto-Start on Boot (Windows & Linux)
 ```bash
@@ -229,6 +230,19 @@ YYMMDD_<Description>.pdf
   - `260901_Origin_Energy_Electricity_Bill.pdf`
   - `260901_Origin_Energy_Electricity_Bill_1.pdf`
   - `260901_Origin_Energy_Electricity_Bill_2.pdf`
+
+---
+
+## Reliability & Safety Notes
+
+- **Write-stability gate:** Incoming files must hold a constant size for ~1 s before processing; the source is re-verified immediately before dispatch. A writer that resumes mid-processing causes the item to be deferred, never partially filed.
+- **Cross-process atomicity:** File moves (`watch` pipeline, duplicate routing, `undo`) are serialized via an advisory lock on `%APPDATA%\ScanSort\operations.lock`, so two processes can never race `resolve_collision` and silently overwrite each other's filed document.
+- **Failed items are never stranded:** Any file that fails hashing, duplicate routing, conversion, or metadata processing is moved to the fallback review folder with a `FAILED` audit record — the background worker never dies and the queue is drained on shutdown.
+- **Startup reconciliation:** Scans left in the drop folder when monitoring starts (app was off, or a crash) are queued automatically.
+- **Config is never silently reset:** A parseable but semantically invalid `config.json` aborts commands with an error naming the offending field; only missing/unreadable files fall back to defaults.
+- **Taxonomy freshness:** The cached folder list is re-scanned automatically when older than 1 hour and pruned of folders that no longer exist.
+- **Spreadsheet-safe audit CSVs:** Cells that could be interpreted as formulas (`=`, `+`, `-`, `@` prefixes) are neutralized, and un-encodable characters never crash the audit write.
+- **Timezone:** Date-stamped filenames and the audit "Local Time" column always reflect Australia/Sydney time (DST-aware via the bundled `tzdata`).
 
 ---
 

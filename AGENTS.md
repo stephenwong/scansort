@@ -68,20 +68,24 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
   - English only (translated if foreign).
   - Format: `Title_Case_With_Underscores`.
   - Strip Windows-illegal characters: `< > : " / \ | ? *` and excessive punctuation.
-  - Maximum character cap: 60 characters.
+  - Maximum character cap: 60 characters (whole-word truncation; NFKC-normalized, Unicode format characters removed).
+- Dates are validated as real calendar dates; date-stamped fallbacks use **Australia/Sydney** wall-clock time (see `scansort.timeutil`, bundled `tzdata` dependency).
 
 ### C. File Ingestion & Stability
 - Physical scanners write files progressively. **Never** process an incoming file immediately on filesystem notification.
 - Always wait for write stabilization via `file_stabilizer.wait_for_file_stability()` which verifies file size stagnation and non-blocking exclusive file handle availability.
+- Advisory lock probes cannot detect plain `write()`-based writers: the pipeline requires a ~1 s size-quiescence window and re-verifies the source (size + mtime) immediately before dispatch; defer rather than file a partial snapshot. Stabilization on a vanished file must fail fast (never spin the timeout).
+- The watcher must sweep pre-existing drop-folder files at every cycle start so scans that arrived while the app was off are still filed.
 
 ### D. Duplicate Prevention & Safe Move Reversal
 - Compute streaming SHA-256 before invoking Gemini OCR.
 - Check against `history.jsonl`. Duplicates must be routed to `Documents/_Review_Needed/Duplicates/` with status `DUPLICATE` without invoking Gemini, saving API quota.
 - When reversing moves via `scansort undo`, restored files in the drop folder are prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`). The drop folder watcher strictly ignores files with this prefix to prevent automated re-filing loops. Both `history.jsonl` and `history.csv` are atomically updated with `UNDONE` status.
+- `undo_last_move` may raise `OSError` on a failed physical restore (the CLI reports it); records lacking `original_path` or whose recorded destination is a directory are skipped.
 
 ### E. Orientation & Windows Search Indexing
-- If Gemini returns non-zero `orientation_correction` (90°, 180°, 270°), rotate pages using `pypdf`.
-- Embed DocInfo and XMP metadata (`Title`, `Subject`, `Keywords`, `Author`) into every output PDF to enable native Windows Start Menu search indexing.
+- If Gemini returns non-zero `orientation_correction` (90°, 180°, 270°), rotate pages using `pypdf` (assign `page.rotation` so `/Rotate` stays canonical mod 360).
+- Embed DocInfo and XMP metadata (`Title`, `Subject`, `Keywords`, `Author`) into every output PDF to enable native Windows Start Menu search indexing: generate an XMP packet on every output and preserve any pre-existing `/Metadata` stream.
 
 ### F. In-Place PDF Modification on Windows
 - Always buffer PDF bytes into `io.BytesIO` before parsing with `pypdf` when replacing files in-place. On Windows, active file handles cause `PermissionError: [WinError 32]` during atomic replacement (`tmp_path.replace(target_path)`).
@@ -90,14 +94,19 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 ### G. Path Traversal & Destination Defenses
 - Never trust model-generated `target_folder` values or user-specified `fallback_folder` settings. Reject leading slashes, Windows drive letters (e.g., `C:\`, `D:/`), and `..` traversal segments.
 - Verify that destination directories strictly satisfy `target_dir.is_relative_to(docs_root)`.
-- Enforce that `watch_folder` and `documents_root` cannot be configured to the same directory (`watch_folder.resolve() != documents_root.resolve()`) to prevent infinite ingestion loops.
+- Enforce that `watch_folder` and `documents_root` cannot be the same directory **or contain each other** (containment in either direction enables self-filing feedback loops). Paths located under a regular file are rejected.
+- Only the exact `_Review_Needed` literal may bypass the taxonomy membership gate — never a `_Review_Needed*` prefix — so model-invented subfolders are never auto-created.
+- Semantically invalid `config.json` settings cause fail-fast `ValueError`s naming the offending fields; never silently reset a parseable config to defaults or persist a fallback model.
+- Taxonomy discovery must skip symlinks/junctions (escape- or cycle-prone) and, on Windows, hidden-attribute folders; the folder cache is revalidated on a TTL so deleted folders are never advertised/re-created.
 
 ### H. Intermediate File Isolation
 - Never write intermediate PDFs or temporary conversion files into the monitored drop folder. Always store working files in the application temp directory (`app_dir / "tmp"`).
 
 ### I. Worker Fault Tolerance & Rate Limiting
 - The background processing worker must never crash on transient API rate limits (429/503) or network disconnects.
-- Route failing items to `_Review_Needed/` with diagnostic logging and keep the queue worker alive.
+- Route failing items to `_Review_Needed/` (fallback folder) with a `FAILED` audit record and diagnostic logging, and keep the queue worker alive. The worker drains the queue on shutdown.
+- Resolve-then-move critical sections (`dispatch_file`, duplicate routing, `undo_last_move`) must hold the cross-process advisory lock (`app_dir/operations.lock`, `fs_utils.interprocess_file_lock`); on a move failure, clean up any partial destination before re-raising.
+- Audit CSV headers must be created without truncation (`"x"`/append-when-empty, never `"w"`), cells are neutralized against spreadsheet-formula prefixes and un-encodable surrogates, and CSV/JSONL writes guard `(OSError, UnicodeError)`.
 
 ### J. Strict Test-Driven Development (TDD) & Zero "Test Slop"
 - **Always write tests first:** For any new feature, bug fix, or behavioral change, write failing automated tests before writing production code.
