@@ -5,13 +5,19 @@ import logging
 from pathlib import Path
 
 from scansort.config import get_default_app_dir
+from scansort.constants import HINTS_FILENAME
 
 logger = logging.getLogger(__name__)
 
 
+def normalize_folder_key(folder: str) -> str:
+    """Normalize folder path by converting backslashes and stripping whitespace/slashes."""
+    return folder.replace("\\", "/").strip().strip("/")
+
+
 def get_default_hints_path() -> Path:
     """Return the default path to folder_hints.json."""
-    return get_default_app_dir() / "folder_hints.json"
+    return get_default_app_dir() / HINTS_FILENAME
 
 
 def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
@@ -36,7 +42,9 @@ def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
 
         normalized: dict[str, list[str]] = {}
         for folder, keywords in data.items():
-            norm_folder = folder.replace("\\", "/").strip().strip("/")
+            norm_folder = normalize_folder_key(folder)
+            if not norm_folder:
+                continue
             if isinstance(keywords, list):
                 clean_keywords = [
                     kw.strip().lower()

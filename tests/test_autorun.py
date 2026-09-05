@@ -4,7 +4,12 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from scansort.autorun import disable_autorun, enable_autorun, is_autorun_enabled
+from scansort.autorun import (
+    _get_linux_autostart_path,
+    disable_autorun,
+    enable_autorun,
+    is_autorun_enabled,
+)
 
 
 def test_autorun_non_windows(tmp_path: Path, monkeypatch):
@@ -117,8 +122,6 @@ def test_linux_autostart_path_respects_xdg_config_home(tmp_path: Path, monkeypat
     custom_xdg = tmp_path / "custom_xdg"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(custom_xdg))
     monkeypatch.setattr("sys.platform", "linux")
-
-    from scansort.autorun import _get_linux_autostart_path
 
     path = _get_linux_autostart_path()
     assert path == custom_xdg / "autostart" / "scansort.desktop"

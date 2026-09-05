@@ -3,6 +3,9 @@
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from scansort.hasher import check_duplicate, compute_file_sha256
 
@@ -53,9 +56,6 @@ def test_check_duplicate_missing_history_file(tmp_path: Path):
     assert check_duplicate("somehash", missing_history) is None
 
 
-from unittest.mock import patch
-
-
 def test_check_duplicate_skips_empty_and_corrupt_lines(tmp_path: Path):
     history_file = tmp_path / "history.jsonl"
     content = (
@@ -87,8 +87,6 @@ def test_check_duplicate_ignores_undone(tmp_path: Path):
 
 
 def test_compute_file_sha256_invalid_chunk_size(tmp_path: Path):
-    import pytest
-
     test_file = tmp_path / "doc.pdf"
     test_file.write_bytes(b"content")
 

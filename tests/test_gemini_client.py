@@ -1,58 +1,13 @@
 """Unit tests for scansort.gemini_client module."""
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
+from google.genai.errors import APIError
 
-from scansort.gemini_client import (
-    DocumentClassification,
-    GeminiClassifier,
-    sanitize_date,
-    sanitize_description,
-)
-
-
-def test_sanitize_description():
-    assert (
-        sanitize_description("Origin Energy Electricity Bill")
-        == "Origin_Energy_Electricity_Bill"
-    )
-    assert (
-        sanitize_description("medical / dental bill: Dr. Smith?")
-        == "Medical_Dental_Bill_Dr_Smith"
-    )
-    assert sanitize_description("invoice   with   spaces") == "Invoice_With_Spaces"
-    assert sanitize_description('invalid < > : " / \\ | ? * chars') == "Invalid_Chars"
-
-    long_title = "A" * 100
-    sanitized_long = sanitize_description(long_title)
-    assert len(sanitized_long) <= 60
-
-
-def test_sanitize_date():
-    assert sanitize_date("260901") == "260901"
-    today = datetime.now(UTC).strftime("%y%m%d")
-    assert sanitize_date("invalid") == today
-    assert sanitize_date("") == today
-    assert sanitize_date("2026-09-01") == "260901"
-
-
-def test_document_classification_model():
-    model = DocumentClassification(
-        document_date="260901",
-        description="Origin_Energy_Bill",
-        target_folder="Utilities/Electricity",
-        confidence=0.95,
-        orientation_correction=0,
-        document_type="Invoice",
-        summary="Quarterly electricity bill",
-    )
-    assert model.document_date == "260901"
-    assert model.target_folder == "Utilities/Electricity"
-    assert model.orientation_correction == 0
+from scansort.gemini_client import GeminiClassifier
 
 
 def test_analyze_document_missing_api_key(tmp_path: Path):
@@ -104,19 +59,17 @@ def test_analyze_document_unmatched_folder_falls_back(tmp_path: Path):
         "document_date": "260901",
         "description": "Unknown Document",
         "target_folder": "NonExistent/Folder",
-        "confidence": 0.40,
-        "orientation_correction": 0,
-        "document_type": "Other",
-        "summary": "Unknown"
+        "confidence": 0.85
     }"""
     mock_client.models.generate_content.return_value = mock_response
 
     classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
     classifier._client = mock_client
 
-    taxonomy = ["Utilities/Electricity"]
+    taxonomy = ["Utilities/Electricity", "Finances/Banking"]
     result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
 
+    # Since 'NonExistent/Folder' is not in taxonomy, it must fallback to _Review_Needed
     assert result.target_folder == "_Review_Needed"
 
 
@@ -129,42 +82,42 @@ def test_analyze_document_blank_scan_routes_to_blank_subfolder(tmp_path: Path):
     mock_response.text = """{
         "document_date": "260901",
         "description": "Blank Page",
-        "target_folder": "_Review_Needed",
+        "target_folder": "Utilities",
         "confidence": 0.99,
-        "orientation_correction": 0,
         "document_type": "Blank",
-        "summary": "Empty white scanned page"
+        "summary": "Empty white sheet."
     }"""
     mock_client.models.generate_content.return_value = mock_response
 
     classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
     classifier._client = mock_client
 
-    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities"])
+    taxonomy = ["Utilities"]
+    result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
+
     assert result.target_folder == "_Review_Needed/Blank_Scans"
+    assert result.document_type == "Blank"
 
 
 def test_analyze_document_api_failure_returns_graceful_fallback(tmp_path: Path):
-    dummy_pdf = tmp_path / "broken.pdf"
+    dummy_pdf = tmp_path / "fail.pdf"
     dummy_pdf.write_bytes(b"%PDF-1.4 test")
 
     mock_client = MagicMock()
-    mock_client.models.generate_content.side_effect = RuntimeError(
-        "API connection timeout"
-    )
+    mock_client.models.generate_content.side_effect = RuntimeError("API down")
 
     classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
     classifier._client = mock_client
 
-    result = classifier.classify_document(dummy_pdf, taxonomy=["Utilities"])
+    taxonomy = ["Utilities"]
+    result = classifier.classify_document(dummy_pdf, taxonomy=taxonomy)
+
     assert result.target_folder == "_Review_Needed"
     assert result.confidence == 0.0
     assert "Failed" in result.description or "Error" in result.description
 
 
 def test_low_confidence_forces_review_needed(tmp_path: Path):
-    import json
-
     dummy = tmp_path / "doc.pdf"
     dummy.write_bytes(b"%PDF-1.4")
     mock_client = MagicMock()
@@ -186,8 +139,6 @@ def test_low_confidence_forces_review_needed(tmp_path: Path):
 
 
 def test_path_traversal_target_folder_blocked(tmp_path: Path):
-    import json
-
     dummy = tmp_path / "doc.pdf"
     dummy.write_bytes(b"%PDF-1.4")
     mock_client = MagicMock()
@@ -209,8 +160,6 @@ def test_path_traversal_target_folder_blocked(tmp_path: Path):
 
 
 def test_gemini_api_error_handled(tmp_path: Path):
-    from google.genai.errors import APIError
-
     dummy = tmp_path / "doc.pdf"
     dummy.write_bytes(b"%PDF-1.4")
     mock_client = MagicMock()
@@ -230,7 +179,7 @@ def test_gemini_malformed_json_and_non_dict(tmp_path: Path):
     dummy.write_bytes(b"%PDF-1.4")
     mock_client = MagicMock()
     mock_resp = MagicMock()
-    mock_resp.text = "not json at all"
+    mock_resp.text = "{malformed json"
     mock_client.models.generate_content.return_value = mock_resp
     cls = GeminiClassifier(api_key="AIzaSyTest")
     cls._client = mock_client
@@ -245,8 +194,6 @@ def test_gemini_malformed_json_and_non_dict(tmp_path: Path):
 
 
 def test_gemini_non_orthogonal_rotation(tmp_path: Path):
-    import json
-
     dummy = tmp_path / "doc.pdf"
     dummy.write_bytes(b"%PDF-1.4")
     mock_client = MagicMock()
@@ -266,16 +213,6 @@ def test_gemini_non_orthogonal_rotation(tmp_path: Path):
     cls._cached_key = "AIzaSyTest"
     res = cls.classify_document(dummy, taxonomy=["Utilities"])
     assert res.orientation_correction == 0
-
-
-def test_sanitizers_numeric_types():
-    assert sanitize_description(12345) == "12345"
-    assert sanitize_description(None) == "Scanned_Document"
-    assert sanitize_description("") == "Scanned_Document"
-    assert sanitize_description("   ") == "Scanned_Document"
-    assert sanitize_description("???") == "Scanned_Document"
-    assert sanitize_date(20260901) == "260901"
-    assert sanitize_date(None) == datetime.now(UTC).strftime("%y%m%d")
 
 
 def test_malformed_confidence_and_orientation(tmp_path: Path):
@@ -304,8 +241,6 @@ def test_malformed_confidence_and_orientation(tmp_path: Path):
 
 
 def test_client_caching_and_key_rotation(monkeypatch):
-    from unittest.mock import patch
-
     cls = GeminiClassifier()
     with (
         patch("scansort.gemini_client.get_api_key", return_value="Key1"),
@@ -330,14 +265,7 @@ def test_client_caching_and_key_rotation(monkeypatch):
         assert mock_client_cls2.call_count == 1
 
 
-def test_sanitize_description_null_bytes_and_control_chars():
-    dirty = "Invoice\x00\x01\x1f\x7f_2026\tSpecial"
-    assert sanitize_description(dirty) == "Invoice_2026_Special"
-
-
 def test_analyze_document_safety_block_value_error_handled(tmp_path: Path):
-    from unittest.mock import PropertyMock
-
     dummy_pdf = tmp_path / "blocked.pdf"
     dummy_pdf.write_bytes(b"%PDF-1.4 test")
 

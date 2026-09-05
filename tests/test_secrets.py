@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import keyring.errors
+import pytest
 
 from scansort.secrets import (
     delete_api_key,
@@ -46,8 +47,6 @@ def test_set_api_key_stores_in_keyring():
 
 
 def test_set_api_key_raises_on_empty_or_whitespace():
-    import pytest
-
     with pytest.raises(ValueError, match="API key cannot be empty"):
         set_api_key("")
 

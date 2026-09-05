@@ -3,6 +3,9 @@
 import csv
 import json
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from scansort.audit_logger import AuditLogger
 from scansort.dispatcher import (
@@ -13,7 +16,7 @@ from scansort.dispatcher import (
     resolve_duplicates_dir,
     undo_last_move,
 )
-from scansort.gemini_client import DocumentClassification
+from scansort.models import DocumentClassification
 
 
 def test_generate_target_filename():
@@ -50,8 +53,6 @@ def test_resolve_destination_dir_blocks_unsafe_targets(tmp_path: Path):
 
 
 def test_resolve_destination_dir_symlink_to_root_falls_back(tmp_path: Path):
-    import pytest
-
     docs_root = tmp_path / "Documents"
     docs_root.mkdir()
     link = docs_root / "loop"
@@ -97,8 +98,6 @@ def test_resolve_duplicates_dir_unsafe_fallback_uses_review(tmp_path: Path):
 
 
 def test_resolve_duplicates_dir_symlink_escape_falls_back(tmp_path: Path):
-    import pytest
-
     docs_root = tmp_path / "Documents"
     docs_root.mkdir()
     link = docs_root / "escape"
@@ -160,49 +159,6 @@ def test_dispatch_file_atomic_move(tmp_path: Path):
         == docs_root / "Utilities" / "Electricity" / "260901_Origin_Energy_Bill.pdf"
     )
     assert final_path.read_bytes() == b"%PDF-1.4 test data"
-
-
-def test_audit_logger_records_jsonl_and_csv(tmp_path: Path):
-    log_dir = tmp_path / "logs"
-    jsonl_path = log_dir / "history.jsonl"
-    csv_path = log_dir / "history.csv"
-    mirror_csv = tmp_path / "Documents" / "_ScanSort_History.csv"
-
-    logger = AuditLogger(
-        jsonl_path=jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv
-    )
-
-    entry = {
-        "sha256": "abc1234567890",
-        "original_filename": "scan001.pdf",
-        "original_path": "/inbox/scan001.pdf",
-        "new_filename": "260901_Origin_Energy_Bill.pdf",
-        "destination_folder": "Utilities/Electricity",
-        "destination_path": "/docs/Utilities/Electricity/260901_Origin_Energy_Bill.pdf",
-        "summary": "Electricity bill",
-        "status": "SUCCESS",
-    }
-
-    logger.log_scan(entry)
-
-    assert jsonl_path.exists()
-    assert csv_path.exists()
-    assert mirror_csv.exists()
-
-    # Verify JSONL
-    line = jsonl_path.read_text(encoding="utf-8").strip()
-    data = json.loads(line)
-    assert data["sha256"] == "abc1234567890"
-    assert data["new_filename"] == "260901_Origin_Energy_Bill.pdf"
-    assert "timestamp" in data
-
-    # Verify CSV
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        assert len(rows) == 1
-        assert rows[0]["New Filename"] == "260901_Origin_Energy_Bill.pdf"
-        assert rows[0]["Folder"] == "Utilities/Electricity"
 
 
 def test_undo_last_move(tmp_path: Path):
@@ -391,27 +347,6 @@ def test_dispatch_empty_or_root_target_routes_to_review(tmp_path: Path):
         src.write_bytes(b"%PDF-1.4")
 
 
-def test_audit_logger_ensure_csv_headers_atomic(tmp_path: Path):
-    log_dir = tmp_path / "logs"
-    csv_file = log_dir / "history.csv"
-
-    logger = AuditLogger(csv_path=csv_file)
-    logger._ensure_csv_headers(csv_file)
-    assert csv_file.exists()
-
-    # Pre-populate some rows
-    with open(csv_file, "a", newline="", encoding="utf-8") as f:
-        f.write("2026-09-01,row1\n")
-
-    # Calling _ensure_csv_headers again MUST NOT truncate or overwrite the existing rows
-    logger._ensure_csv_headers(csv_file)
-    content = csv_file.read_text(encoding="utf-8")
-    assert "row1" in content
-
-
-from unittest.mock import patch
-
-
 def test_undo_nonexistent_history_file(tmp_path: Path):
     missing_file = tmp_path / "does_not_exist.jsonl"
     assert undo_last_move(missing_file) is None
@@ -438,14 +373,6 @@ def test_undo_destination_file_missing(tmp_path: Path):
     }
     hist_file.write_text(json.dumps(entry) + "\n", encoding="utf-8")
     assert undo_last_move(hist_file) is None
-
-
-def test_audit_logger_os_error_handling(tmp_path: Path):
-    log_dir = tmp_path / "logs"
-    logger = AuditLogger(jsonl_path=log_dir / "h.jsonl", csv_path=log_dir / "h.csv")
-    with patch("builtins.open", side_effect=OSError("Disk full")):
-        # Should not raise exception
-        logger.log_scan({"status": "SUCCESS"})
 
 
 def test_dispatch_blocks_path_traversal(tmp_path: Path):
@@ -520,24 +447,6 @@ def test_undo_multiple_moves(tmp_path: Path):
     assert undo_last_move(hist) is not None
     assert undo_last_move(hist) is not None
     assert undo_last_move(hist) is None
-
-
-def test_audit_logger_ensure_csv_headers_zero_byte_file(tmp_path: Path):
-    csv_file = tmp_path / "zero.csv"
-    csv_file.touch()  # 0 bytes
-
-    logger = AuditLogger(csv_path=csv_file)
-    logger._ensure_csv_headers(csv_file)
-
-    content = csv_file.read_text(encoding="utf-8")
-    assert "Timestamp" in content
-
-
-def test_audit_logger_ensure_csv_headers_os_error(tmp_path: Path):
-    csv_file = tmp_path / "fail.csv"
-    logger = AuditLogger(csv_path=csv_file)
-    with patch("builtins.open", side_effect=OSError("Disk failure")):
-        logger._ensure_csv_headers(csv_file)  # Must not raise
 
 
 def test_undo_log_write_os_error(tmp_path: Path):

@@ -5,13 +5,13 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from scansort.audit_logger import AuditLogger
 from scansort.config import AppConfig, get_default_app_dir
 from scansort.constants import (
     HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
-    MIRROR_HISTORY_CSV_NAME,
 )
 from scansort.dispatcher import (
     dispatch_file,
@@ -56,16 +56,96 @@ class ScanSortPipeline:
             fallback_folder=config.fallback_folder,
         )
 
-        mirror_path = (
-            config.documents_root / MIRROR_HISTORY_CSV_NAME
-            if config.mirror_log_to_documents
-            else None
-        )
         self.audit_logger = AuditLogger(
             jsonl_path=self.app_dir / HISTORY_JSONL_NAME,
             csv_path=self.app_dir / HISTORY_CSV_NAME,
-            mirror_csv_path=mirror_path,
+            mirror_csv_path=config.mirror_csv_path,
         )
+
+    def _build_audit_entry(
+        self,
+        file_hash: str,
+        file_path: Path,
+        destination_path: Path,
+        destination_folder: str,
+        summary: str,
+        status: str,
+    ) -> dict[str, Any]:
+        """Build a standardized audit log entry dictionary."""
+        return {
+            "sha256": file_hash,
+            "original_filename": file_path.name,
+            "original_path": str(file_path),
+            "new_filename": destination_path.name,
+            "destination_folder": destination_folder,
+            "destination_path": str(destination_path),
+            "summary": summary,
+            "status": status,
+        }
+
+    def _route_duplicate(
+        self,
+        file_path: Path,
+        file_hash: str,
+        existing_record: dict[str, Any],
+    ) -> Path:
+        """Route a detected duplicate scan to the duplicates review folder."""
+        logger.info(
+            "Duplicate scan detected for %s (hash: %s).",
+            file_path.name,
+            file_hash[:8],
+        )
+        clean_fallback = self.config.fallback_folder.strip("/\\")
+        resolved_docs = self.config.documents_root.resolve()
+        dup_dest_dir = resolve_duplicates_dir(
+            self.config.documents_root, clean_fallback
+        )
+
+        desired_dup_name = file_path.name
+        dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
+
+        if self.config.dry_run:
+            logger.info(
+                "[DRY RUN] Would route duplicate %s -> %s",
+                file_path.name,
+                dup_dest,
+            )
+            return dup_dest
+
+        dup_dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(file_path), str(dup_dest))
+
+        folder_str = str(dup_dest_dir.relative_to(resolved_docs)).replace("\\", "/")
+        summary_str = (
+            f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}"
+        )
+        self.audit_logger.log_scan(
+            self._build_audit_entry(
+                file_hash=file_hash,
+                file_path=file_path,
+                destination_path=dup_dest,
+                destination_folder=folder_str,
+                summary=summary_str,
+                status="DUPLICATE",
+            )
+        )
+        return dup_dest
+
+    def _stage_to_temp(self, file_path: Path) -> Path | None:
+        """Stage incoming scan into isolated application temporary directory."""
+        is_original_image = file_path.suffix.lower() != ".pdf"
+        tmp_pdf_name = f"{file_path.stem}_{uuid.uuid4().hex[:8]}.pdf"
+        staging_pdf = self.tmp_dir / tmp_pdf_name
+
+        try:
+            if is_original_image:
+                return convert_to_pdf(file_path, output_path=staging_pdf)
+            shutil.copy2(str(file_path), str(staging_pdf))
+            return staging_pdf
+        except (ValueError, OSError) as e:
+            logger.error("Failed to stage %s to temporary PDF: %s", file_path.name, e)
+            staging_pdf.unlink(missing_ok=True)
+            return None
 
     def process_file(self, file_path: Path) -> Path | None:
         """Run a single incoming document through the full stabilization, OCR, and filing pipeline.
@@ -92,60 +172,11 @@ class ScanSortPipeline:
         existing_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
 
         if existing_record:
-            logger.info(
-                "Duplicate scan detected for %s (hash: %s).",
-                file_path.name,
-                file_hash[:8],
-            )
-            clean_fallback = self.config.fallback_folder.strip("/\\")
-            resolved_docs = self.config.documents_root.resolve()
-            dup_dest_dir = resolve_duplicates_dir(
-                self.config.documents_root, clean_fallback
-            )
-
-            desired_dup_name = file_path.name
-            dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
-
-            if self.config.dry_run:
-                logger.info(
-                    "[DRY RUN] Would route duplicate %s -> %s",
-                    file_path.name,
-                    dup_dest,
-                )
-                return dup_dest
-
-            dup_dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(file_path), str(dup_dest))
-
-            self.audit_logger.log_scan(
-                {
-                    "sha256": file_hash,
-                    "original_filename": file_path.name,
-                    "original_path": str(file_path),
-                    "new_filename": dup_dest.name,
-                    "destination_folder": str(
-                        dup_dest_dir.relative_to(resolved_docs)
-                    ).replace("\\", "/"),
-                    "destination_path": str(dup_dest),
-                    "summary": f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}",
-                    "status": "DUPLICATE",
-                }
-            )
-            return dup_dest
+            return self._route_duplicate(file_path, file_hash, existing_record)
 
         # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
-        is_original_image = file_path.suffix.lower() != ".pdf"
-        tmp_pdf_name = f"{file_path.stem}_{uuid.uuid4().hex[:8]}.pdf"
-        staging_pdf = self.tmp_dir / tmp_pdf_name
-
-        try:
-            if is_original_image:
-                staging_pdf = convert_to_pdf(file_path, output_path=staging_pdf)
-            else:
-                shutil.copy2(str(file_path), str(staging_pdf))
-        except (ValueError, OSError) as e:
-            logger.error("Failed to stage %s to temporary PDF: %s", file_path.name, e)
-            staging_pdf.unlink(missing_ok=True)
+        staging_pdf = self._stage_to_temp(file_path)
+        if staging_pdf is None:
             return None
 
         try:
@@ -198,16 +229,14 @@ class ScanSortPipeline:
 
             # 8. Record audit log
             self.audit_logger.log_scan(
-                {
-                    "sha256": file_hash,
-                    "original_filename": file_path.name,
-                    "original_path": str(file_path),
-                    "new_filename": final_dest.name,
-                    "destination_folder": classification.target_folder,
-                    "destination_path": str(final_dest),
-                    "summary": classification.summary,
-                    "status": "SUCCESS",
-                }
+                self._build_audit_entry(
+                    file_hash=file_hash,
+                    file_path=file_path,
+                    destination_path=final_dest,
+                    destination_folder=classification.target_folder,
+                    summary=classification.summary,
+                    status="SUCCESS",
+                )
             )
 
             logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)

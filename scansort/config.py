@@ -8,7 +8,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from scansort.constants import REVIEW_NEEDED_DIR
+from scansort.constants import (
+    CONFIG_FILENAME,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_MAX_FOLDER_DEPTH,
+    MIRROR_HISTORY_CSV_NAME,
+    REVIEW_NEEDED_DIR,
+)
 from scansort.fs_utils import atomic_write, relative_folder_is_safe
 
 logger = logging.getLogger(__name__)
@@ -28,7 +34,7 @@ def get_default_app_dir() -> Path:
 
 def get_default_config_path() -> Path:
     """Return the default path to config.json."""
-    return get_default_app_dir() / "config.json"
+    return get_default_app_dir() / CONFIG_FILENAME
 
 
 def _default_watch_folder() -> Path:
@@ -45,11 +51,18 @@ class AppConfig(BaseModel):
     watch_folder: Path = Field(default_factory=_default_watch_folder)
     documents_root: Path = Field(default_factory=_default_documents_root)
     fallback_folder: str = REVIEW_NEEDED_DIR
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = DEFAULT_GEMINI_MODEL
     start_on_boot: bool = True
-    max_folder_depth: int = Field(default=3, ge=1, le=10)
+    max_folder_depth: int = Field(default=DEFAULT_MAX_FOLDER_DEPTH, ge=1, le=10)
     dry_run: bool = False
     mirror_log_to_documents: bool = False
+
+    @property
+    def mirror_csv_path(self) -> Path | None:
+        """Return the path to the mirror history CSV in Documents, or None if disabled."""
+        if self.mirror_log_to_documents:
+            return self.documents_root / MIRROR_HISTORY_CSV_NAME
+        return None
 
     @field_validator("fallback_folder")
     @classmethod
@@ -93,15 +106,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
                 "Config file at %s is not a dictionary. Using defaults.", path
             )
             return AppConfig()
-        if data.get("watch_folder") is not None:
-            data["watch_folder"] = Path(data["watch_folder"])
-        else:
-            data.pop("watch_folder", None)
-        if data.get("documents_root") is not None:
-            data["documents_root"] = Path(data["documents_root"])
-        else:
-            data.pop("documents_root", None)
-        return AppConfig(**data)
+        clean_data = {k: v for k, v in data.items() if v is not None}
+        return AppConfig(**clean_data)
     except (json.JSONDecodeError, OSError, ValueError, TypeError) as e:
         logger.warning(
             "Error reading config at %s (%s). Using default configuration.", path, e
@@ -112,17 +118,5 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 def save_config(config: AppConfig, config_path: Path | None = None) -> None:
     """Serialize configuration to a JSON file (strictly excluding secrets)."""
     path = config_path or get_default_config_path()
-
-    data = {
-        "watch_folder": str(config.watch_folder),
-        "documents_root": str(config.documents_root),
-        "fallback_folder": config.fallback_folder,
-        "gemini_model": config.gemini_model,
-        "start_on_boot": config.start_on_boot,
-        "max_folder_depth": config.max_folder_depth,
-        "dry_run": config.dry_run,
-        "mirror_log_to_documents": config.mirror_log_to_documents,
-    }
-
-    atomic_write(path, json.dumps(data, indent=2))
+    atomic_write(path, json.dumps(config.model_dump(mode="json"), indent=2))
     logger.info("Configuration saved to %s", path)

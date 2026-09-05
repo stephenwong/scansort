@@ -3,11 +3,15 @@
 import json
 import logging
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 
 from scansort.audit_logger import AuditLogger
-from scansort.constants import DUPLICATES_DIR, REVIEW_NEEDED_DIR, UNDONE_PREFIX
+from scansort.constants import (
+    DUPLICATES_DIR,
+    REVIEW_NEEDED_DIR,
+    STATUS_UNDONE,
+    UNDONE_PREFIX,
+)
 from scansort.fs_utils import relative_folder_is_safe
 from scansort.models import DocumentClassification
 
@@ -30,20 +34,18 @@ def resolve_collision(dest_folder: Path, filename: str) -> Path:
     """Check if a filename collision exists and append incrementing counter _1, _2 if needed.
 
     Args:
-        dest_folder: Directory where file will be placed.
-        filename: Desired filename.
+        dest_folder: Target destination folder.
+        filename: Proposed filename.
 
     Returns:
-        Available non-colliding Path.
+        Safe, non-colliding destination Path.
     """
-    candidate = dest_folder / filename
-    if not candidate.exists():
-        return candidate
+    target = dest_folder / filename
+    if not target.exists():
+        return target
 
-    p = Path(filename)
-    stem = p.stem
-    suffix = p.suffix
-
+    stem = target.stem
+    suffix = target.suffix
     counter = 1
     while True:
         candidate = dest_folder / f"{stem}_{counter}{suffix}"
@@ -52,11 +54,48 @@ def resolve_collision(dest_folder: Path, filename: str) -> Path:
         counter += 1
 
 
-def resolve_destination_dir(docs_root: Path, relative_target: str) -> Path:
-    """Resolve a model/user-supplied relative folder to an absolute directory inside docs_root.
+def _resolve_safe_subfolder(
+    docs_root: Path,
+    relative_folder: str,
+    context_name: str = "target",
+) -> Path:
+    """Resolve and validate a relative subfolder against docs_root with safety fallback."""
+    clean_folder = relative_folder.strip("/\\")
+    resolved_docs = docs_root.resolve()
+    review_dir = (docs_root / REVIEW_NEEDED_DIR).resolve()
 
-    Empty, root-referencing (``/``, ``\\``, ``.``), and unsafe targets (path
-    traversal, absolute paths, or the documents root itself) fall back to the
+    if not clean_folder or clean_folder == ".":
+        return review_dir
+
+    if not relative_folder_is_safe(clean_folder):
+        logger.warning(
+            "Path traversal attempt or root folder %s: %s. Routing to %s.",
+            context_name,
+            relative_folder,
+            REVIEW_NEEDED_DIR,
+        )
+        return review_dir
+
+    candidate_dir = (docs_root / clean_folder).resolve()
+    if (
+        not candidate_dir.is_relative_to(resolved_docs)
+        or candidate_dir == resolved_docs
+    ):
+        logger.warning(
+            "Path traversal attempt or root folder %s: %s. Routing to %s.",
+            context_name,
+            relative_folder,
+            REVIEW_NEEDED_DIR,
+        )
+        return review_dir
+
+    return candidate_dir
+
+
+def resolve_destination_dir(docs_root: Path, relative_target: str) -> Path:
+    """Resolve and validate the destination directory against the taxonomy and docs root.
+
+    Ambiguous, traversal, or root matches are strictly redirected to the
     ``_Review_Needed`` directory to guarantee nothing is filed outside the root.
 
     Args:
@@ -66,28 +105,7 @@ def resolve_destination_dir(docs_root: Path, relative_target: str) -> Path:
     Returns:
         Absolute, resolved destination directory guaranteed to sit under docs_root.
     """
-    clean_target = relative_target.strip("/\\")
-    resolved_docs = docs_root.resolve()
-    if not clean_target or clean_target == ".":
-        return (docs_root / REVIEW_NEEDED_DIR).resolve()
-
-    if not relative_folder_is_safe(clean_target):
-        logger.warning(
-            "Path traversal attempt or root folder target: %s. Routing to %s.",
-            relative_target,
-            REVIEW_NEEDED_DIR,
-        )
-        return (docs_root / REVIEW_NEEDED_DIR).resolve()
-
-    target_dir = (docs_root / clean_target).resolve()
-    if not target_dir.is_relative_to(resolved_docs) or target_dir == resolved_docs:
-        logger.warning(
-            "Path traversal attempt or root folder target: %s. Routing to %s.",
-            relative_target,
-            REVIEW_NEEDED_DIR,
-        )
-        return (docs_root / REVIEW_NEEDED_DIR).resolve()
-    return target_dir
+    return _resolve_safe_subfolder(docs_root, relative_target, context_name="target")
 
 
 def resolve_duplicates_dir(docs_root: Path, fallback_folder: str) -> Path:
@@ -138,25 +156,80 @@ def dispatch_file(
     docs_root: Path,
     classification: DocumentClassification,
 ) -> Path:
-    """Move the document atomically into its destination folder with collision handling.
+    """Execute the atomic move of the source file to its classified destination.
+
+    Resolves destination folder safely, resolves collisions via incremental counters,
+    creates required parent directories, and executes an atomic move.
 
     Args:
-        source_path: Path to the stabilized source file.
-        docs_root: Root of Documents folder.
-        classification: Document classification metadata.
+        source_path: Path to the processed (or stabilized) file in drop folder.
+        docs_root: Root of Documents directory.
+        classification: Extracted classification from Gemini.
 
     Returns:
-        Path of the filed document in its destination folder.
-    """
-    target_dir = resolve_destination_dir(docs_root, classification.target_folder)
-    target_dir.mkdir(parents=True, exist_ok=True)
+        Final destination Path of the filed document.
 
-    desired_filename = generate_target_filename(classification)
-    dest_path = resolve_collision(target_dir, desired_filename)
+    Raises:
+        OSError: If destination cannot be created or file move fails.
+    """
+    dest_dir = resolve_destination_dir(docs_root, classification.target_folder)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    target_filename = generate_target_filename(classification)
+    dest_path = resolve_collision(dest_dir, target_filename)
 
     shutil.move(str(source_path), str(dest_path))
-    logger.info("Filed %s -> %s", source_path.name, dest_path)
+    logger.info("Filed document: %s -> %s", source_path.name, dest_path)
     return dest_path
+
+
+def _find_last_reversible_record(jsonl_path: Path) -> dict[str, object] | None:
+    """Find the most recent SUCCESS or COLLISION_RENAMED record not yet undone."""
+    if not jsonl_path.exists():
+        return None
+
+    lines = jsonl_path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        return None
+
+    undone_destinations: set[str] = set()
+
+    for line in reversed(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            record = json.loads(stripped)
+            if not isinstance(record, dict):
+                continue
+            status = record.get("status")
+            dest_p = record.get("destination_path")
+            if status == STATUS_UNDONE and dest_p:
+                undone_destinations.add(str(dest_p))
+            elif status in {"SUCCESS", "COLLISION_RENAMED"} and dest_p:
+                if dest_p in undone_destinations:
+                    continue
+                if not Path(str(dest_p)).exists():
+                    logger.debug("Skipping missing file %s during undo search.", dest_p)
+                    continue
+                return record
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+def _resolve_restored_path(original_path: Path, dest_path: Path) -> Path:
+    """Determine the destination path in the drop folder with extension and collision handling."""
+    target_name = original_path.name
+    if dest_path.suffix.lower() == ".pdf" and original_path.suffix.lower() != ".pdf":
+        target_name = original_path.with_suffix(".pdf").name
+
+    if not target_name.startswith(UNDONE_PREFIX):
+        target_name = f"{UNDONE_PREFIX}{target_name}"
+
+    original_path.parent.mkdir(parents=True, exist_ok=True)
+    return resolve_collision(original_path.parent, target_name)
 
 
 def undo_last_move(
@@ -175,65 +248,13 @@ def undo_last_move(
     Returns:
         Path of restored file in drop folder, or None if no reversible action found.
     """
-    if not jsonl_path.exists():
+    target_record = _find_last_reversible_record(jsonl_path)
+    if target_record is None:
         return None
 
-    lines = jsonl_path.read_text(encoding="utf-8").splitlines()
-    if not lines:
-        return None
-
-    # Search backwards for last SUCCESS or COLLISION_RENAMED record that hasn't been undone
-    target_idx = None
-    target_record = None
-    undone_destinations: set[str] = set()
-
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-            if not isinstance(record, dict):
-                continue
-            status = record.get("status")
-            dest_p = record.get("destination_path")
-            if status == "UNDONE" and dest_p:
-                undone_destinations.add(dest_p)
-            elif status in {"SUCCESS", "COLLISION_RENAMED"} and dest_p:
-                if dest_p in undone_destinations:
-                    continue
-                # Skip missing destination files (e.g. if deleted/moved manually by user)
-                if not Path(dest_p).exists():
-                    logger.debug("Skipping missing file %s during undo search.", dest_p)
-                    continue
-                target_idx = i
-                target_record = record
-                break
-        except json.JSONDecodeError:
-            continue
-
-    if target_record is None or target_idx is None:
-        return None
-
-    dest_path = Path(target_record["destination_path"])
-    original_path = Path(target_record["original_path"])
-
-    if not dest_path.exists():
-        logger.warning("Cannot undo: file %s no longer exists.", dest_path)
-        return None
-
-    # Preserve .pdf extension if original was converted from an image
-    target_name = original_path.name
-    if dest_path.suffix.lower() == ".pdf" and original_path.suffix.lower() != ".pdf":
-        target_name = original_path.with_suffix(".pdf").name
-
-    # Prefix with _undone_ to avoid immediate re-ingestion by watcher (S1-07)
-    if not target_name.startswith(UNDONE_PREFIX):
-        target_name = f"{UNDONE_PREFIX}{target_name}"
-
-    # Move back to original drop folder with collision handling
-    original_path.parent.mkdir(parents=True, exist_ok=True)
-    restore_path = resolve_collision(original_path.parent, target_name)
+    dest_path = Path(str(target_record["destination_path"]))
+    original_path = Path(str(target_record["original_path"]))
+    restore_path = _resolve_restored_path(original_path, dest_path)
 
     try:
         shutil.move(str(dest_path), str(restore_path))
@@ -241,13 +262,10 @@ def undo_last_move(
         logger.error("Failed to restore file %s: %s", dest_path, e)
         return None
 
-    # Append an undo marker record via the shared audit logger so JSONL, CSV,
-    # and the optional mirrored CSV stay consistent (S1-10)
     undo_record = dict(target_record)
-    now_utc = datetime.now(UTC)
-    undo_record["status"] = "UNDONE"
-    undo_record["timestamp"] = now_utc.isoformat()
-    undo_record["local_time"] = now_utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    undo_record.pop("timestamp", None)
+    undo_record.pop("local_time", None)
+    undo_record["status"] = STATUS_UNDONE
     undo_record["note"] = f"Reversed move of {dest_path.name} back to {restore_path}"
 
     AuditLogger(

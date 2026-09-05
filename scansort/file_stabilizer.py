@@ -1,4 +1,5 @@
 import logging
+import os
 import stat
 import sys
 import time
@@ -24,23 +25,17 @@ def is_file_locked(path: Path) -> bool:
             if sys.platform == "win32":
                 import msvcrt
 
-                size = path.stat().st_size
+                size = os.fstat(f.fileno()).st_size
                 if size > 0:
-                    try:
-                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-                    except OSError:
-                        return True
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 import fcntl
 
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    return True
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         return False
-    except (OSError, PermissionError):
+    except OSError:
         return True
 
 
@@ -72,12 +67,8 @@ def wait_for_file_stability(
                 logger.warning("Path %s is not a regular file to stabilize.", path)
                 return False
             current_size = st.st_size
-
         except OSError:
-            consecutive_stable = 0
-            last_size = -1
-            time.sleep(poll_interval)
-            continue
+            current_size = 0
 
         if current_size == 0:
             # Scanner created the file handle but has not flushed bytes yet

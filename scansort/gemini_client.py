@@ -10,7 +10,11 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-from scansort.constants import REVIEW_NEEDED_DIR
+from scansort.constants import (
+    DEFAULT_GEMINI_MODEL,
+    MIN_CONFIDENCE_THRESHOLD,
+    REVIEW_NEEDED_DIR,
+)
 from scansort.folder_mapper import format_taxonomy_for_prompt
 from scansort.fs_utils import relative_folder_is_safe
 from scansort.models import DocumentClassification, sanitize_date, sanitize_description
@@ -23,7 +27,7 @@ class GeminiClassifier:
     """Client for classifying documents using Google Gemini 2.5 Flash."""
 
     def __init__(
-        self, api_key: str | None = None, model: str = "gemini-2.5-flash"
+        self, api_key: str | None = None, model: str = DEFAULT_GEMINI_MODEL
     ) -> None:
         self.api_key = api_key
         self.model = model
@@ -45,26 +49,12 @@ class GeminiClassifier:
         self._client = genai.Client(api_key=active_key)
         return self._client
 
-    def classify_document(
-        self,
-        pdf_path: Path,
-        taxonomy: list[str],
-        hints: dict[str, list[str]] | None = None,
-    ) -> DocumentClassification:
-        """Analyze a PDF document and return structured classification and metadata.
-
-        Args:
-            pdf_path: Path to the PDF document.
-            taxonomy: Discovered folder taxonomy paths.
-            hints: Optional dictionary mapping folder paths to keyword hints.
-
-        Returns:
-            Validated DocumentClassification instance.
-        """
-        client = self._get_client()
+    def _build_system_instruction(
+        self, taxonomy: list[str], hints: dict[str, list[str]] | None = None
+    ) -> str:
+        """Build the structured system prompt including discovered taxonomy."""
         taxonomy_block = format_taxonomy_for_prompt(taxonomy, hints)
-
-        system_instruction = (
+        return (
             "You are ScanSort, an expert document sorting assistant for personal and business records.\n"
             "Analyze the attached scanned document and classify it strictly according to the user's pre-existing folder hierarchy.\n\n"
             f"{taxonomy_block}\n\n"
@@ -82,11 +72,96 @@ class GeminiClassifier:
             "6. Summary: Provide a crisp 1-sentence summary of the document contents."
         )
 
+    def _parse_and_route_response(
+        self, raw_text: str, taxonomy: list[str]
+    ) -> DocumentClassification:
+        """Parse raw JSON output from Gemini and route to a valid taxonomy folder."""
+        try:
+            data = json.loads(raw_text)
+        except json.JSONDecodeError:
+            data = {}
+
+        if not isinstance(data, dict):
+            data = {}
+
+        desc = sanitize_description(data.get("description", "Document"))
+        doc_date = sanitize_date(data.get("document_date", ""))
+        raw_type = data.get("document_type", "Other")
+        doc_type = str(raw_type) if raw_type is not None else "Other"
+        raw_target = data.get("target_folder", REVIEW_NEEDED_DIR)
+        target = str(raw_target) if raw_target is not None else REVIEW_NEEDED_DIR
+
+        try:
+            conf = float(data.get("confidence", 0.0))
+        except (ValueError, TypeError):
+            conf = 0.0
+
+        try:
+            orient_val = int(data.get("orientation_correction", 0))
+            orient = orient_val if orient_val in {0, 90, 180, 270} else 0
+        except (ValueError, TypeError):
+            orient = 0
+
+        summary = str(data.get("summary", "") or "").strip()
+
+        clean_target = target.strip()
+        if not relative_folder_is_safe(clean_target):
+            target = REVIEW_NEEDED_DIR
+        else:
+            target = "/".join(
+                part for part in clean_target.replace("\\", "/").split("/") if part
+            )
+            if doc_type.lower() == "blank":
+                target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
+            elif conf < MIN_CONFIDENCE_THRESHOLD or (
+                target not in taxonomy and not target.startswith(REVIEW_NEEDED_DIR)
+            ):
+                target = REVIEW_NEEDED_DIR
+
+        return DocumentClassification(
+            document_date=doc_date,
+            description=desc,
+            target_folder=target,
+            confidence=conf,
+            orientation_correction=orient,
+            document_type=doc_type,
+            summary=summary,
+        )
+
+    def _create_fallback_classification(self, error_msg: str) -> DocumentClassification:
+        """Create a safe fallback classification pointing to _Review_Needed."""
+        return DocumentClassification(
+            document_date=datetime.now(UTC).strftime("%y%m%d"),
+            description="Failed_Scan_Classification",
+            target_folder=REVIEW_NEEDED_DIR,
+            confidence=0.0,
+            orientation_correction=0,
+            document_type="Other",
+            summary=f"Automated classification encountered error: {error_msg[:100]}",
+        )
+
+    def classify_document(
+        self,
+        pdf_path: Path,
+        taxonomy: list[str],
+        hints: dict[str, list[str]] | None = None,
+    ) -> DocumentClassification:
+        """Analyze a PDF document and return structured classification and metadata.
+
+        Args:
+            pdf_path: Path to the PDF document.
+            taxonomy: Discovered folder taxonomy paths.
+            hints: Optional dictionary mapping folder paths to keyword hints.
+
+        Returns:
+            Validated DocumentClassification instance.
+        """
+        client = self._get_client()
+        system_instruction = self._build_system_instruction(taxonomy, hints)
+
         try:
             pdf_bytes = pdf_path.read_bytes()
-
             part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
-
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 response_mime_type="application/json",
@@ -104,81 +179,22 @@ class GeminiClassifier:
                 config=config,
             )
 
-            raw_text = response.text or "{}"
-            try:
-                data = json.loads(raw_text)
-            except json.JSONDecodeError:
-                data = {}
-
-            if not isinstance(data, dict):
-                data = {}
-
-            # Sanitize description and date safely
-            desc = sanitize_description(data.get("description", "Document"))
-            doc_date = sanitize_date(data.get("document_date", ""))
-            raw_type = data.get("document_type", "Other")
-            doc_type = str(raw_type) if raw_type is not None else "Other"
-            raw_target = data.get("target_folder", REVIEW_NEEDED_DIR)
-            target = str(raw_target) if raw_target is not None else REVIEW_NEEDED_DIR
-            try:
-                conf = float(data.get("confidence", 0.0))
-            except (ValueError, TypeError):
-                conf = 0.0
-
-            try:
-                orient_val = int(data.get("orientation_correction", 0))
-                orient = orient_val % 360 if orient_val in {0, 90, 180, 270} else 0
-            except (ValueError, TypeError):
-                orient = 0
-
-            summary = str(data.get("summary", "") or "").strip()
-
-            # Apply folder routing and security rules
-            clean_target = target.strip()
-            if not relative_folder_is_safe(clean_target):
-                target = REVIEW_NEEDED_DIR
-            else:
-                target = "/".join(
-                    part for part in clean_target.replace("\\", "/").split("/") if part
-                )
-                if doc_type.lower() == "blank":
-                    target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
-                elif conf < 0.70 or (
-                    target not in taxonomy and not target.startswith(REVIEW_NEEDED_DIR)
-                ):
-                    target = REVIEW_NEEDED_DIR
-
-            return DocumentClassification(
-                document_date=doc_date,
-                description=desc,
-                target_folder=target,
-                confidence=conf,
-                orientation_correction=orient,
-                document_type=doc_type,
-                summary=summary,
-            )
+            return self._parse_and_route_response(response.text or "{}", taxonomy)
 
         except (
             APIError,
             httpx.HTTPError,
-            json.JSONDecodeError,
             OSError,
             RuntimeError,
             TypeError,
             AttributeError,
             ValueError,
         ) as e:
-            redacted_err = redact_secrets_from_text(str(e), self.api_key)
+            redacted_err = redact_secrets_from_text(
+                str(e), self._cached_key or self.api_key
+            )
             logger.warning(
                 "Gemini classification failed: %s. Routing to _Review_Needed.",
                 redacted_err,
             )
-            return DocumentClassification(
-                document_date=datetime.now(UTC).strftime("%y%m%d"),
-                description="Failed_Scan_Classification",
-                target_folder=REVIEW_NEEDED_DIR,
-                confidence=0.0,
-                orientation_correction=0,
-                document_type="Other",
-                summary=f"Automated classification encountered error: {redacted_err[:100]}",
-            )
+            return self._create_fallback_classification(redacted_err)

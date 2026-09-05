@@ -89,8 +89,11 @@ def test_watcher_start_and_stop_cleanly(tmp_path: Path):
     file_queue = queue.Queue()
     watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
 
+    started = threading.Event()
+
     # Mock watchfiles.watch as a generator
     def mock_watch(*args, **kwargs):
+        started.set()
         while not watcher._stop_event.is_set():
             time.sleep(0.01)
             yield []
@@ -99,7 +102,7 @@ def test_watcher_start_and_stop_cleanly(tmp_path: Path):
         thread = threading.Thread(target=watcher.start)
         thread.start()
 
-        time.sleep(0.05)
+        started.wait(timeout=2.0)
         assert watcher.is_running() is True
 
         watcher.stop()
@@ -165,9 +168,15 @@ def test_switch_folder_unblocks_watch(tmp_path: Path):
 
     w = DropFolderWatcher(watch_folder=folder_a, file_queue=queue.Queue())
     watched = []
+    folder_a_watched = threading.Event()
+    folder_b_watched = threading.Event()
 
     def mock_watch(folder, *args, **kwargs):
         watched.append(folder)
+        if folder == folder_a:
+            folder_a_watched.set()
+        elif folder == folder_b:
+            folder_b_watched.set()
         stop_event = kwargs.get("stop_event")
         while not (stop_event and stop_event.is_set()):
             time.sleep(0.01)
@@ -176,9 +185,9 @@ def test_switch_folder_unblocks_watch(tmp_path: Path):
     with patch("scansort.watcher.watch", side_effect=mock_watch):
         t = threading.Thread(target=w.start)
         t.start()
-        time.sleep(0.05)
+        folder_a_watched.wait(timeout=2.0)
         w.switch_folder(folder_b)
-        time.sleep(0.05)
+        folder_b_watched.wait(timeout=2.0)
         w.stop()
         t.join(timeout=1.0)
         assert folder_b in watched

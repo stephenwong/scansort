@@ -5,35 +5,28 @@ import logging
 from pathlib import Path
 
 from scansort.config import get_default_app_dir
-from scansort.constants import REVIEW_NEEDED_DIR
-from scansort.folder_hints import load_folder_hints
+from scansort.constants import (
+    DEFAULT_IGNORED_FOLDERS,
+    DEFAULT_MAX_FOLDER_DEPTH,
+    REVIEW_NEEDED_DIR,
+)
+from scansort.folder_hints import load_folder_hints, normalize_folder_key
 from scansort.fs_utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_IGNORED_FOLDERS: set[str] = {
-    "my games",
-    "zoom",
-    "custom office templates",
-    "onenote notebooks",
-    "outlook files",
-    "windowspowershell",
-    "adobe",
-    "audacity",
-    "camtasia",
-    "power bi desktop",
-    "electronic arts",
-    "square enix",
-    "rockstar games",
-    "call of duty",
-    "$recycle.bin",
-    "system volume information",
-}
+# Re-export for backward compatibility with external callers
+__all__ = [
+    "DEFAULT_IGNORED_FOLDERS",
+    "FolderMapper",
+    "format_taxonomy_for_prompt",
+    "scan_documents_folders",
+]
 
 
 def scan_documents_folders(
     docs_root: Path,
-    max_depth: int = 3,
+    max_depth: int = DEFAULT_MAX_FOLDER_DEPTH,
     fallback_folder: str = REVIEW_NEEDED_DIR,
     ignored_folders: set[str] | None = None,
 ) -> list[str]:
@@ -48,7 +41,7 @@ def scan_documents_folders(
     Returns:
         Sorted list of relative POSIX folder paths (e.g. 'Finances/Banking/ANZ').
     """
-    if not docs_root.exists() or not docs_root.is_dir():
+    if not docs_root.is_dir():
         return []
 
     ignored = (
@@ -63,7 +56,7 @@ def scan_documents_folders(
 
         try:
             entries = list(current.iterdir())
-        except (OSError, PermissionError) as e:
+        except OSError as e:
             logger.debug("Skipping inaccessible directory %s: %s", current, e)
             return
 
@@ -72,7 +65,7 @@ def scan_documents_folders(
             try:
                 if p.is_dir():
                     subdirs.append(p)
-            except (OSError, PermissionError) as e:
+            except OSError as e:
                 logger.debug("Skipping inaccessible entry %s: %s", p, e)
 
         for subdir in sorted(subdirs):
@@ -85,7 +78,6 @@ def scan_documents_folders(
             if (
                 name.startswith(".")
                 or rel_lower == fallback_norm
-                or rel_lower.startswith(f"{fallback_norm}/")
                 or name_lower in ignored
             ):
                 continue
@@ -114,8 +106,7 @@ def format_taxonomy_for_prompt(
         return "No pre-existing folders detected."
 
     active_hints = {
-        k.replace("\\", "/").strip().strip("/").lower(): v
-        for k, v in (hints or {}).items()
+        normalize_folder_key(k).lower(): v for k, v in (hints or {}).items()
     }
     lines = ["AVAILABLE DESTINATION FOLDERS:"]
     for folder in folders:
@@ -137,7 +128,7 @@ class FolderMapper:
         docs_root: Path,
         cache_path: Path | None = None,
         hints_path: Path | None = None,
-        max_depth: int = 3,
+        max_depth: int = DEFAULT_MAX_FOLDER_DEPTH,
         fallback_folder: str = REVIEW_NEEDED_DIR,
     ) -> None:
         self.docs_root = docs_root
@@ -167,42 +158,51 @@ class FolderMapper:
         except (OSError, ValueError) as e:
             logger.warning("Failed to write folder cache to %s: %s", self.cache_path, e)
 
-        return self._cached_folders
+        return list(self._cached_folders)
+
+    def _is_memory_cache_valid(self) -> bool:
+        """Check if in-memory cache is present and matches the disk file modification time."""
+        if self._cached_folders is None:
+            return False
+        try:
+            if self.cache_path.exists():
+                current_mtime = self.cache_path.stat().st_mtime
+                if self._cache_mtime is not None and current_mtime != self._cache_mtime:
+                    self._cached_folders = None
+                    return False
+        except OSError:
+            pass
+        return self._cached_folders is not None
+
+    def _load_from_disk_cache(self) -> list[str] | None:
+        """Load taxonomy from the disk cache file if valid for the current documents root."""
+        if not self.cache_path.exists():
+            return None
+        try:
+            data = json.loads(self.cache_path.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict):
+                cached_root = data.get("documents_root")
+                if (
+                    cached_root
+                    and Path(cached_root).resolve() == self.docs_root.resolve()
+                ):
+                    folders = data.get("folders", [])
+                    if isinstance(folders, list):
+                        self._cached_folders = [str(f) for f in folders]
+                        self._cache_mtime = self.cache_path.stat().st_mtime
+                        return self._cached_folders
+        except (OSError, ValueError):
+            pass
+        return None
 
     def get_taxonomy(self) -> list[str]:
         """Return the current taxonomy, loading from cache if available."""
-        if self._cached_folders is not None:
-            try:
-                if self.cache_path.exists():
-                    current_mtime = self.cache_path.stat().st_mtime
-                    if (
-                        self._cache_mtime is not None
-                        and current_mtime != self._cache_mtime
-                    ):
-                        self._cached_folders = None
-            except OSError:
-                pass
-            if self._cached_folders is not None:
-                return self._cached_folders
-
-        if self.cache_path.exists():
-            try:
-                data = json.loads(self.cache_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    cached_root = data.get("documents_root")
-                    if (
-                        cached_root
-                        and Path(cached_root).resolve() == self.docs_root.resolve()
-                    ):
-                        folders = data.get("folders", [])
-                        if isinstance(folders, list):
-                            self._cached_folders = [str(f) for f in folders]
-                            self._cache_mtime = self.cache_path.stat().st_mtime
-                            return self._cached_folders
-            except (json.JSONDecodeError, OSError, ValueError, AttributeError):
-                pass
-
-        return self.refresh()
+        if self._is_memory_cache_valid():
+            return list(self._cached_folders)
+        disk_folders = self._load_from_disk_cache()
+        if disk_folders is not None:
+            return list(disk_folders)
+        return list(self.refresh())
 
     def get_prompt_string(self) -> str:
         """Return the taxonomy formatted for the Gemini prompt."""

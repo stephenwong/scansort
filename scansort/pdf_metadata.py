@@ -7,6 +7,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
 
+from scansort.constants import DEFAULT_CREATOR
 from scansort.fs_utils import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def process_pdf_metadata_and_rotation(
     Returns:
         Path to the modified PDF file.
     """
-    if not pdf_path.exists():
+    if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF file not found at {pdf_path}")
 
     target_path = output_path or pdf_path
@@ -55,7 +56,6 @@ def process_pdf_metadata_and_rotation(
                 "Empty password decryption attempt failed for %s", pdf_path.name
             )
         try:
-            _ = len(reader.pages)
             if reader.pages:
                 _ = reader.pages[0]
         except Exception as e:
@@ -82,20 +82,20 @@ def process_pdf_metadata_and_rotation(
             if k and v:
                 metadata[str(k)] = str(v)
 
-    if title:
+    if title and title.strip():
         metadata["/Title"] = title.strip()
-    if subject:
+    if subject and subject.strip():
         metadata["/Subject"] = subject.strip()
     if keywords:
         if isinstance(keywords, (list, tuple, set)):
-            metadata["/Keywords"] = ", ".join(
-                sorted(str(k).strip() for k in keywords if str(k).strip())
-            )
-        else:
+            cleaned = sorted(str(k).strip() for k in keywords if str(k).strip())
+            if cleaned:
+                metadata["/Keywords"] = ", ".join(cleaned)
+        elif str(keywords).strip():
             metadata["/Keywords"] = str(keywords).strip()
-    if author:
+    if author and author.strip():
         metadata["/Author"] = author.strip()
-    metadata["/Creator"] = "ScanSort Desktop Engine"
+    metadata["/Creator"] = DEFAULT_CREATOR
 
     if metadata:
         writer.add_metadata(metadata)

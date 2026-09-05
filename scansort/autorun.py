@@ -11,6 +11,24 @@ RUN_KEY_NAME = "ScanSort"
 WIN_REG_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+def _get_winreg():
+    """Retrieve the winreg module or test mock seam."""
+    import winreg
+
+    return getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
+
+
+def _build_autorun_command(executable_path: str | None = None) -> str:
+    """Format the full command line invocation for background watch mode."""
+    if executable_path:
+        base_cmd = f'"{executable_path}"'
+    elif getattr(sys, "frozen", False):
+        base_cmd = f'"{sys.executable}"'
+    else:
+        base_cmd = f'"{sys.executable}" -m scansort'
+    return f"{base_cmd} watch --minimized"
+
+
 def _get_linux_autostart_path() -> Path:
     xdg_config = os.environ.get("XDG_CONFIG_HOME")
     base = Path(xdg_config) if xdg_config else Path.home() / ".config"
@@ -21,9 +39,7 @@ def is_autorun_enabled() -> bool:
     """Check whether ScanSort is set to auto-start on user login."""
     if sys.platform == "win32":
         try:
-            import winreg
-
-            reg = getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
+            reg = _get_winreg()
             with reg.OpenKey(
                 reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_READ
             ) as key:
@@ -48,25 +64,16 @@ def enable_autorun(executable_path: str | None = None) -> bool:
     Returns:
         True if successfully enabled, False otherwise.
     """
-    if executable_path:
-        base_cmd = f'"{executable_path}"'
-    elif getattr(sys, "frozen", False):
-        base_cmd = f'"{sys.executable}"'
-    else:
-        base_cmd = f'"{sys.executable}" -m scansort'
+    full_cmd = _build_autorun_command(executable_path)
 
     if sys.platform == "win32":
         try:
-            import winreg
-
-            reg = getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
+            reg = _get_winreg()
             with reg.OpenKey(
                 reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE
             ) as key:
-                reg.SetValueEx(
-                    key, RUN_KEY_NAME, 0, reg.REG_SZ, f"{base_cmd} watch --minimized"
-                )
-                logger.info("Enabled Windows autorun registry key for %s", base_cmd)
+                reg.SetValueEx(key, RUN_KEY_NAME, 0, reg.REG_SZ, full_cmd)
+                logger.info("Enabled Windows autorun registry key for %s", full_cmd)
                 return True
         except (OSError, AttributeError, ImportError) as e:
             logger.warning("Failed to enable Windows autorun registry key: %s", e)
@@ -81,7 +88,7 @@ def enable_autorun(executable_path: str | None = None) -> bool:
                 "[Desktop Entry]\n"
                 "Type=Application\n"
                 "Name=ScanSort\n"
-                f"Exec={base_cmd} watch --minimized\n"
+                f"Exec={full_cmd}\n"
                 "Hidden=false\n"
                 "NoDisplay=false\n"
                 "X-GNOME-Autostart-enabled=true\n"
@@ -101,9 +108,7 @@ def disable_autorun() -> bool:
     """Disable ScanSort from starting automatically on user login."""
     if sys.platform == "win32":
         try:
-            import winreg
-
-            reg = getattr(sys.modules.get("scansort.autorun"), "_winreg", winreg)
+            reg = _get_winreg()
             with reg.OpenKey(
                 reg.HKEY_CURRENT_USER, WIN_REG_SUBKEY, 0, reg.KEY_SET_VALUE
             ) as key:

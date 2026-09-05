@@ -1,7 +1,9 @@
 """Unit tests for scansort.pdf_metadata module."""
 
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from pypdf import PdfReader, PdfWriter
 
 from scansort.pdf_metadata import process_pdf_metadata_and_rotation
@@ -92,18 +94,12 @@ def test_rotate_non_orthogonal_angle_clamped(tmp_path: Path):
 
 
 def test_missing_pdf_raises_error(tmp_path: Path):
-    import pytest
-
     missing = tmp_path / "ghost.pdf"
     with pytest.raises(FileNotFoundError):
         process_pdf_metadata_and_rotation(missing)
 
 
 def test_inplace_temp_file_cleanup_on_error(tmp_path: Path):
-    from unittest.mock import patch
-
-    import pytest
-
     pdf_in = tmp_path / "broken_write.pdf"
     _create_minimal_pdf(pdf_in)
 
@@ -166,8 +162,6 @@ def test_keywords_tuple_or_set_formatting(tmp_path: Path):
 
 
 def test_password_protected_pdf_raises_value_error(tmp_path: Path):
-    import pytest
-
     pdf_in = tmp_path / "encrypted.pdf"
     writer = PdfWriter()
     writer.add_blank_page(width=100, height=100)
@@ -180,10 +174,6 @@ def test_password_protected_pdf_raises_value_error(tmp_path: Path):
 
 
 def test_atomic_write_to_different_file_cleans_up_on_error(tmp_path: Path):
-    from unittest.mock import patch
-
-    import pytest
-
     pdf_in = tmp_path / "source.pdf"
     _create_minimal_pdf(pdf_in)
     pdf_out = tmp_path / "dest.pdf"
@@ -199,8 +189,6 @@ def test_atomic_write_to_different_file_cleans_up_on_error(tmp_path: Path):
 
 
 def test_corrupted_pdf_raises_value_error(tmp_path: Path):
-    import pytest
-
     bad_pdf = tmp_path / "corrupt.pdf"
     bad_pdf.write_bytes(b"NOT A VALID PDF HEADER AT ALL")
 

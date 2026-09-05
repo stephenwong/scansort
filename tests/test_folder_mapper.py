@@ -1,7 +1,9 @@
 """Unit tests for scansort.folder_mapper module."""
 
 import json
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 from scansort.folder_mapper import (
     FolderMapper,
@@ -103,9 +105,6 @@ def test_folder_mapper_class_caching(tmp_path: Path):
     # Load from cache
     saved_data = json.loads(cache_file.read_text(encoding="utf-8"))
     assert "Work/Contracts" in saved_data["folders"]
-
-
-from unittest.mock import patch
 
 
 def test_scan_nonexistent_directory(tmp_path: Path):
@@ -239,8 +238,6 @@ def test_scan_folders_inaccessible_sibling_does_not_drop_others(tmp_path: Path):
 
 
 def test_folder_mapper_external_cache_mtime_update_reloads(tmp_path: Path):
-    import os
-
     docs_dir = tmp_path / "Documents"
     (docs_dir / "Alpha").mkdir(parents=True)
     cache_file = tmp_path / "folder_map.json"

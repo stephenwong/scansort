@@ -12,17 +12,19 @@ from scansort.constants import HISTORY_CSV_NAME, HISTORY_JSONL_NAME
 
 logger = logging.getLogger(__name__)
 
-CSV_HEADERS = [
-    "Timestamp",
-    "Local Time",
-    "Original File",
-    "New Filename",
-    "Folder",
-    "Destination Path",
-    "SHA256",
-    "Summary",
-    "Status",
+CSV_FIELD_MAPPING: list[tuple[str, str]] = [
+    ("Timestamp", "timestamp"),
+    ("Local Time", "local_time"),
+    ("Original File", "original_filename"),
+    ("New Filename", "new_filename"),
+    ("Folder", "destination_folder"),
+    ("Destination Path", "destination_path"),
+    ("SHA256", "sha256"),
+    ("Summary", "summary"),
+    ("Status", "status"),
 ]
+
+CSV_HEADERS: list[str] = [header for header, _ in CSV_FIELD_MAPPING]
 
 
 class AuditLogger:
@@ -42,17 +44,11 @@ class AuditLogger:
     def _ensure_csv_headers(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with open(path, "x", newline="", encoding="utf-8") as f:
+            if path.exists() and path.stat().st_size > 0:
+                return
+            with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(CSV_HEADERS)
-        except FileExistsError:
-            if path.stat().st_size == 0:
-                try:
-                    with open(path, "w", newline="", encoding="utf-8") as f:
-                        writer = csv.writer(f)
-                        writer.writerow(CSV_HEADERS)
-                except OSError:
-                    pass
         except OSError as e:
             logger.error("Failed to initialize CSV header at %s: %s", path, e)
 
@@ -78,17 +74,7 @@ class AuditLogger:
             logger.error("Failed to append to history.jsonl: %s", e)
 
         # Write to CSV
-        csv_row = [
-            record.get("timestamp", ""),
-            record.get("local_time", ""),
-            record.get("original_filename", ""),
-            record.get("new_filename", ""),
-            record.get("destination_folder", ""),
-            record.get("destination_path", ""),
-            record.get("sha256", ""),
-            record.get("summary", ""),
-            record.get("status", ""),
-        ]
+        csv_row = [str(record.get(field_key, "")) for _, field_key in CSV_FIELD_MAPPING]
 
         for target_csv in [self.csv_path, self.mirror_csv_path]:
             if target_csv:

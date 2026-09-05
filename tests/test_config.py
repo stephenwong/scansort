@@ -1,10 +1,16 @@
-"""Unit tests for scansort.config and folder_hints modules."""
+"""Unit tests for scansort.config module."""
 
-import json
 from pathlib import Path
 
-from scansort.config import AppConfig, get_default_config_path, load_config, save_config
-from scansort.folder_hints import load_folder_hints
+import pytest
+
+from scansort.config import (
+    AppConfig,
+    get_default_app_dir,
+    get_default_config_path,
+    load_config,
+    save_config,
+)
 
 
 def test_default_config():
@@ -28,17 +34,25 @@ def test_save_and_load_config(tmp_path: Path):
         watch_folder=custom_watch,
         documents_root=custom_docs,
         gemini_model="gemini-2.5-flash-lite",
+        fallback_folder="Unsorted",
+        start_on_boot=False,
+        max_folder_depth=5,
         dry_run=True,
+        mirror_log_to_documents=True,
     )
 
     save_config(original_cfg, cfg_file)
     assert cfg_file.exists()
 
     loaded_cfg = load_config(cfg_file)
-    assert loaded_cfg.watch_folder == custom_watch
-    assert loaded_cfg.documents_root == custom_docs
+    assert loaded_cfg.watch_folder == custom_watch.resolve()
+    assert loaded_cfg.documents_root == custom_docs.resolve()
     assert loaded_cfg.gemini_model == "gemini-2.5-flash-lite"
+    assert loaded_cfg.fallback_folder == "Unsorted"
+    assert loaded_cfg.start_on_boot is False
+    assert loaded_cfg.max_folder_depth == 5
     assert loaded_cfg.dry_run is True
+    assert loaded_cfg.mirror_log_to_documents is True
 
 
 def test_config_never_serializes_api_keys(tmp_path: Path):
@@ -47,15 +61,15 @@ def test_config_never_serializes_api_keys(tmp_path: Path):
     save_config(cfg, cfg_file)
 
     content = cfg_file.read_text(encoding="utf-8")
-    parsed = json.loads(content)
-    assert "api_key" not in parsed
-    assert "gemini_api_key" not in parsed
-    assert "key" not in parsed
+    assert "api_key" not in content
+    assert "gemini_api_key" not in content
+    assert "AIza" not in content
 
 
 def test_ensure_directories_creates_missing(tmp_path: Path):
-    watch_dir = tmp_path / "created_watch"
-    docs_dir = tmp_path / "created_docs"
+    watch_dir = tmp_path / "drop"
+    docs_dir = tmp_path / "docs"
+
     assert not watch_dir.exists()
     assert not docs_dir.exists()
 
@@ -73,27 +87,6 @@ def test_load_nonexistent_config_returns_default(tmp_path: Path):
     assert isinstance(cfg, AppConfig)
 
 
-def test_load_folder_hints_nonexistent_returns_empty(tmp_path: Path):
-    hints_file = tmp_path / "hints.json"
-    assert load_folder_hints(hints_file) == {}
-
-
-def test_load_folder_hints_valid(tmp_path: Path):
-    hints_file = tmp_path / "folder_hints.json"
-    data = {
-        "Health/Dental": ["dentist", "teeth", "bupa"],
-        "Utilities\\Electricity": ["energy", "origin"],
-    }
-    hints_file.write_text(json.dumps(data), encoding="utf-8")
-
-    hints = load_folder_hints(hints_file)
-    assert "Health/Dental" in hints
-    assert hints["Health/Dental"] == ["dentist", "teeth", "bupa"]
-    # Verify path normalization (backslashes converted to forward slashes)
-    assert "Utilities/Electricity" in hints
-    assert hints["Utilities/Electricity"] == ["energy", "origin"]
-
-
 def test_get_default_config_path():
     path = get_default_config_path()
     assert path.name == "config.json"
@@ -103,7 +96,6 @@ def test_get_default_config_path():
 def test_get_default_app_dir_windows(monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setenv("APPDATA", "C:\\Users\\Test\\AppData\\Roaming")
-    from scansort.config import get_default_app_dir
 
     app_dir = get_default_app_dir()
     assert "ScanSort" in str(app_dir)
@@ -118,28 +110,7 @@ def test_load_config_corrupt_json_fallback(tmp_path: Path):
     assert cfg.gemini_model == "gemini-2.5-flash"
 
 
-def test_get_default_hints_path():
-    from scansort.folder_hints import get_default_hints_path
-
-    path = get_default_hints_path()
-    assert path.name == "folder_hints.json"
-
-
-def test_load_folder_hints_invalid_format(tmp_path: Path):
-    invalid_file = tmp_path / "hints.json"
-    invalid_file.write_text('["not", "a", "dict"]', encoding="utf-8")
-    assert load_folder_hints(invalid_file) == {}
-
-
-def test_load_folder_hints_corrupt(tmp_path: Path):
-    corrupt_file = tmp_path / "corrupt_hints.json"
-    corrupt_file.write_text("{bad json", encoding="utf-8")
-    assert load_folder_hints(corrupt_file) == {}
-
-
 def test_fallback_folder_validation():
-    import pytest
-
     with pytest.raises(ValueError, match="fallback_folder cannot contain absolute"):
         AppConfig(fallback_folder="/absolute/path")
 
@@ -169,19 +140,7 @@ def test_load_config_type_error_handling(tmp_path: Path):
     assert isinstance(cfg, AppConfig)
 
 
-def test_folder_hints_ignores_none_and_non_strings(tmp_path: Path):
-    hints_file = tmp_path / "hints_with_null.json"
-    data = {"Finances": ["tax", None, 123, "invoice"]}
-    hints_file.write_text(json.dumps(data), encoding="utf-8")
-    hints = load_folder_hints(hints_file)
-    assert hints["Finances"] == ["tax", "invoice"]
-    assert "none" not in hints["Finances"]
-    assert "123" not in hints["Finances"]
-
-
 def test_fallback_folder_windows_drive_traversal_rejected():
-    import pytest
-
     with pytest.raises(ValueError, match="cannot contain absolute paths"):
         AppConfig(fallback_folder="C:\\escaped")
 
@@ -198,16 +157,12 @@ def test_fallback_folder_trailing_slash_trimmed():
 
 
 def test_config_rejects_identical_watch_and_docs_root(tmp_path: Path):
-    import pytest
-
     folder = tmp_path / "SharedFolder"
     with pytest.raises(ValueError, match="cannot be the same directory"):
         AppConfig(watch_folder=folder, documents_root=folder)
 
 
 def test_config_max_folder_depth_bounds():
-    import pytest
-
     with pytest.raises(ValueError):
         AppConfig(max_folder_depth=0)
 
@@ -227,12 +182,3 @@ def test_load_config_utf8_bom(tmp_path: Path):
     cfg_file.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
     cfg = load_config(cfg_file)
     assert cfg.fallback_folder == "_BOM_Review"
-
-
-def test_load_folder_hints_utf8_bom(tmp_path: Path):
-    hints_file = tmp_path / "hints_bom.json"
-    data = '{"Tax/2026": ["ato", "return"]}'
-    hints_file.write_bytes(b"\xef\xbb\xbf" + data.encode("utf-8"))
-    hints = load_folder_hints(hints_file)
-    assert "Tax/2026" in hints
-    assert hints["Tax/2026"] == ["ato", "return"]

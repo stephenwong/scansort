@@ -1,5 +1,6 @@
 """Unit tests for scansort.file_stabilizer module."""
 
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -41,8 +42,6 @@ def test_wait_for_file_stability_waits_while_growing(tmp_path: Path):
         time.sleep(0.05)
         with open(growing_file, "ab") as f:
             f.write(b" more data")
-
-    import threading
 
     writer = threading.Thread(target=simulate_scanner_appends)
     writer.start()
@@ -98,8 +97,6 @@ def test_is_file_locked_windows_mock(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     test_file = tmp_path / "win_locked.pdf"
     test_file.write_bytes(b"content")
-
-    from unittest.mock import MagicMock
 
     mock_msvcrt = MagicMock()
     mock_msvcrt.locking.side_effect = OSError("Lock violation")
@@ -181,8 +178,6 @@ def test_wait_for_file_stability_resets_last_size_on_empty(tmp_path: Path):
                 100  # Third poll remains 100 bytes (second time seeing 100)
             )
         return stat_res
-
-    from unittest.mock import MagicMock
 
     with (
         patch.object(Path, "stat", mock_stat),

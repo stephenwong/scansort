@@ -1,13 +1,16 @@
 """End-to-End integration tests for ScanSort pipeline."""
 
 import json
+import queue
+import threading
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from google.genai.errors import APIError
 from PIL import Image
 
 from scansort.config import AppConfig
-from scansort.gemini_client import DocumentClassification
+from scansort.models import DocumentClassification
 from scansort.pipeline import ScanSortPipeline
 
 
@@ -147,12 +150,6 @@ def test_pipeline_e2e_dry_run_mode(tmp_path: Path):
     assert not (docs_root / "Taxes" / "260901_ATO_Notice.pdf").exists()
 
 
-import queue
-import threading
-import time
-from unittest.mock import patch
-
-
 def test_pipeline_missing_file_returns_none(tmp_path: Path):
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
@@ -210,9 +207,9 @@ def test_pipeline_run_worker_processes_queue(tmp_path: Path):
         worker_thread.start()
 
         # Wait for item to be processed
-        time.sleep(0.1)
+        file_queue.join()
         stop_event.set()
-        worker_thread.join(timeout=1.0)
+        worker_thread.join(timeout=2.0)
 
         mock_process.assert_called_once_with(test_file)
 
@@ -241,8 +238,6 @@ def test_dry_run_leaves_pdf_unmodified(tmp_path: Path):
 
 
 def test_worker_thread_survives_api_error(tmp_path: Path):
-    from google.genai.errors import APIError
-
     cfg = AppConfig(watch_folder=tmp_path / "inbox", documents_root=tmp_path / "docs")
     pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
     pipeline.process_file = MagicMock(

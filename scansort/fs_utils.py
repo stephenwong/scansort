@@ -21,22 +21,12 @@ def atomic_write(target: Path, data: str | bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
     try:
-        if isinstance(data, str):
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                dir=target.parent,
-                delete=False,
-                encoding="utf-8",
-                suffix=".tmp",
-            ) as tmp_file:
-                tmp_path = Path(tmp_file.name)
-                tmp_file.write(data)
-        else:
-            with tempfile.NamedTemporaryFile(
-                mode="wb", dir=target.parent, delete=False, suffix=".tmp"
-            ) as tmp_file:
-                tmp_path = Path(tmp_file.name)
-                tmp_file.write(data)
+        payload = data.encode("utf-8") if isinstance(data, str) else data
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=target.parent, delete=False, suffix=".tmp"
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(payload)
         tmp_path.replace(target)
     finally:
         if tmp_path is not None and tmp_path.exists():

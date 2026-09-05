@@ -1,11 +1,18 @@
 """Unit tests for scansort.image_converter module."""
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
+from pypdf import PdfReader
 
-from scansort.image_converter import convert_to_pdf, is_supported_format
+from scansort.image_converter import (
+    _extract_dpi,
+    convert_to_pdf,
+    is_supported_format,
+)
 
 
 def _create_sample_image(
@@ -63,9 +70,6 @@ def test_unsupported_format_raises(tmp_path: Path):
         convert_to_pdf(text_file)
 
 
-from unittest.mock import patch
-
-
 def test_convert_jpeg_fallback_to_pillow(tmp_path: Path):
     jpg_file = tmp_path / "scan_fallback.jpg"
     _create_sample_image(jpg_file, img_format="JPEG")
@@ -78,8 +82,6 @@ def test_convert_jpeg_fallback_to_pillow(tmp_path: Path):
 
 
 def test_multipage_tiff_preserves_all_pages(tmp_path: Path):
-    from pypdf import PdfReader
-
     tiff_file = tmp_path / "scan.tiff"
     f1 = Image.new("RGB", (50, 50), "red")
     f2 = Image.new("RGB", (50, 50), "green")
@@ -114,8 +116,6 @@ def test_convert_to_pdf_same_file_syntactic_difference(tmp_path: Path):
     # Relative path vs absolute path to the same file
     rel_path = Path(input_pdf.name)
     # Run with cwd = tmp_path
-    import os
-
     old_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
@@ -126,8 +126,6 @@ def test_convert_to_pdf_same_file_syntactic_difference(tmp_path: Path):
 
 
 def test_convert_to_pdf_rgba_composited_on_white_background(tmp_path: Path):
-    from pypdf import PdfReader
-
     png_path = tmp_path / "transparent.png"
     # Transparent image (fully transparent red)
     img = Image.new("RGBA", (10, 10), (255, 0, 0, 0))
@@ -176,4 +174,31 @@ def test_convert_to_pdf_failed_conversion_cleans_up_target(tmp_path: Path):
         convert_to_pdf(img_path, output_path=target_pdf)
 
     # Failed conversion must not leak a 0-byte PDF
+    assert not target_pdf.exists()
+
+
+def test_extract_dpi_edge_cases():
+    img = Image.new("RGB", (10, 10))
+    # Scalar DPI
+    img.info["dpi"] = 150
+    assert _extract_dpi(img) == 150.0
+
+    # Invalid string in tuple
+    img.info["dpi"] = ("invalid",)
+    assert _extract_dpi(img) == 300.0
+
+
+def test_convert_to_pdf_unlinks_existing_target_on_failure(tmp_path: Path):
+    img_path = tmp_path / "valid.jpg"
+    _create_sample_image(img_path, img_format="JPEG")
+    target_pdf = tmp_path / "failed.pdf"
+    target_pdf.write_bytes(b"existing partial")
+
+    with (
+        patch("img2pdf.convert", side_effect=ValueError("Encoding error")),
+        patch.object(Image.Image, "save", side_effect=RuntimeError("Pillow failed")),
+        pytest.raises(RuntimeError),
+    ):
+        convert_to_pdf(img_path, output_path=target_pdf)
+
     assert not target_pdf.exists()

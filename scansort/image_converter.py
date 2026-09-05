@@ -1,3 +1,4 @@
+import io
 import logging
 import shutil
 from pathlib import Path
@@ -6,6 +7,7 @@ import img2pdf
 from PIL import Image, ImageSequence
 
 from scansort.constants import SUPPORTED_EXTENSIONS
+from scansort.fs_utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,21 @@ def _normalize_frame_to_rgb(frame: Image.Image) -> Image.Image:
     return frame.convert("RGB")
 
 
+def _extract_dpi(img: Image.Image, default: float = 300.0) -> float:
+    """Extract DPI resolution from image info metadata or return default."""
+    dpi_info = img.info.get("dpi")
+    if isinstance(dpi_info, (tuple, list)) and len(dpi_info) > 0:
+        try:
+            val = float(dpi_info[0])
+            if val > 0:
+                return val
+        except (ValueError, TypeError):
+            pass
+    elif isinstance(dpi_info, (int, float)) and dpi_info > 0:
+        return float(dpi_info)
+    return default
+
+
 def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
     """Normalize an incoming document (PDF, JPG, PNG, TIFF) into a standard PDF file.
 
@@ -44,29 +61,35 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
     if not input_path.is_file():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    ext = input_path.suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
+    if not is_supported_format(input_path):
+        ext = input_path.suffix.lower()
         raise ValueError(
             f"Unsupported file format '{ext}' for file {input_path.name}. "
             f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
         )
 
-    target_pdf = output_path or input_path.with_suffix(".pdf")
-    target_pdf.parent.mkdir(parents=True, exist_ok=True)
+    ext = input_path.suffix.lower()
 
     # If it is already a PDF, passthrough or copy
     if ext == ".pdf":
         if output_path is None or output_path.resolve() == input_path.resolve():
             return input_path
+        target_pdf = output_path
+        target_pdf.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(input_path, target_pdf)
         return target_pdf
+
+    target_pdf = output_path or input_path.with_suffix(".pdf")
+    target_pdf.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         if ext in {".jpg", ".jpeg"}:
             # Lossless wrapping of JPEG streams via img2pdf (preserves exact DPI and zero re-compression)
             try:
-                with open(input_path, "rb") as src, open(target_pdf, "wb") as dst:
-                    img2pdf.convert(src, outputstream=dst)
+                buf = io.BytesIO()
+                with open(input_path, "rb") as src:
+                    img2pdf.convert(src, outputstream=buf)
+                atomic_write(target_pdf, buf.getvalue())
                 logger.debug(
                     "Wrapped JPEG %s into PDF %s losslessly.",
                     input_path.name,
@@ -92,26 +115,17 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
             ]
             first_frame = frames[0]
             append_frames = frames[1:]
+            res = _extract_dpi(img)
 
-            dpi_info = img.info.get("dpi")
-            res = 300.0
-            if isinstance(dpi_info, (tuple, list)) and len(dpi_info) > 0:
-                try:
-                    val = float(dpi_info[0])
-                    if val > 0:
-                        res = val
-                except (ValueError, TypeError):
-                    pass
-            elif isinstance(dpi_info, (int, float)) and dpi_info > 0:
-                res = float(dpi_info)
-
+            buf = io.BytesIO()
             first_frame.save(
-                target_pdf,
+                buf,
                 format="PDF",
                 save_all=True,
                 append_images=append_frames,
                 resolution=res,
             )
+            atomic_write(target_pdf, buf.getvalue())
 
         logger.debug(
             "Converted image %s to PDF %s via Pillow (%d pages).",

@@ -40,3 +40,8 @@ addopts = "--cov=scansort --cov-report=term-missing --cov-fail-under=95"
 fail_under = 95
 show_missing = true
 skip_covered = false
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "SIM", "DTZ", "BLE"]
+ignore = ["E501"]
+
