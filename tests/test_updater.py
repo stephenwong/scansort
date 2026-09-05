@@ -121,7 +121,9 @@ def test_parse_version_rejects_invalid(raw):
 
 
 def test_installed_version_uses_package_version(monkeypatch):
-    assert installed_version() == (0, 2, 1)
+    from scansort import __version__
+
+    assert installed_version() == parse_version(__version__)
     monkeypatch.setattr("scansort.__version__", "9.8.7")
     assert installed_version() == (9, 8, 7)
     monkeypatch.setattr("scansort.__version__", "not-a-version")

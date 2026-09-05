@@ -25,7 +25,7 @@ scansort/
 │   └── PRD.md                  # Comprehensive technical specification & requirements
 ├── scansort/                   # Core Python package (Python >=3.14)
 │   ├── __init__.py             # Version definition
-│   ├── __main__.py             # CLI entrypoint & subcommands (watch, config, undo, rescan) + hidden --self-update helper mode
+│   ├── __main__.py             # CLI entrypoint & subcommands (watch, config, undo, rescan, --version) + hidden --self-update helper mode
 │   ├── audit_logger.py         # Dual crash-safe JSONL and CSV logging engine
 │   ├── autorun.py              # Windows Registry (HKCU Run) & Linux autostart manager
 │   ├── config.py               # Pydantic configuration loader (%APPDATA%\ScanSort\config.json)
@@ -50,7 +50,7 @@ scansort/
 │   └── watcher.py              # Rust-powered watchfiles monitor with debouncing
 ├── tests/                      # Pytest automated test suite (>=95% coverage enforced)
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
-├── scansort.spec               # PyInstaller standalone Windows executable build spec
+├── scansort.spec               # PyInstaller standalone Windows executable build spec (embeds dynamic PE version info)
 ├── config.example.json         # Reference configuration template
 ├── folder_hints.example.json   # Reference keyword hints template
 └── README.md                   # User-facing manual with Mermaid architecture diagrams
@@ -140,6 +140,18 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Every `main_cli` entry (all subcommands, including the detached `--self-update` helper) must call `scansort.logging_setup.configure_file_logging()` so diagnostics survive operation where no console exists. It attaches a rotating `scansort.log` handler (INFO and above, 1 MB × 3 backups, UTF-8) in `app_dir` plus a WARNING-level stderr console handler so terminal launches keep their existing warning stream; repeat calls for the same directory must reuse handlers, never stack duplicates.
 - Root-logger level must be lowered to INFO so INFO records pass logger-level filtering. File logging is best-effort and never raises: `mkdir` or log-file open failures return `None` silently and must not abort any command, filing, update, or self-update path.
 - Secrets stay covered by invariant A: only pre-redacted text (via `scansort.secrets.redact_secrets_from_text()`) may ever reach the log file — audit summaries in `history.jsonl` remain truncated to 100 chars, the full redacted reason lives in `scansort.log`.
+
+### P. Version Bumping (Single Source of Truth)
+- `scansort/__init__.py::__version__` is the **only place** the version is defined.
+- **To bump the version:**
+  1. Edit `__version__ = "X.Y.Z"` in `scansort/__init__.py`.
+  2. Commit and push the matching git tag:
+     ```bash
+     git commit -am "chore: bump version to X.Y.Z"
+     git tag vX.Y.Z
+     git push origin main --tags
+     ```
+- `pyproject.toml`, the CLI (`--version`), and `scansort.spec` (Windows `ProductVersion`) all derive the version automatically. Never hardcode version strings anywhere else.
 
 ---
 

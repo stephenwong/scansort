@@ -37,7 +37,13 @@ jobs:
         run: uv run pyinstaller scansort.spec
 
       - name: Test compiled binary
-        run: dist\ScanSort\ScanSort.exe --help
+        shell: pwsh
+        run: |
+          dist\ScanSort\ScanSort.exe --help
+          dist\ScanSort\ScanSort.exe --version
+          $ver = (Get-Item dist\ScanSort\ScanSort.exe).VersionInfo.ProductVersion
+          Write-Host "Compiled binary ProductVersion: $ver"
+          if (-not $ver) { throw "ProductVersion not found in binary metadata" }
 
       - name: Package Release ZIP
         shell: pwsh

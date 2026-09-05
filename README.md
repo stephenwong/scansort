@@ -206,6 +206,15 @@ Verify the folders ScanSort will use for classification (respecting `max_folder_
 uv run scansort rescan
 ```
 
+### 9. Check Application Version
+Display the current ScanSort version:
+```bash
+uv run scansort --version
+# or
+uv run scansort -V
+```
+*The version is also displayed at the top of `scansort config --show`.*
+
 ---
 
 ## Folder Hints & Aliases (`folder_hints.json`)
@@ -277,6 +286,8 @@ uv run pyinstaller scansort.spec
 The output bundle is produced in `dist/ScanSort/ScanSort.exe`.
 
 The exe is a GUI-subsystem build (`console=False`) that never flashes a terminal when started by auto-start or double-click. At CLI startup it best-effort attaches to the launching terminal's console (see [Usage & CLI Reference](#usage--cli-reference)), so commands run from cmd/PowerShell still display their output.
+
+The build embeds Win32 version resources (`version_info.txt`), making `ProductVersion`, `FileVersion`, and application metadata visible in Windows Explorer (Right-Click `ScanSort.exe` $\rightarrow$ **Properties** $\rightarrow$ **Details**) and PowerShell (`(Get-Item .\ScanSort.exe).VersionInfo.ProductVersion`).
 
 ---
 

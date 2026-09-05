@@ -9,6 +9,7 @@ import sys
 import threading
 from pathlib import Path
 
+from scansort import __version__
 from scansort.autorun import disable_autorun, enable_autorun, is_autorun_enabled
 from scansort.config import (
     AppConfig,
@@ -58,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scansort",
         description="ScanSort: Intelligent automated desktop document filer powered by Google Gemini.",
+    )
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show program's version number and exit",
     )
     parser.add_argument(
         "--minimized",
@@ -376,6 +384,7 @@ def _handle_config(parsed: argparse.Namespace) -> int:
         autorun_status = "Enabled" if is_autorun_enabled() else "Disabled"
 
         print("================ ScanSort Configuration ================")
+        print(f"Version:           {__version__}")
         print(f"Config File:       {get_default_config_path()}")
         print(f"Watch Folder:      {cfg.watch_folder}")
         print(f"Documents Root:    {cfg.documents_root}")

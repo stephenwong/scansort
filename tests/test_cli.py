@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from scansort.__main__ import build_parser, main_cli
 from scansort.config import AppConfig
 
@@ -75,7 +77,71 @@ def test_build_parser():
     assert args_cfg.set_key == "AIzaSyTest123"
 
 
+def test_cli_version_flag_long(capsys):
+    from scansort import __version__
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_cli(["--version"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert f"scansort {__version__}" in captured.out
+
+
+def test_cli_version_flag_short(capsys):
+    from scansort import __version__
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_cli(["-V"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert f"scansort {__version__}" in captured.out
+
+
+def test_spec_version_resource_synchronization(tmp_path: Path):
+    """Verify scansort.spec generates version metadata dynamically from scansort.__version__."""
+    from scansort import __version__
+
+    spec_path = Path(__file__).resolve().parent.parent / "scansort.spec"
+    assert spec_path.is_file()
+    spec_content = spec_path.read_text(encoding="utf-8")
+
+    assert "scansort" in spec_content
+    assert "__version__" in spec_content
+    assert "ProductVersion" in spec_content
+    assert "FileVersion" in spec_content
+    assert "version=" in spec_content
+
+    import re
+
+    spec_globals = {
+        "SPECPATH": str(tmp_path),
+        "workpath": str(tmp_path / "build"),
+        "Path": Path,
+        "re": re,
+    }
+    (tmp_path / "scansort").mkdir()
+    (tmp_path / "scansort" / "__init__.py").write_text(
+        f'__version__ = "{__version__}"\n', encoding="utf-8"
+    )
+
+    start_marker = "# Synchronize version_info.txt"
+    end_marker = "datas = []"
+    block = spec_content[
+        spec_content.index(start_marker) : spec_content.index(end_marker)
+    ]
+    exec(compile(block, "scansort.spec", "exec"), spec_globals)
+
+    generated_file = tmp_path / "build" / "version_info.txt"
+    assert generated_file.is_file()
+    text = generated_file.read_text(encoding="utf-8")
+    assert f"StringStruct('ProductVersion', '{__version__}')" in text
+    assert f"StringStruct('FileVersion', '{__version__}.0')" in text
+    assert "StringStruct('ProductName', 'ScanSort')" in text
+
+
 def test_cli_config_show(capsys):
+    from scansort import __version__
+
     with (
         patch("scansort.__main__.get_api_key", return_value="AIzaSyTest1234567890"),
         patch("scansort.__main__.load_config", return_value=AppConfig()),
@@ -83,6 +149,7 @@ def test_cli_config_show(capsys):
         exit_code = main_cli(["config", "--show"])
         assert exit_code == 0
         captured = capsys.readouterr()
+        assert f"Version:           {__version__}" in captured.out
         assert "AIza" in captured.out
         assert "••••••••" in captured.out
         assert "1234567890" not in captured.out
