@@ -8,10 +8,17 @@ from pathlib import Path
 
 from scansort.audit_logger import AuditLogger
 from scansort.config import AppConfig, get_default_app_dir
+from scansort.constants import (
+    HISTORY_CSV_NAME,
+    HISTORY_JSONL_NAME,
+    MIRROR_HISTORY_CSV_NAME,
+)
 from scansort.dispatcher import (
     dispatch_file,
     generate_target_filename,
     resolve_collision,
+    resolve_destination_dir,
+    resolve_duplicates_dir,
 )
 from scansort.file_stabilizer import wait_for_file_stability
 from scansort.folder_hints import load_folder_hints
@@ -50,13 +57,13 @@ class ScanSortPipeline:
         )
 
         mirror_path = (
-            config.documents_root / "_ScanSort_History.csv"
+            config.documents_root / MIRROR_HISTORY_CSV_NAME
             if config.mirror_log_to_documents
             else None
         )
         self.audit_logger = AuditLogger(
-            jsonl_path=self.app_dir / "history.jsonl",
-            csv_path=self.app_dir / "history.csv",
+            jsonl_path=self.app_dir / HISTORY_JSONL_NAME,
+            csv_path=self.app_dir / HISTORY_CSV_NAME,
             mirror_csv_path=mirror_path,
         )
 
@@ -92,21 +99,9 @@ class ScanSortPipeline:
             )
             clean_fallback = self.config.fallback_folder.strip("/\\")
             resolved_docs = self.config.documents_root.resolve()
-            if not clean_fallback or clean_fallback == ".":
-                dup_dest_dir = (
-                    self.config.documents_root / "_Review_Needed" / "Duplicates"
-                ).resolve()
-            else:
-                dup_dest_dir = (
-                    self.config.documents_root / clean_fallback / "Duplicates"
-                ).resolve()
-                if (
-                    not dup_dest_dir.is_relative_to(resolved_docs)
-                    or dup_dest_dir == resolved_docs
-                ):
-                    dup_dest_dir = (
-                        self.config.documents_root / "_Review_Needed" / "Duplicates"
-                    ).resolve()
+            dup_dest_dir = resolve_duplicates_dir(
+                self.config.documents_root, clean_fallback
+            )
 
             desired_dup_name = file_path.name
             dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
@@ -162,19 +157,9 @@ class ScanSortPipeline:
             )
 
             # 5. Dry-Run Verification before any file mutation or metadata writing
-            clean_target = classification.target_folder.strip("/\\")
-            resolved_docs = self.config.documents_root.resolve()
-            if not clean_target or clean_target == ".":
-                target_dir = (self.config.documents_root / "_Review_Needed").resolve()
-            else:
-                target_dir = (self.config.documents_root / clean_target).resolve()
-                if (
-                    not target_dir.is_relative_to(resolved_docs)
-                    or target_dir == resolved_docs
-                ):
-                    target_dir = (
-                        self.config.documents_root / "_Review_Needed"
-                    ).resolve()
+            target_dir = resolve_destination_dir(
+                self.config.documents_root, classification.target_folder
+            )
 
             desired_name = generate_target_filename(classification)
             simulated_dest = resolve_collision(target_dir, desired_name)

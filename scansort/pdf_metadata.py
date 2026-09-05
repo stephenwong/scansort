@@ -2,11 +2,12 @@
 
 import io
 import logging
-import tempfile
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.errors import PdfReadError
+
+from scansort.fs_utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -100,19 +101,9 @@ def process_pdf_metadata_and_rotation(
         writer.add_metadata(metadata)
 
     # Unified atomic write via temporary file replacement for all targets (S3-08)
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=target_path.parent, delete=False, suffix=".tmp"
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-            writer.write(tmp_file)
-
-        tmp_path.replace(target_path)
-    finally:
-        if tmp_path and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+    buf = io.BytesIO()
+    writer.write(buf)
+    atomic_write(target_path, buf.getvalue())
 
     logger.debug(
         "Embedded metadata and rotation (%d deg) into %s.", norm_angle, target_path.name

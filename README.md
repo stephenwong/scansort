@@ -191,7 +191,7 @@ Misplaced a document or want to re-scan? Reverse the last move instantly. You ca
 ```bash
 uv run scansort undo
 ```
-*Restores the file to its original location in your drop folder prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`) with automatic numerical collision resolution so existing files are never overwritten. The active watcher strictly ignores the `_undone_` prefix to prevent automated re-filing loops, while both `history.jsonl` and `history.csv` are atomically updated with `UNDONE` status.*
+*Restores the file to its original location in your drop folder prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`) with automatic numerical collision resolution so existing files are never overwritten. The active watcher strictly ignores the `_undone_` prefix to prevent automated re-filing loops, while `history.jsonl`, `history.csv`, and the optional mirrored CSV in your Documents folder are atomically updated with `UNDONE` status.*
 
 ### 8. Inspect Discovered Taxonomy
 Verify the folders ScanSort will use for classification (respecting `max_folder_depth` between 1 and 10, and `fallback_folder` exclusions):

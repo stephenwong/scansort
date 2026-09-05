@@ -7,7 +7,7 @@ from pathlib import Path
 
 from watchfiles import Change, watch
 
-from scansort.image_converter import SUPPORTED_EXTENSIONS
+from scansort.constants import SUPPORTED_EXTENSIONS, UNDONE_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def should_process_path(path: Path) -> bool:
 
     name = path.name
     lower_name = name.lower()
-    if name.startswith((".", "~", "_undone_")) or lower_name.endswith(
+    if name.startswith((".", "~", UNDONE_PREFIX)) or lower_name.endswith(
         (".crdownload", ".part", ".tmp")
     ):
         return False

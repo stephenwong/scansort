@@ -4,10 +4,12 @@ import json
 import logging
 import os
 import sys
-import tempfile
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from scansort.constants import REVIEW_NEEDED_DIR
+from scansort.fs_utils import atomic_write, relative_folder_is_safe
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ class AppConfig(BaseModel):
 
     watch_folder: Path = Field(default_factory=_default_watch_folder)
     documents_root: Path = Field(default_factory=_default_documents_root)
-    fallback_folder: str = "_Review_Needed"
+    fallback_folder: str = REVIEW_NEEDED_DIR
     gemini_model: str = "gemini-2.5-flash"
     start_on_boot: bool = True
     max_folder_depth: int = Field(default=3, ge=1, le=10)
@@ -55,14 +57,7 @@ class AppConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("fallback_folder cannot be empty")
         clean = v.strip()
-        parts = clean.replace("\\", "/").strip("/").split("/")
-        p_win = PureWindowsPath(clean)
-        if (
-            clean.startswith(("/", "\\"))
-            or ".." in parts
-            or p_win.is_absolute()
-            or p_win.drive
-        ):
+        if not relative_folder_is_safe(clean):
             raise ValueError(
                 "fallback_folder cannot contain absolute paths or '..' traversal segments"
             )
@@ -117,7 +112,6 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 def save_config(config: AppConfig, config_path: Path | None = None) -> None:
     """Serialize configuration to a JSON file (strictly excluding secrets)."""
     path = config_path or get_default_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
         "watch_folder": str(config.watch_folder),
@@ -130,15 +124,5 @@ def save_config(config: AppConfig, config_path: Path | None = None) -> None:
         "mirror_log_to_documents": config.mirror_log_to_documents,
     }
 
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", dir=path.parent, delete=False, encoding="utf-8", suffix=".tmp"
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-            json.dump(data, tmp_file, indent=2)
-        tmp_path.replace(path)
-        logger.info("Configuration saved to %s", path)
-    finally:
-        if tmp_path and tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+    atomic_write(path, json.dumps(data, indent=2))
+    logger.info("Configuration saved to %s", path)

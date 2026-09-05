@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from scansort.config import get_default_app_dir
+from scansort.constants import HISTORY_CSV_NAME, HISTORY_JSONL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,8 @@ class AuditLogger:
         mirror_csv_path: Path | None = None,
     ) -> None:
         app_dir = get_default_app_dir()
-        self.jsonl_path = jsonl_path or (app_dir / "history.jsonl")
-        self.csv_path = csv_path or (app_dir / "history.csv")
+        self.jsonl_path = jsonl_path or (app_dir / HISTORY_JSONL_NAME)
+        self.csv_path = csv_path or (app_dir / HISTORY_CSV_NAME)
         self.mirror_csv_path = mirror_csv_path
 
     def _ensure_csv_headers(self, path: Path) -> None:

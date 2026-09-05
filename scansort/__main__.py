@@ -11,6 +11,7 @@ import keyring.errors
 
 from scansort.autorun import disable_autorun, enable_autorun, is_autorun_enabled
 from scansort.config import get_default_config_path, load_config, save_config
+from scansort.constants import HISTORY_JSONL_NAME, MIRROR_HISTORY_CSV_NAME
 from scansort.dispatcher import undo_last_move
 from scansort.folder_mapper import FolderMapper
 from scansort.pipeline import ScanSortPipeline
@@ -252,9 +253,15 @@ def main_cli(args: list[str] | None = None) -> int:
         return 0
 
     if parsed.command == "undo":
-        cfg_path = get_default_config_path().parent / "history.jsonl"
+        cfg = load_config()
+        jsonl_path = get_default_config_path().parent / HISTORY_JSONL_NAME
+        mirror_path = (
+            cfg.documents_root / MIRROR_HISTORY_CSV_NAME
+            if cfg.mirror_log_to_documents
+            else None
+        )
         try:
-            restored = undo_last_move(cfg_path)
+            restored = undo_last_move(jsonl_path, mirror_csv_path=mirror_path)
             if restored:
                 print(f"Successfully reversed move. File restored to: {restored}")
             else:

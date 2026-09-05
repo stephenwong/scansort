@@ -5,16 +5,9 @@ from pathlib import Path
 import img2pdf
 from PIL import Image, ImageSequence
 
-logger = logging.getLogger(__name__)
+from scansort.constants import SUPPORTED_EXTENSIONS
 
-SUPPORTED_EXTENSIONS: set[str] = {
-    ".pdf",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".tiff",
-    ".tif",
-}
+logger = logging.getLogger(__name__)
 
 
 def is_supported_format(path: Path) -> bool:

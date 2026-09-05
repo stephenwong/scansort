@@ -29,13 +29,16 @@ scansort/
 │   ├── audit_logger.py         # Dual crash-safe JSONL and CSV logging engine
 │   ├── autorun.py              # Windows Registry (HKCU Run) & Linux autostart manager
 │   ├── config.py               # Pydantic configuration loader (%APPDATA%\ScanSort\config.json)
-│   ├── dispatcher.py           # Collision resolution, atomic moves, and move reversal
+│   ├── constants.py            # Shared domain constants (review/duplicates/undo prefixes, history filenames, supported extensions)
+│   ├── dispatcher.py           # Destination safety resolution, collision handling, atomic moves, and move reversal
 │   ├── file_stabilizer.py      # Exclusive file-lock polling and size growth tracker
 │   ├── folder_hints.py         # User keyword aliases loader (folder_hints.json)
 │   ├── folder_mapper.py        # Recursive taxonomy scanner with noise & dotfile filtering
+│   ├── fs_utils.py             # Atomic temp-file writes & relative-folder safety predicate
 │   ├── gemini_client.py        # Multimodal Gemini 2.5 Flash structured classification
 │   ├── hasher.py               # Streaming SHA-256 duplicate scan interception
 │   ├── image_converter.py      # Lossless JPEG stream wrapping (img2pdf) & image normalization
+│   ├── models.py               # Vendor-neutral classification domain model & sanitizers
 │   ├── pdf_metadata.py         # XMP metadata embedding & pypdf auto-rotation
 │   ├── pipeline.py             # End-to-end coordinator & sequential queue worker
 │   ├── secrets.py              # OS credential vault, key masking, & regex log redaction

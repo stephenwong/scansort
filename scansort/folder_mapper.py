@@ -2,11 +2,12 @@
 
 import json
 import logging
-import tempfile
 from pathlib import Path
 
 from scansort.config import get_default_app_dir
+from scansort.constants import REVIEW_NEEDED_DIR
 from scansort.folder_hints import load_folder_hints
+from scansort.fs_utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ DEFAULT_IGNORED_FOLDERS: set[str] = {
 def scan_documents_folders(
     docs_root: Path,
     max_depth: int = 3,
-    fallback_folder: str = "_Review_Needed",
+    fallback_folder: str = REVIEW_NEEDED_DIR,
     ignored_folders: set[str] | None = None,
 ) -> list[str]:
     """Scan documents root directory recursively and return valid relative subfolder paths.
@@ -137,7 +138,7 @@ class FolderMapper:
         cache_path: Path | None = None,
         hints_path: Path | None = None,
         max_depth: int = 3,
-        fallback_folder: str = "_Review_Needed",
+        fallback_folder: str = REVIEW_NEEDED_DIR,
     ) -> None:
         self.docs_root = docs_root
         self.cache_path = cache_path or (get_default_app_dir() / "folder_map.json")
@@ -155,30 +156,16 @@ class FolderMapper:
             fallback_folder=self.fallback_folder,
         )
 
-        tmp_path = None
+        cache_data = {
+            "documents_root": str(self.docs_root),
+            "folders": self._cached_folders,
+        }
         try:
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_data = {
-                "documents_root": str(self.docs_root),
-                "folders": self._cached_folders,
-            }
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                dir=self.cache_path.parent,
-                delete=False,
-                encoding="utf-8",
-                suffix=".tmp",
-            ) as tmp_file:
-                tmp_path = Path(tmp_file.name)
-                json.dump(cache_data, tmp_file, indent=2)
-            tmp_path.replace(self.cache_path)
+            atomic_write(self.cache_path, json.dumps(cache_data, indent=2))
             if self.cache_path.exists():
                 self._cache_mtime = self.cache_path.stat().st_mtime
         except (OSError, ValueError) as e:
             logger.warning("Failed to write folder cache to %s: %s", self.cache_path, e)
-        finally:
-            if tmp_path and tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
 
         return self._cached_folders
 

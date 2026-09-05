@@ -2,7 +2,7 @@
 
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scansort.file_stabilizer import is_file_locked, wait_for_file_stability
 
@@ -118,12 +118,18 @@ def test_is_file_locked_posix_flock_error(tmp_path: Path, monkeypatch):
     test_file = tmp_path / "posix_locked.pdf"
     test_file.write_bytes(b"content")
 
-    import fcntl
-
-    with patch.object(
-        fcntl, "flock", side_effect=OSError("Resource temporarily unavailable")
-    ):
+    # fcntl does not exist on Windows runners; inject a mock via sys.modules
+    # so the POSIX branch can be exercised identically on every platform.
+    mock_fcntl = MagicMock()
+    mock_fcntl.flock.side_effect = OSError("Resource temporarily unavailable")
+    with patch.dict("sys.modules", {"fcntl": mock_fcntl}):
         assert is_file_locked(test_file) is True
+
+    # POSIX unlocked branch
+    mock_fcntl_unlocked = MagicMock()
+    with patch.dict("sys.modules", {"fcntl": mock_fcntl_unlocked}):
+        assert is_file_locked(test_file) is False
+        assert mock_fcntl_unlocked.flock.call_count == 2
 
 
 def test_is_file_locked_permission_denied(tmp_path: Path):

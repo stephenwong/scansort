@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,94 +9,14 @@ import httpx
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
-from pydantic import BaseModel, Field
 
+from scansort.constants import REVIEW_NEEDED_DIR
 from scansort.folder_mapper import format_taxonomy_for_prompt
+from scansort.fs_utils import relative_folder_is_safe
+from scansort.models import DocumentClassification, sanitize_date, sanitize_description
 from scansort.secrets import get_api_key, redact_secrets_from_text
 
 logger = logging.getLogger(__name__)
-
-_INVALID_CHARS_REGEX: re.Pattern = re.compile(
-    r'[\x00-\x1f\x7f<>:"/\\|?*,\.;!\'#\$%&\(\)\[\]\{\}=+]'
-)
-
-
-def sanitize_description(desc: str, max_length: int = 60) -> str:
-    """Sanitize and format a title into clean Title_Case_With_Underscores for Windows filenames.
-
-    Args:
-        desc: Raw description string.
-        max_length: Maximum character length cap.
-
-    Returns:
-        Clean Title_Case_With_Underscores string.
-    """
-    if desc is None:
-        return "Scanned_Document"
-    desc_str = str(desc)
-    if not desc_str or not desc_str.strip():
-        return "Scanned_Document"
-
-    # Replace invalid Windows chars and punctuation with spaces
-    cleaned = _INVALID_CHARS_REGEX.sub(" ", desc_str)
-    # Replace dashes and underscores with spaces to split words cleanly
-    cleaned = cleaned.replace("-", " ").replace("_", " ")
-
-    words = [w.capitalize() for w in cleaned.split() if w]
-    if not words:
-        return "Scanned_Document"
-
-    joined = "_".join(words)
-    if len(joined) > max_length:
-        joined = joined[:max_length].rstrip("_")
-
-    return joined or "Scanned_Document"
-
-
-def sanitize_date(date_str: str) -> str:
-    """Validate or convert a date string into YYMMDD format, falling back to today's date.
-
-    Args:
-        date_str: Input date string (e.g. '260901', '2026-09-01').
-
-    Returns:
-        6-digit YYMMDD date string.
-    """
-    today_yymmdd = datetime.now(UTC).strftime("%y%m%d")
-    if date_str is None:
-        return today_yymmdd
-
-    clean = str(date_str).strip().replace("-", "").replace("/", "")
-    if len(clean) == 6 and clean.isdigit():
-        return clean
-    if len(clean) == 8 and clean.isdigit():
-        # YYYYMMDD -> YYMMDD
-        return clean[2:]
-
-    return today_yymmdd
-
-
-class DocumentClassification(BaseModel):
-    """Structured classification and metadata returned by Gemini."""
-
-    document_date: str = Field(description="Date in YYMMDD format")
-    description: str = Field(
-        description="Concise description in Title_Case_With_Underscores (English)"
-    )
-    target_folder: str = Field(
-        description="Matching relative folder from taxonomy, or _Review_Needed"
-    )
-    confidence: float = Field(
-        default=0.0, description="Confidence score from 0.0 to 1.0"
-    )
-    orientation_correction: int = Field(
-        default=0, description="Degrees to rotate clockwise (0, 90, 180, 270)"
-    )
-    document_type: str = Field(
-        default="Other",
-        description="Type: Invoice, Statement, Receipt, Letter, Medical, Blank, Other",
-    )
-    summary: str = Field(default="", description="1-sentence summary of the document")
 
 
 class GeminiClassifier:
@@ -199,8 +118,8 @@ class GeminiClassifier:
             doc_date = sanitize_date(data.get("document_date", ""))
             raw_type = data.get("document_type", "Other")
             doc_type = str(raw_type) if raw_type is not None else "Other"
-            raw_target = data.get("target_folder", "_Review_Needed")
-            target = str(raw_target) if raw_target is not None else "_Review_Needed"
+            raw_target = data.get("target_folder", REVIEW_NEEDED_DIR)
+            target = str(raw_target) if raw_target is not None else REVIEW_NEEDED_DIR
             try:
                 conf = float(data.get("confidence", 0.0))
             except (ValueError, TypeError):
@@ -215,18 +134,19 @@ class GeminiClassifier:
             summary = str(data.get("summary", "") or "").strip()
 
             # Apply folder routing and security rules
-            clean_target = target.replace("\\", "/").strip()
-            clean_parts = [p for p in clean_target.split("/") if p]
-            if target.startswith(("/", "\\")) or ".." in clean_parts:
-                target = "_Review_Needed"
+            clean_target = target.strip()
+            if not relative_folder_is_safe(clean_target):
+                target = REVIEW_NEEDED_DIR
             else:
-                target = "/".join(clean_parts)
+                target = "/".join(
+                    part for part in clean_target.replace("\\", "/").split("/") if part
+                )
                 if doc_type.lower() == "blank":
-                    target = "_Review_Needed/Blank_Scans"
+                    target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
                 elif conf < 0.70 or (
-                    target not in taxonomy and not target.startswith("_Review_Needed")
+                    target not in taxonomy and not target.startswith(REVIEW_NEEDED_DIR)
                 ):
-                    target = "_Review_Needed"
+                    target = REVIEW_NEEDED_DIR
 
             return DocumentClassification(
                 document_date=doc_date,
@@ -256,7 +176,7 @@ class GeminiClassifier:
             return DocumentClassification(
                 document_date=datetime.now(UTC).strftime("%y%m%d"),
                 description="Failed_Scan_Classification",
-                target_folder="_Review_Needed",
+                target_folder=REVIEW_NEEDED_DIR,
                 confidence=0.0,
                 orientation_correction=0,
                 document_type="Other",

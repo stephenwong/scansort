@@ -9,6 +9,8 @@ from scansort.dispatcher import (
     dispatch_file,
     generate_target_filename,
     resolve_collision,
+    resolve_destination_dir,
+    resolve_duplicates_dir,
     undo_last_move,
 )
 from scansort.gemini_client import DocumentClassification
@@ -21,6 +23,94 @@ def test_generate_target_filename():
         target_folder="Utilities",
     )
     assert generate_target_filename(meta) == "260901_Origin_Energy_Bill.pdf"
+
+
+def test_resolve_destination_dir_valid_and_review_fallback(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+
+    assert (
+        resolve_destination_dir(docs_root, "Utilities/Electricity")
+        == (docs_root / "Utilities" / "Electricity").resolve()
+    )
+
+    review_dir = (docs_root / "_Review_Needed").resolve()
+    for empty_target in ["", "/", "\\", ".", "///"]:
+        assert resolve_destination_dir(docs_root, empty_target) == review_dir
+
+
+def test_resolve_destination_dir_blocks_unsafe_targets(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+
+    for traversal in ["../../Escaped", "Sub/../../Escaped", "C:\\Drive", ".."]:
+        dest = resolve_destination_dir(docs_root, traversal)
+        assert dest == (docs_root / "_Review_Needed").resolve()
+        assert dest.is_relative_to(docs_root.resolve())
+
+
+def test_resolve_destination_dir_symlink_to_root_falls_back(tmp_path: Path):
+    import pytest
+
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    link = docs_root / "loop"
+    try:
+        link.symlink_to(docs_root, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    # A target that resolves to the documents root itself must route to Review_Needed
+    assert (
+        resolve_destination_dir(docs_root, "loop")
+        == (docs_root / "_Review_Needed").resolve()
+    )
+
+
+def test_resolve_duplicates_dir_default_and_custom_fallback(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+
+    default_dup_dir = (docs_root / "_Review_Needed" / "Duplicates").resolve()
+    assert resolve_duplicates_dir(docs_root, "") == default_dup_dir
+    assert resolve_duplicates_dir(docs_root, ".") == default_dup_dir
+    assert resolve_duplicates_dir(docs_root, "///") == default_dup_dir
+
+    assert (
+        resolve_duplicates_dir(docs_root, "Taxes")
+        == (docs_root / "Taxes" / "Duplicates").resolve()
+    )
+    assert (
+        resolve_duplicates_dir(docs_root, "Taxes/2026")
+        == (docs_root / "Taxes" / "2026" / "Duplicates").resolve()
+    )
+
+
+def test_resolve_duplicates_dir_unsafe_fallback_uses_review(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+
+    for fallback in ["../../Escaped_Fallback", "C:\\Escaped"]:
+        dup_dir = resolve_duplicates_dir(docs_root, fallback)
+        assert dup_dir == (docs_root / "_Review_Needed" / "Duplicates").resolve()
+        assert dup_dir.is_relative_to(docs_root.resolve())
+
+
+def test_resolve_duplicates_dir_symlink_escape_falls_back(tmp_path: Path):
+    import pytest
+
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    link = docs_root / "escape"
+    try:
+        link.symlink_to(tmp_path, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    # A fallback that resolves outside docs_root must route to Review_Needed
+    dup_dir = resolve_duplicates_dir(docs_root, "escape")
+    assert dup_dir == (docs_root / "_Review_Needed" / "Duplicates").resolve()
+    assert dup_dir.is_relative_to(docs_root.resolve())
 
 
 def test_resolve_collision(tmp_path: Path):
@@ -185,6 +275,46 @@ def test_undo_updates_csv_audit_log(tmp_path: Path):
         rows = list(csv.DictReader(f))
         assert len(rows) == 2
         assert rows[-1]["Status"] == "UNDONE"
+
+
+def test_undo_updates_mirror_csv_audit_log(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Documents" / "Utilities"
+    docs.mkdir(parents=True)
+
+    moved_file = docs / "260901_Bill.pdf"
+    moved_file.write_bytes(b"content")
+
+    jsonl_path = tmp_path / "history.jsonl"
+    csv_path = tmp_path / "history.csv"
+    mirror_csv = tmp_path / "Documents" / "_ScanSort_History.csv"
+    orig_file = inbox / "bill.pdf"
+
+    AuditLogger(
+        jsonl_path=jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv
+    ).log_scan(
+        {
+            "sha256": "h123",
+            "original_filename": orig_file.name,
+            "original_path": str(orig_file),
+            "new_filename": moved_file.name,
+            "destination_folder": "Utilities",
+            "destination_path": str(moved_file),
+            "summary": "Bill",
+            "status": "SUCCESS",
+        }
+    )
+
+    restored = undo_last_move(jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv)
+    assert restored is not None
+
+    # Verify both the primary and mirrored CSV logs recorded the UNDONE status
+    for csv_target in [csv_path, mirror_csv]:
+        with open(csv_target, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+            assert len(rows) == 2
+            assert rows[-1]["Status"] == "UNDONE"
 
 
 def test_undo_skips_missing_destination_and_restores_earlier(tmp_path: Path):
