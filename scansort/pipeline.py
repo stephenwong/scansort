@@ -33,6 +33,11 @@ from scansort.gemini_client import GeminiClassifier
 from scansort.hasher import check_duplicate, compute_file_sha256
 from scansort.image_converter import convert_to_pdf
 from scansort.models import DocumentClassification
+from scansort.notifications import (
+    notify_file_filed,
+    notify_filing_failed,
+    notify_scan_stranded,
+)
 from scansort.pdf_metadata import process_pdf_metadata_and_rotation
 
 logger = logging.getLogger(__name__)
@@ -217,6 +222,7 @@ class ScanSortPipeline:
         )
 
         logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
+        notify_file_filed(final_dest.name, classification.target_folder)
         return final_dest
 
     def process_file(self, file_path: Path) -> Path | None:
@@ -302,7 +308,7 @@ class ScanSortPipeline:
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing
             logger.error("Failed to process scan %s: %s", file_path.name, e)
-            self._route_failed_to_review(file_path)
+            self._route_failed_to_review(file_path, reason=str(e))
             return None
 
         finally:
@@ -310,12 +316,15 @@ class ScanSortPipeline:
             if staging_pdf is not None:
                 staging_pdf.unlink(missing_ok=True)
 
-    def _route_failed_to_review(self, file_path: Path) -> None:
+    def _route_failed_to_review(
+        self, file_path: Path, reason: str | None = None
+    ) -> None:
         """Best-effort relocation of an unprocessable inbox file to the review folder.
 
         Only the original inbox file is ever moved (dispatch failures leave it in
         place); the move and audit write are themselves guarded so routing failure
-        degrades to the previous logged-stranded behavior.
+        degrades to the previous logged-stranded behavior. Users are notified via
+        toast in both outcomes.
         """
         try:
             if self.config.dry_run or not file_path.exists():
@@ -338,10 +347,13 @@ class ScanSortPipeline:
                     status=STATUS_FAILED,
                 )
             )
+            notify_filing_failed(file_path.name, folder_str, reason)
         except (OSError, ValueError) as e:
             logger.error(
                 "Could not route failed scan %s to review folder: %s", file_path, e
             )
+            display_folder = str(self.config.fallback_folder).replace("\\", "/")
+            notify_scan_stranded(file_path.name, display_folder)
 
     def run_worker(self, file_queue: queue.Queue, stop_event: threading.Event) -> None:
         """Sequential background worker processing items from the queue with rate-limiting.

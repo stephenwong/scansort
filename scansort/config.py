@@ -72,6 +72,8 @@ class AppConfig(BaseModel):
     max_folder_depth: int = Field(default=DEFAULT_MAX_FOLDER_DEPTH, ge=1, le=10)
     dry_run: bool = False
     mirror_log_to_documents: bool = False
+    auto_update: bool = True
+    update_check_interval_days: int = Field(default=1, ge=1, le=60)
 
     @property
     def mirror_csv_path(self) -> Path | None:

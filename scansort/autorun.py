@@ -51,7 +51,7 @@ def is_autorun_enabled() -> bool:
             ) as key:
                 value, _ = reg.QueryValueEx(key, RUN_KEY_NAME)
                 return bool(str(value).strip())
-        except (OSError, FileNotFoundError, AttributeError, ImportError):
+        except OSError, FileNotFoundError, AttributeError, ImportError:
             return False
 
     if sys.platform.startswith("linux"):

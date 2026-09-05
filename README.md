@@ -105,6 +105,9 @@ flowchart TD
 - **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`. CSV cells are neutralized against spreadsheet-formula injection, and the CSV mirror never diverges from the JSONL under concurrent processes.
 - **Dry-Run Mode:** Test and preview classification logic on your documents without moving or modifying files (`--dry-run`).
 - **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart (written atomically).
+- **Single-Instance Guard:** The watcher holds a non-blocking `instance.lock`, so a manual launch while auto-start is running (or a self-update relaunch) never spawns a second watcher that would double-file the same scans.
+- **Windows Self-Update:** Frozen Windows builds check GitHub Releases on every `watch` launch and auto-install newer releases with native toast notifications — download, integrity verification, rollback-safe directory swap, and automatic restart, all without admin rights. Runs only in standalone builds; the Python source tree never updates itself.
+- **Filing Notifications:** Native Windows toasts announce when a document is filed, when a scan fails and is routed to `_Review_Needed` (with a sanitized, truncated reason), and when a scan is stranded and needs manual attention. Toasts are best-effort and never interrupt filing.
 - **Australia/Sydney Time:** All user-facing dates and times (filename date stamps and the audit CSV "Local Time" column) use Australia/Sydney wall-clock time regardless of the machine's timezone.
 
 ---
@@ -112,7 +115,7 @@ flowchart TD
 ## Prerequisites & Installation
 
 ### Prerequisites
-- Python 3.12 or newer
+- Python 3.14 or newer
 - [Astral `uv`](https://docs.astral.sh/uv/) (recommended for fast package management)
 - A Google Gemini API key ([Google AI Studio](https://aistudio.google.com/))
 
@@ -120,7 +123,7 @@ flowchart TD
 
 ```bash
 # Clone repository
-git clone https://github.com/stephen/scansort.git
+git clone https://github.com/stephenwong/scansort.git
 cd scansort
 
 # Install dependencies into virtual environment
@@ -243,6 +246,19 @@ YYMMDD_<Description>.pdf
 - **Taxonomy freshness:** The cached folder list is re-scanned automatically when older than 1 hour and pruned of folders that no longer exist.
 - **Spreadsheet-safe audit CSVs:** Cells that could be interpreted as formulas (`=`, `+`, `-`, `@` prefixes) are neutralized, and un-encodable characters never crash the audit write.
 - **Timezone:** Date-stamped filenames and the audit "Local Time" column always reflect Australia/Sydney time (DST-aware via the bundled `tzdata`).
+
+---
+
+## Updating ScanSort
+
+Standalone Windows builds self-update automatically from the project's public GitHub Releases:
+
+- **When:** Every `watch` launch (including auto-start at logon), a check runs when `auto_update` is enabled (default) and the interval `update_check_interval_days` (default 1 day) has elapsed since the last completed check. Progress is tracked in `%APPDATA%\ScanSort\update_state.json`; a malformed or missing file simply triggers a fresh check.
+- **What qualifies:** A release tagged `vX.Y.Z` whose asset is named exactly `ScanSort-<tag>-windows-x64.zip` (this is what the release pipeline publishes). The tag must be strictly newer than the running version **and** any previously applied release, so a forgotten version bump can never cause re-install loops.
+- **How:** The ZIP is downloaded over HTTPS, verified by byte count and GitHub's SHA-256 digest, and extracted (ZipSlip-safe) into a staging directory beside the install. Because Windows locks a running executable, the staged **new** build is launched as a detached helper (`--self-update`): it waits for the current process to exit, swaps the install directory with automatic rollback (the old install is renamed aside first and restored on any failure), records the applied version, and relaunches `watch --minimized`.
+- **Toasts:** A native Windows toast announces *"ScanSort update available"* before the restart and *"ScanSort updated"* once the new version is running. Toast support ships as the optional `windows` extra (`windows-toasts`); if it is unavailable, updates still install silently.
+- **Safety:** Updates never run from the Python source tree (development mode is inert), never require administrator rights (installs are per-user under `%LOCALAPPDATA%`), and never touch your configuration, history, or documents. Offline or rate-limited checks simply log and continue watching; a failed install leaves the previous version running and retries on the next launch.
+- **Controlling it:** Set `"auto_update": false` in `%APPDATA%\ScanSort\config.json` to disable automatic checks, or raise `update_check_interval_days` (1–60) to check less often. `scansort config --show` displays both.
 
 ---
 

@@ -21,6 +21,14 @@ hiddenimports = [
     "img2pdf",
     "PIL",
     "tzdata.zoneinfo",
+    # Windows toast notifications (optional 'windows' extra) - lazily imported
+    # by scansort.toasts, so their winrt extension modules must be named here.
+    "windows_toasts",
+    "winrt",
+    "winrt.windows.data.xml.dom",
+    "winrt.windows.foundation",
+    "winrt.windows.foundation.collections",
+    "winrt.windows.ui.notifications",
 ]
 
 a = Analysis(

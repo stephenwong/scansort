@@ -8,12 +8,20 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from google.genai.errors import APIError
 from PIL import Image
 
 from scansort.config import AppConfig
 from scansort.models import DocumentClassification
 from scansort.pipeline import ScanSortPipeline
+
+
+@pytest.fixture(autouse=True)
+def _silence_real_toasts():
+    """Never construct the real WinRT toast backend during pipeline tests."""
+    with patch("scansort.notifications.show_toast", return_value=True):
+        yield
 
 
 def _create_sample_scan(path: Path):
@@ -616,3 +624,84 @@ def test_run_worker_drains_queue_after_stop(tmp_path: Path):
     assert not worker_thread.is_alive()
     assert mock_process.call_count == 3
     assert file_queue.empty()
+
+
+def test_pipeline_filed_toast_fired_with_destination(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities" / "Electricity").mkdir(parents=True)
+
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260901",
+        description="Origin_Energy_Bill",
+        target_folder="Utilities/Electricity",
+        confidence=0.95,
+        orientation_correction=0,
+        document_type="Invoice",
+        summary="Quarterly electricity bill",
+    )
+    pipeline = ScanSortPipeline(
+        config=AppConfig(watch_folder=inbox, documents_root=docs_root),
+        app_dir=tmp_path / "appdata",
+        classifier=mock_classifier,
+    )
+    scan_file = inbox / "scan001.jpg"
+    _create_sample_scan(scan_file)
+
+    with patch("scansort.pipeline.notify_file_filed") as mock_notify:
+        dest = pipeline.process_file(scan_file)
+    assert dest is not None
+    mock_notify.assert_called_once_with(
+        "260901_Origin_Energy_Bill.pdf", "Utilities/Electricity"
+    )
+
+
+def test_pipeline_failure_toast_when_routed_to_review(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.side_effect = RuntimeError("rate limited 429")
+    pipeline = ScanSortPipeline(
+        config=AppConfig(watch_folder=inbox, documents_root=docs_root),
+        app_dir=tmp_path / "appdata",
+        classifier=mock_classifier,
+    )
+    scan_file = inbox / "scan001.jpg"
+    _create_sample_scan(scan_file)
+
+    with patch("scansort.pipeline.notify_filing_failed") as mock_notify:
+        result = pipeline.process_file(scan_file)
+    assert result is None
+    assert not scan_file.exists()
+    assert (docs_root / "_Review_Needed" / "scan001.jpg").exists()
+    mock_notify.assert_called_once_with(
+        "scan001.jpg", "_Review_Needed", "rate limited 429"
+    )
+
+
+def test_pipeline_stranded_toast_when_review_routing_fails(tmp_path: Path, monkeypatch):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.side_effect = RuntimeError("boom")
+    pipeline = ScanSortPipeline(
+        config=AppConfig(watch_folder=inbox, documents_root=docs_root),
+        app_dir=tmp_path / "appdata",
+        classifier=mock_classifier,
+    )
+    scan_file = inbox / "scan001.jpg"
+    _create_sample_scan(scan_file)
+
+    monkeypatch.setattr(
+        "scansort.pipeline.shutil.move",
+        MagicMock(side_effect=OSError("file locked")),
+    )
+    with patch("scansort.pipeline.notify_scan_stranded") as mock_notify:
+        result = pipeline.process_file(scan_file)
+    assert result is None
+    assert scan_file.exists()
+    mock_notify.assert_called_once_with("scan001.jpg", "_Review_Needed")

@@ -52,6 +52,10 @@ HISTORY_CSV_NAME: str = "history.csv"
 MIRROR_HISTORY_CSV_NAME: str = "_ScanSort_History.csv"
 FOLDER_MAP_FILENAME: str = "folder_map.json"
 
+UPDATE_STATE_FILENAME: str = "update_state.json"
+INSTANCE_LOCK_FILENAME: str = "instance.lock"
+UPDATE_LOCK_FILENAME: str = "update.lock"
+
 SUPPORTED_EXTENSIONS: set[str] = {
     ".pdf",
     ".jpg",

@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import queue
 import sys
 import threading
@@ -15,15 +16,35 @@ from scansort.config import (
     load_config,
     save_config,
 )
-from scansort.constants import HISTORY_JSONL_NAME
+from scansort.constants import (
+    HISTORY_JSONL_NAME,
+    INSTANCE_LOCK_FILENAME,
+    UPDATE_STATE_FILENAME,
+)
 from scansort.dispatcher import undo_last_move
 from scansort.folder_mapper import FolderMapper
+from scansort.instance_guard import instance_guard
 from scansort.pipeline import ScanSortPipeline
 from scansort.secrets import (
     get_api_key,
     mask_api_key,
     redact_secrets_from_text,
     set_api_key,
+)
+from scansort.toasts import show_toast
+from scansort.updater import (
+    UpdateError,
+    applied_version,
+    available_update,
+    clear_applied_notification,
+    download_and_stage,
+    fetch_latest_release,
+    installed_version,
+    load_state,
+    perform_self_update,
+    record_update_check,
+    spawn_update_helper,
+    update_is_due,
 )
 from scansort.watcher import DropFolderWatcher
 
@@ -47,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=argparse.SUPPRESS,
         help="Simulate actions without moving files",
+    )
+    parser.add_argument(
+        "--self-update",
+        nargs=4,
+        metavar=("PID", "INSTALL_DIR", "STAGED_DIR", "VERSION"),
+        help=argparse.SUPPRESS,
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -156,6 +183,79 @@ def _handle_watch(parsed: argparse.Namespace) -> int:
         if cfg.dry_run:
             print("[DRY-RUN MODE ACTIVE: No files will be moved]")
 
+    app_dir = get_default_app_dir()
+    try:
+        with instance_guard(app_dir / INSTANCE_LOCK_FILENAME) as acquired:
+            if not acquired:
+                print("Another ScanSort instance is already running.", file=sys.stderr)
+                return 0
+            _announce_applied_update(app_dir)
+            if _maybe_apply_auto_update(cfg, app_dir):
+                return 0
+            return _run_monitor(cfg)
+    except OSError as e:
+        print(f"Error acquiring instance lock: {e}", file=sys.stderr)
+        return 1
+
+
+def _announce_applied_update(app_dir: Path) -> None:
+    """Toast once that a self-installed update is now running, then disarm."""
+    state_path = app_dir / UPDATE_STATE_FILENAME
+    state = load_state(state_path)
+    if not state.get("just_installed"):
+        return
+    version = state.get("applied_version")
+    label = (
+        f"Version {version}"
+        if isinstance(version, str) and version
+        else "A new version"
+    )
+    show_toast("ScanSort updated", f"{label} was installed successfully.")
+    clear_applied_notification(state_path)
+
+
+def _maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
+    """Download and hand off a newer release, returning True when applied.
+
+    Runs only in frozen Windows builds with auto-update enabled and the check
+    interval elapsed. Every failure mode (offline, rate-limited, download or
+    spawn errors) logs a warning and returns False so normal watch startup
+    always proceeds. The check timestamp is only recorded once a decision is
+    made or an install is handed off, so a failed install retries next launch.
+    """
+    if not (
+        cfg.auto_update and sys.platform == "win32" and getattr(sys, "frozen", False)
+    ):
+        return False
+    state_path = app_dir / UPDATE_STATE_FILENAME
+    try:
+        if not update_is_due(state_path, cfg.update_check_interval_days):
+            return False
+        payload = fetch_latest_release()
+        release = available_update(
+            payload,
+            installed_version(),
+            applied_version(state_path),
+        )
+        if release is None:
+            record_update_check(state_path)
+            return False
+        install_dir = Path(sys.executable).parent
+        staged_dir = download_and_stage(release, install_dir, app_dir / "tmp")
+        show_toast(
+            "ScanSort update available",
+            f"Version {release.version} downloaded. Restarting to install it.",
+        )
+        spawn_update_helper(install_dir, staged_dir, release.version, os.getpid())
+        record_update_check(state_path)
+        return True
+    except UpdateError as e:
+        logger.warning("Automatic update skipped: %s", e)
+        return False
+
+
+def _run_monitor(cfg: AppConfig) -> int:
+    """Run the drop folder watcher and its pipeline worker until stopped."""
     file_queue: queue.Queue = queue.Queue()
     stop_event = threading.Event()
     try:
@@ -281,6 +381,9 @@ def _handle_config(parsed: argparse.Namespace) -> int:
         print(f"Gemini Model:      {cfg.gemini_model}")
         print(f"Start on Boot:     {autorun_status}")
         print(f"Dry Run Mode:      {cfg.dry_run}")
+        auto_update = "Enabled" if cfg.auto_update else "Disabled"
+        print(f"Auto Update:       {auto_update}")
+        print(f"Update Check:      every {cfg.update_check_interval_days} day(s)")
         print(f"Gemini API Key:    {masked}")
         print("=========================================================")
 
@@ -322,10 +425,23 @@ def _handle_rescan(parsed: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_self_update(values: list[str]) -> int:
+    """Handle the hidden '--self-update' helper invocation from a staged build."""
+    try:
+        pid = int(values[0])
+    except ValueError as e:
+        print(f"Invalid --self-update arguments: {e}", file=sys.stderr)
+        return 1
+    return perform_self_update(pid, values[1], values[2], values[3])
+
+
 def main_cli(args: list[str] | None = None) -> int:
     """Main CLI execution router."""
     parser = build_parser()
     parsed = parser.parse_args(args)
+
+    if getattr(parsed, "self_update", None):
+        return _handle_self_update(parsed.self_update)
 
     command = parsed.command or "watch"
     handlers = {

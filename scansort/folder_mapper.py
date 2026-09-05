@@ -232,7 +232,7 @@ class FolderMapper:
                         self._cached_folders = existing
                         self._cache_mtime = self.cache_path.stat().st_mtime
                         return self._cached_folders
-        except (OSError, ValueError):
+        except OSError, ValueError:
             pass
         return None
 

@@ -5,5 +5,7 @@
   "start_on_boot": true,
   "max_folder_depth": 3,
   "mirror_log_to_documents": false,
-  "dry_run": false
+  "dry_run": false,
+  "auto_update": true,
+  "update_check_interval_days": 1
 }

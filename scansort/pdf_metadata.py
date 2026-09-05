@@ -116,7 +116,7 @@ def process_pdf_metadata_and_rotation(
     if reader.xmp_metadata is not None:
         try:
             existing_xmp = reader.xmp_metadata.stream.get_data()
-        except (AttributeError, OSError):
+        except AttributeError, OSError:
             existing_xmp = None
 
     writer = PdfWriter()

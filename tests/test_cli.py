@@ -1,10 +1,24 @@
 """Unit tests for CLI commands in scansort.__main__."""
 
+import json
+import os
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scansort.__main__ import build_parser, main_cli
 from scansort.config import AppConfig
+
+
+@contextmanager
+def _granted_guard(*args, **kwargs):
+    yield True
+
+
+@contextmanager
+def _denied_guard(*args, **kwargs):
+    yield False
 
 
 def test_build_parser():
@@ -53,6 +67,7 @@ def test_cli_watch_overrides(capsys, tmp_path: Path):
     with (
         patch("scansort.__main__.DropFolderWatcher") as mock_watcher_cls,
         patch("scansort.__main__.ScanSortPipeline"),
+        patch("scansort.__main__.instance_guard", _granted_guard),
     ):
         exit_code = main_cli(
             [
@@ -76,6 +91,7 @@ def test_cli_watch_minimized_suppresses_banner(capsys, tmp_path: Path):
     with (
         patch("scansort.__main__.DropFolderWatcher"),
         patch("scansort.__main__.ScanSortPipeline"),
+        patch("scansort.__main__.instance_guard", _granted_guard),
     ):
         exit_code = main_cli(["watch", "--minimized"])
         assert exit_code == 0
@@ -204,6 +220,7 @@ def test_cli_root_flags_inherited_by_watch(capsys):
     with (
         patch("scansort.__main__.DropFolderWatcher"),
         patch("scansort.__main__.ScanSortPipeline"),
+        patch("scansort.__main__.instance_guard", _granted_guard),
     ):
         # Root --minimized before watch
         exit_code = main_cli(["--minimized", "watch"])
@@ -276,6 +293,7 @@ def test_cli_watch_worker_join_timeout():
     with (
         patch("scansort.__main__.DropFolderWatcher"),
         patch("scansort.__main__.ScanSortPipeline"),
+        patch("scansort.__main__.instance_guard", _granted_guard),
         patch("threading.Thread", return_value=mock_thread),
     ):
         exit_code = main_cli(["watch"])
@@ -289,6 +307,7 @@ def test_cli_watch_keyboard_interrupt():
     with (
         patch("scansort.__main__.DropFolderWatcher", mock_watcher_cls),
         patch("scansort.__main__.ScanSortPipeline"),
+        patch("scansort.__main__.instance_guard", _granted_guard),
     ):
         exit_code = main_cli(["watch"])
         assert exit_code == 0
@@ -387,3 +406,239 @@ def test_cli_config_nested_watch_folder_rejected(tmp_path: Path, capsys):
         assert not mock_save.called
         captured = capsys.readouterr()
         assert "Configuration error" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Self-update CLI wiring
+# ---------------------------------------------------------------------------
+
+
+def test_build_parser_self_update_argument_suppressed():
+    parser = build_parser()
+    args = parser.parse_args(
+        ["--self-update", "1234", "C:\\ScanSort", "C:\\Stage", "0.2.0"]
+    )
+    assert args.self_update == ["1234", "C:\\ScanSort", "C:\\Stage", "0.2.0"]
+    # The helper argument must not surface in help text.
+    assert "--self-update" not in parser.format_help()
+
+
+def test_cli_self_update_dispatches_to_updater():
+    with patch("scansort.__main__.perform_self_update", return_value=0) as mock_fn:
+        exit_code = main_cli(["--self-update", "42", "/x/install", "/x/stage", "0.2.0"])
+        assert exit_code == 0
+    mock_fn.assert_called_once_with(42, "/x/install", "/x/stage", "0.2.0")
+
+
+def test_cli_watch_applies_update_and_skips_watcher(tmp_path: Path):
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    with (
+        patch("scansort.__main__.load_config", return_value=cfg),
+        patch("scansort.__main__.instance_guard", _granted_guard),
+        patch("scansort.__main__._maybe_apply_auto_update", return_value=True),
+        patch("scansort.__main__.DropFolderWatcher") as mock_watcher_cls,
+        patch("scansort.__main__.ScanSortPipeline"),
+    ):
+        assert main_cli(["watch", "--minimized"]) == 0
+        mock_watcher_cls.return_value.start.assert_not_called()
+
+
+def test_cli_watch_exits_when_another_instance_runs(tmp_path: Path, capsys):
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    with (
+        patch("scansort.__main__.load_config", return_value=cfg),
+        patch("scansort.__main__.instance_guard", _denied_guard),
+        patch("scansort.__main__.DropFolderWatcher") as mock_watcher_cls,
+        patch("scansort.__main__.ScanSortPipeline"),
+    ):
+        assert main_cli(["watch", "--minimized"]) == 0
+        mock_watcher_cls.return_value.start.assert_not_called()
+        assert "already running" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Auto-update trigger at watch startup
+# ---------------------------------------------------------------------------
+
+
+def test_maybe_apply_auto_update_inert_in_development(tmp_path: Path):
+    from scansort.__main__ import _maybe_apply_auto_update
+
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    with patch("scansort.__main__.fetch_latest_release") as mock_fetch:
+        assert _maybe_apply_auto_update(cfg, tmp_path / "appdata") is False
+        mock_fetch.assert_not_called()
+
+
+def test_maybe_apply_auto_update_disabled_by_config(tmp_path: Path, monkeypatch):
+    from scansort.__main__ import _maybe_apply_auto_update
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox",
+        documents_root=tmp_path / "Docs",
+        auto_update=False,
+    )
+    with patch("scansort.__main__.fetch_latest_release") as mock_fetch:
+        assert _maybe_apply_auto_update(cfg, tmp_path / "appdata") is False
+        mock_fetch.assert_not_called()
+
+
+def test_maybe_apply_auto_update_skips_within_interval(tmp_path: Path, monkeypatch):
+    import scansort.updater as updater
+    from scansort.__main__ import _maybe_apply_auto_update
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    app_dir.mkdir()
+    updater.record_update_check(app_dir / "update_state.json")
+    with patch("scansort.__main__.fetch_latest_release") as mock_fetch:
+        assert _maybe_apply_auto_update(cfg, app_dir) is False
+        mock_fetch.assert_not_called()
+
+
+def test_maybe_apply_auto_update_installs_when_release_found(
+    tmp_path: Path, monkeypatch
+):
+
+    from scansort.__main__ import _maybe_apply_auto_update
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe_path = tmp_path / "Programs" / "ScanSort" / "ScanSort.exe"
+    exe_path.parent.mkdir(parents=True)
+    exe_path.write_bytes(b"old")
+    monkeypatch.setattr(sys, "executable", str(exe_path), raising=False)
+
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    payload = {
+        "tag_name": "v0.2.0",
+        "assets": [
+            {
+                "name": "ScanSort-v0.2.0-windows-x64.zip",
+                "browser_download_url": "https://example.com/a.zip",
+                "size": 1,
+            }
+        ],
+    }
+    staged = tmp_path / "ScanSort.stage-0.2.0"
+    staged.mkdir()
+    (staged / "ScanSort.exe").write_bytes(b"new")
+    with (
+        patch("scansort.__main__.fetch_latest_release", return_value=payload),
+        patch("scansort.__main__.download_and_stage", return_value=staged),
+        patch("scansort.__main__.spawn_update_helper") as mock_spawn,
+        patch("scansort.__main__.show_toast") as mock_toast,
+    ):
+        applied = _maybe_apply_auto_update(cfg, app_dir)
+    assert applied is True
+    mock_spawn.assert_called_once()
+    args = mock_spawn.call_args[0]
+    assert args[1] == staged
+    assert args[2] == "0.2.0"
+    assert args[3] == os.getpid()
+    mock_toast.assert_called_once()
+    assert "update available" in mock_toast.call_args[0][0].lower()
+    state = json.loads((app_dir / "update_state.json").read_text(encoding="utf-8"))
+    assert state["checked_at"]
+
+
+def test_maybe_apply_auto_update_no_release_records_check(tmp_path: Path, monkeypatch):
+    from scansort.__main__ import _maybe_apply_auto_update
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    with patch(
+        "scansort.__main__.fetch_latest_release", return_value={"tag_name": "v0.1.0"}
+    ):
+        assert _maybe_apply_auto_update(cfg, app_dir) is False
+    assert (app_dir / "update_state.json").exists()
+
+
+def test_maybe_apply_auto_update_recovers_from_check_errors(
+    tmp_path: Path, monkeypatch
+):
+    from scansort.__main__ import _maybe_apply_auto_update
+    from scansort.updater import UpdateError
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    with patch(
+        "scansort.__main__.fetch_latest_release",
+        side_effect=UpdateError("offline"),
+    ):
+        assert _maybe_apply_auto_update(cfg, app_dir) is False
+    assert not (app_dir / "update_state.json").exists()
+
+
+def test_maybe_apply_auto_update_recovers_from_spawn_failure(
+    tmp_path: Path, monkeypatch
+):
+    from scansort.__main__ import _maybe_apply_auto_update
+    from scansort.updater import UpdateError
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    payload = {
+        "tag_name": "v0.2.0",
+        "assets": [
+            {
+                "name": "ScanSort-v0.2.0-windows-x64.zip",
+                "browser_download_url": "https://example.com/a.zip",
+            }
+        ],
+    }
+    staged = tmp_path / "ScanSort.stage-0.2.0"
+    staged.mkdir()
+    (staged / "ScanSort.exe").write_bytes(b"new")
+    with (
+        patch("scansort.__main__.fetch_latest_release", return_value=payload),
+        patch("scansort.__main__.download_and_stage", return_value=staged),
+        patch(
+            "scansort.__main__.spawn_update_helper",
+            side_effect=UpdateError("launch denied"),
+        ),
+    ):
+        assert _maybe_apply_auto_update(cfg, app_dir) is False
+
+
+def test_announce_applied_update_shows_once_then_clears(tmp_path: Path, monkeypatch):
+    import scansort.updater as updater
+    from scansort.__main__ import _announce_applied_update
+
+    app_dir = tmp_path / "appdata"
+    app_dir.mkdir()
+    updater.record_applied_update(app_dir / "update_state.json", "0.2.0")
+    with patch("scansort.__main__.show_toast") as mock_toast:
+        _announce_applied_update(app_dir)
+    mock_toast.assert_called_once()
+    title, body = mock_toast.call_args[0]
+    assert title == "ScanSort updated"
+    assert "0.2.0" in body
+    state = json.loads((app_dir / "update_state.json").read_text(encoding="utf-8"))
+    assert state["just_installed"] is False
+
+
+def test_announce_applied_update_noop_without_marker(tmp_path: Path):
+    from scansort.__main__ import _announce_applied_update
+
+    app_dir = tmp_path / "appdata"
+    app_dir.mkdir()
+    with patch("scansort.__main__.show_toast") as mock_toast:
+        _announce_applied_update(app_dir)
+    mock_toast.assert_not_called()

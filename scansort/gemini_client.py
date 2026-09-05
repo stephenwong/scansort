@@ -90,7 +90,7 @@ class GeminiClassifier:
         try:
             conf = float(data.get("confidence", 0.0) or 0.0)
             conf = conf if math.isfinite(conf) else 0.0
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             # Malformed confidence must route to _Review_Needed, not abort or
             # bypass the threshold (NaN/Infinity comparisons are unreliable).
             conf = 0.0
@@ -99,7 +99,7 @@ class GeminiClassifier:
         try:
             orient_val = int(data.get("orientation_correction", 0))
             orient = orient_val if orient_val in {0, 90, 180, 270} else 0
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             orient = 0
 
         summary = str(data.get("summary", "") or "").strip()

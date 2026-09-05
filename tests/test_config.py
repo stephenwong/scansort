@@ -255,3 +255,66 @@ def test_config_assignment_validation(tmp_path: Path):
     # Assignment validation should catch invalid values
     with pytest.raises(ValueError):
         cfg.max_folder_depth = 99
+
+
+def test_config_auto_update_defaults():
+    cfg = AppConfig()
+    assert cfg.auto_update is True
+    assert cfg.update_check_interval_days == 1
+
+
+def test_config_update_interval_bounds():
+    with pytest.raises(ValueError):
+        AppConfig(update_check_interval_days=0)
+    with pytest.raises(ValueError):
+        AppConfig(update_check_interval_days=61)
+    assert AppConfig(update_check_interval_days=30).update_check_interval_days == 30
+    assert AppConfig(auto_update=False).auto_update is False
+
+
+def test_config_auto_update_fields_round_trip(tmp_path: Path):
+    cfg_file = tmp_path / "config.json"
+    watch_dir = tmp_path / "watch"
+    docs_dir = tmp_path / "docs"
+    original = AppConfig(
+        watch_folder=watch_dir,
+        documents_root=docs_dir,
+        auto_update=False,
+        update_check_interval_days=7,
+    )
+    save_config(original, cfg_file)
+    loaded = load_config(cfg_file)
+    assert loaded.auto_update is False
+    assert loaded.update_check_interval_days == 7
+
+
+def test_load_config_rejects_invalid_update_interval(tmp_path: Path):
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "watch_folder": str(tmp_path / "Watch"),
+                "documents_root": str(tmp_path / "Docs"),
+                "update_check_interval_days": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="update_check_interval_days"):
+        load_config(cfg_file)
+
+
+def test_config_backward_compatible_without_update_fields(tmp_path: Path):
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "watch_folder": str(tmp_path / "Watch"),
+                "documents_root": str(tmp_path / "Docs"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_file)
+    assert cfg.auto_update is True
+    assert cfg.update_check_interval_days == 1

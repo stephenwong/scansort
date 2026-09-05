@@ -23,9 +23,9 @@ scansort/
 ├── .github/workflows/          # CI and Release workflows (Windows runners)
 ├── working-docs/               # Working documentation & PRD
 │   └── PRD.md                  # Comprehensive technical specification & requirements
-├── scansort/                   # Core Python package (Python >=3.12)
+├── scansort/                   # Core Python package (Python >=3.14)
 │   ├── __init__.py             # Version definition
-│   ├── __main__.py             # CLI entrypoint & subcommands (watch, config, undo, rescan)
+│   ├── __main__.py             # CLI entrypoint & subcommands (watch, config, undo, rescan) + hidden --self-update helper mode
 │   ├── audit_logger.py         # Dual crash-safe JSONL and CSV logging engine
 │   ├── autorun.py              # Windows Registry (HKCU Run) & Linux autostart manager
 │   ├── config.py               # Pydantic configuration loader (%APPDATA%\ScanSort\config.json)
@@ -38,10 +38,14 @@ scansort/
 │   ├── gemini_client.py        # Multimodal Gemini structured classification
 │   ├── hasher.py               # Streaming SHA-256 duplicate scan interception
 │   ├── image_converter.py      # Lossless JPEG stream wrapping (img2pdf) & image normalization
+│   ├── instance_guard.py       # Non-blocking single-instance lock (fcntl/msvcrt)
 │   ├── models.py               # Vendor-neutral classification domain model & sanitizers
+│   ├── notifications.py        # Reusable filing-lifecycle toast messages (success/failure/stranded)
 │   ├── pdf_metadata.py         # XMP metadata embedding & pypdf auto-rotation
 │   ├── pipeline.py             # End-to-end coordinator & sequential queue worker
 │   ├── secrets.py              # OS credential vault, key masking, & regex log redaction
+│   ├── toasts.py               # Windows native toast notifications (lazy optional 'windows' extra)
+│   ├── updater.py              # GitHub Releases self-update engine (check/download/stage/swap/relaunch)
 │   └── watcher.py              # Rust-powered watchfiles monitor with debouncing
 ├── tests/                      # Pytest automated test suite (>=95% coverage enforced)
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
@@ -119,11 +123,20 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 ### L. Windows Text File & BOM Compatibility
 - Always use `encoding="utf-8-sig"` when reading user configuration and hint files (`config.json`, `folder_hints.json`) to transparently support files saved with a UTF-8 Byte Order Mark (BOM) by Windows Notepad.
 
+### M. Single-Instance Guard & Self-Update Safety
+- The background watcher must hold the non-blocking single-instance lock (`app_dir/instance.lock`, `scansort.instance_guard.instance_guard`) for its entire lifetime; a second `watch` process exits immediately instead of running a duplicate, double-filing watcher. The self-update swap must re-acquire this guard (plus `app_dir/update.lock`) before touching the install directory.
+- `scansort.updater` must **never** run an update check, download, or install outside a frozen Windows build with `auto_update` enabled: development runs (Linux or `python -m scansort`) are inert. Do not add API keys, tokens, or other secrets to the update channel or state files.
+- Release candidates must satisfy every gate: tag parses as clean `vMAJOR.MINOR.PATCH` (no pre-releases), asset name is exactly `ScanSort-<tag>-windows-x64.zip`, and the version is strictly newer than both the embedded `__version__` and the last applied version recorded in `app_dir/update_state.json` (malformed/missing state must count as "due for a check"). Persist check timestamps only after a completed decision/hand-off so failed installs retry on the next launch.
+- Downloads must be streamed to `app_dir/tmp` and verified against the declared size and, when GitHub publishes one, the SHA-256 digest. Archive extraction must reject absolute paths, `..` segments, and Windows drive prefixes (ZipSlip), and require a root `ScanSort.exe` before any swap.
+- Install swaps are rollback-safe: rename the current install aside, rename the staged tree into place, and only then remove the backup; on any step failure rename the backup back and exit nonzero — the auto-start target must never point at a missing directory. Staging lives in a sibling directory of the install directory (same volume).
+- The helper (spawned staged build, hidden `--self-update` mode) waits for the old PID using a native `OpenProcess`/`WaitForSingleObject` handle — never `os.kill(pid, 0)`, which is not an existence probe on Windows. Detached children must use `DETACHED_PROCESS | CREATE_NO_WINDOW` with all standard handles closed.
+- Toasts (`scansort.toasts`) are best-effort and never raise: they no-op off-Windows, lazily import the optional `windows-toasts` extra, and swallow display failures. The "update installed" toast must be fired by the *relaunched* app from the `just_installed` state marker — never by the helper after the swap, whose bundled module paths no longer exist. Filing-lifecycle messages (filed / failed-with-reason / stranded) live in `scansort.notifications` with word-for-word testable builders; failure reasons shown in toasts must be whitespace-collapsed, secret-redacted, and truncated (~140 chars).
+
 ---
 
 ## 4. Development Toolchain & Commands
 
-ScanSort is built with modern Python 3.12+ and managed with Astral's `uv` toolchain.
+ScanSort is built with modern Python 3.14+ and managed with Astral's `uv` toolchain.
 
 ### Common Commands
 ```bash
@@ -169,9 +182,12 @@ uv run pyinstaller scansort.spec
    [tool.pytest.ini_options]
    addopts = "--cov=scansort --cov-report=term-missing --cov-fail-under=95"
    ```
-4. **Mocking Standards:**
+ 4. **Mocking Standards:**
    - Never make live network requests to Google Gemini in unit tests. Mock `google.genai.Client` and `types.GenerateContentConfig`.
    - Never write to real OS credential managers during test execution. Mock `keyring.get_password`, `keyring.set_password`, and `keyring.delete_password`.
+   - Never make live requests to the GitHub Releases API in unit tests. Inject a fake `opener` (a callable accepting `(Request, timeout)` and returning a context-managed byte stream) into `fetch_latest_release` / `download_release`.
+   - Simulate the optional `windows_toasts` library by injecting a fake module via `patch.dict("sys.modules", {"windows_toasts": fake})`; never construct the real WinRT backend in tests.
+   - Windows-native branches (`sys.platform == "win32"`) must be exercised with `monkeypatch.setattr("sys.platform", "win32")` plus fakes injected for `msvcrt`/`ctypes`, mirroring the existing `winreg` seam pattern, so coverage is identical on Linux and Windows runners.
    - Use `tmp_path` fixtures for all filesystem tests.
 5. **Style & Linting:** Code must adhere to strict Ruff rules (`E`, `F`, `I`, `B`, `SIM`, `DTZ`, `BLE`). Do not use bare `except Exception:` unless re-raising or wrapping specific expected I/O and network exceptions.
 

@@ -57,7 +57,7 @@ def _extract_dpi(img: Image.Image, default: float = DEFAULT_DPI) -> float:
             val = float(dpi_info[0])
             if val > 0:
                 return val
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             pass
     elif isinstance(dpi_info, (int, float)) and dpi_info > 0:
         return float(dpi_info)

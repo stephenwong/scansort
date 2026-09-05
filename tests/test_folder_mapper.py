@@ -359,7 +359,7 @@ def test_scan_folders_skips_symlinked_directories(tmp_path: Path):
     (external / "SecretProject").mkdir(parents=True)
     try:
         (docs_root / "Linked").symlink_to(external, target_is_directory=True)
-    except (OSError, NotImplementedError):
+    except OSError, NotImplementedError:
         import pytest as _pytest
 
         _pytest.skip("Symlinks unavailable on this platform")
