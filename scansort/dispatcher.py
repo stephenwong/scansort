@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+from contextlib import nullcontext
 from pathlib import Path
 
 from scansort.audit_logger import AuditLogger
@@ -14,10 +15,16 @@ from scansort.constants import (
     STATUS_UNDONE,
     UNDONE_PREFIX,
 )
-from scansort.fs_utils import relative_folder_is_safe, resolve_collision
+from scansort.fs_utils import (
+    interprocess_file_lock,
+    relative_folder_is_safe,
+    resolve_collision,
+)
 from scansort.models import DocumentClassification
 
 logger = logging.getLogger(__name__)
+
+OPERATIONS_LOCK_FILENAME: str = "operations.lock"
 
 __all__ = [
     "dispatch_file",
@@ -119,6 +126,7 @@ def dispatch_file(
     source_path: Path,
     docs_root: Path,
     classification: DocumentClassification,
+    lock_path: Path | None = None,
 ) -> Path:
     """Execute the atomic move of the source file to its classified destination.
 
@@ -129,6 +137,7 @@ def dispatch_file(
         source_path: Path to the processed (or stabilized) file in drop folder.
         docs_root: Root of Documents directory.
         classification: Extracted classification from Gemini.
+        lock_path: Optional cross-process lock file guarding resolve+move.
 
     Returns:
         Final destination Path of the filed document.
@@ -140,9 +149,15 @@ def dispatch_file(
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     target_filename = generate_target_filename(classification)
-    dest_path = resolve_collision(dest_dir, target_filename)
 
-    shutil.move(str(source_path), str(dest_path))
+    with interprocess_file_lock(lock_path) if lock_path else nullcontext():
+        dest_path = resolve_collision(dest_dir, target_filename)
+        try:
+            shutil.move(str(source_path), str(dest_path))
+        except OSError:
+            # Remove any partially copied destination (e.g. EXDEV copy fallback).
+            dest_path.unlink(missing_ok=True)
+            raise
     logger.info("Filed document: %s -> %s", source_path.name, dest_path)
     return dest_path
 
@@ -181,7 +196,12 @@ def _find_last_reversible_record(jsonl_path: Path) -> dict[str, object] | None:
             elif status in REVERSIBLE_STATUSES:
                 if norm_dest in undone_destinations:
                     continue
-                if not Path(str(dest_p)).exists():
+                if not record.get("original_path"):
+                    logger.debug(
+                        "Skipping record without original_path during undo search."
+                    )
+                    continue
+                if not Path(str(dest_p)).is_file():
                     logger.debug("Skipping missing file %s during undo search.", dest_p)
                     continue
                 return record
@@ -207,6 +227,7 @@ def undo_last_move(
     jsonl_path: Path,
     csv_path: Path | None = None,
     mirror_csv_path: Path | None = None,
+    lock_path: Path | None = None,
 ) -> Path | None:
     """Reverse the last successful document move recorded in the audit log.
 
@@ -215,9 +236,13 @@ def undo_last_move(
         csv_path: Optional path to the paired CSV audit log. Defaults to the
             sibling of jsonl_path.
         mirror_csv_path: Optional mirrored CSV audit log to update alongside.
+        lock_path: Optional cross-process lock file guarding the restore.
 
     Returns:
         Path of restored file in drop folder, or None if no reversible action found.
+
+    Raises:
+        OSError: If the physical restore fails (e.g. the destination is locked).
     """
     target_record = _find_last_reversible_record(jsonl_path)
     if target_record is None:
@@ -225,14 +250,19 @@ def undo_last_move(
 
     dest_path = Path(str(target_record["destination_path"]))
     original_path = Path(str(target_record["original_path"]))
-    restore_path = _resolve_restored_path(original_path, dest_path)
+    lock_file = lock_path or (jsonl_path.parent / OPERATIONS_LOCK_FILENAME)
 
-    try:
-        restore_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(dest_path), str(restore_path))
-    except (PermissionError, OSError) as e:
-        logger.error("Failed to restore file %s: %s", dest_path, e)
-        return None
+    with interprocess_file_lock(lock_file):
+        restore_path = _resolve_restored_path(original_path, dest_path)
+
+        try:
+            restore_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dest_path), str(restore_path))
+        except (PermissionError, OSError) as e:
+            logger.error("Failed to restore file %s: %s", dest_path, e)
+            # Remove any partially restored copy (e.g. cross-device copy failure).
+            restore_path.unlink(missing_ok=True)
+            raise
 
     undo_record = dict(target_record)
     undo_record.pop("timestamp", None)

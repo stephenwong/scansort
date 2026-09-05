@@ -308,12 +308,69 @@ def test_undo_permission_error_handled_cleanly(tmp_path: Path):
     }
     jsonl_path.write_text(json.dumps(r) + "\n", encoding="utf-8")
 
-    with patch("shutil.move", side_effect=PermissionError("[WinError 32] File locked")):
-        assert undo_last_move(jsonl_path) is None
+    with (
+        patch("shutil.move", side_effect=PermissionError("[WinError 32] File locked")),
+        pytest.raises(PermissionError, match="File locked"),
+    ):
+        undo_last_move(jsonl_path)
 
     # Ensure no UNDONE status was recorded in history
     last_line = jsonl_path.read_text(encoding="utf-8").strip().splitlines()[-1]
     assert json.loads(last_line)["status"] == "SUCCESS"
+
+
+def test_undo_skips_record_missing_original_path(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Documents" / "Utilities"
+    docs.mkdir(parents=True)
+
+    older = docs / "260901_Older.pdf"
+    older.write_bytes(b"older")
+    newer = docs / "260902_Newer.pdf"
+    newer.write_bytes(b"newer")
+
+    jsonl_path = tmp_path / "history.jsonl"
+    malformed = {
+        "status": "SUCCESS",
+        "destination_path": str(newer),  # existing, but missing original_path
+    }
+    valid = {
+        "status": "SUCCESS",
+        "destination_path": str(older),
+        "original_path": str(inbox / "older.pdf"),
+    }
+    jsonl_path.write_text(f"{json.dumps(malformed)}\n{json.dumps(valid)}\n")
+
+    restored = undo_last_move(jsonl_path)
+    assert restored is not None
+    assert restored == inbox / "_undone_older.pdf"
+    assert not older.exists()
+
+
+def test_undo_skips_directory_at_recorded_destination(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Documents"
+    docs.mkdir(parents=True)
+
+    # The recorded "file" destination is now a populated directory.
+    folder_dest = docs / "260901_Bill.pdf"
+    folder_dest.mkdir()
+    (folder_dest / "child.txt").write_text("user data")
+
+    jsonl_path = tmp_path / "history.jsonl"
+    r = {
+        "status": "SUCCESS",
+        "destination_path": str(folder_dest),
+        "original_path": str(inbox / "scan.pdf"),
+    }
+    jsonl_path.write_text(json.dumps(r) + "\n")
+
+    assert undo_last_move(jsonl_path) is None
+    assert folder_dest.is_dir()
+    assert (folder_dest / "child.txt").exists()
+    assert not (inbox / "_undone_scan.pdf").exists()
 
 
 def test_dispatch_empty_or_root_target_routes_to_review(tmp_path: Path):
