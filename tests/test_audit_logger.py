@@ -2,6 +2,7 @@
 
 import csv
 import json
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -111,3 +112,128 @@ def test_audit_logger_ensure_csv_headers_os_error(tmp_path: Path):
     )
     with patch("pathlib.Path.stat", side_effect=OSError("Disk error")):
         logger._ensure_csv_headers(tmp_path / "error.csv")
+
+
+def test_ensure_csv_headers_concurrent_creation_never_truncates(tmp_path: Path):
+    """Header initialization must never truncate rows another process appended."""
+    csv_path = tmp_path / "history.csv"
+    logger = AuditLogger(
+        jsonl_path=tmp_path / "history.jsonl",
+        csv_path=csv_path,
+    )
+
+    orig_open = open
+    entered = threading.Event()
+    release = threading.Event()
+
+    def guarded_open(file, mode="r", *args, **kwargs):
+        name = getattr(file, "name", file)
+        if str(name) == str(csv_path) and mode == "w":
+            entered.set()
+            release.wait(timeout=5)
+        return orig_open(file, mode, *args, **kwargs)
+
+    results: list[object] = []
+
+    def initialize() -> None:
+        try:
+            logger._ensure_csv_headers(csv_path)
+            results.append("ok")
+        except BaseException as exc:  # noqa: BLE001 - test failure capture
+            results.append(exc)
+
+    thread = threading.Thread(target=initialize)
+    with patch("builtins.open", guarded_open):
+        thread.start()
+        old_truncating_behavior = entered.wait(timeout=1.0)
+        if old_truncating_behavior:
+            # Old implementation is paused before its truncating open("w"):
+            # append a row as the concurrent process would, then let it run.
+            with open(csv_path, "a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(["MUST_SURVIVE"])
+            release.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        if not old_truncating_behavior:
+            # New implementation never opens "w"; simulate the concurrent append.
+            with open(csv_path, "a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(["MUST_SURVIVE"])
+
+    assert results == ["ok"]
+    content = csv_path.read_text(encoding="utf-8")
+    assert "MUST_SURVIVE" in content
+
+
+def test_log_scan_neutralizes_spreadsheet_formula_cells(tmp_path: Path):
+    jsonl_path = tmp_path / "history.jsonl"
+    csv_path = tmp_path / "history.csv"
+    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path)
+
+    logger.log_scan(
+        {
+            "sha256": "hash1",
+            "original_filename": '=HYPERLINK("http://evil")-x.pdf',
+            "new_filename": "260901_Doc.pdf",
+            "destination_folder": "Utilities",
+            "destination_path": "/docs/Utilities/260901_Doc.pdf",
+            "summary": "=cmd|'/C calc'!A0",
+            "status": "SUCCESS",
+        }
+    )
+
+    text = csv_path.read_text(encoding="utf-8")
+    assert "'=cmd|'/C calc'!A0" in text
+    assert "'=HYPERLINK" in text
+    assert ",=cmd|" not in text
+    assert ',"=cmd|' not in text
+
+    # JSONL stays verbatim (source of truth).
+    jsonl_text = jsonl_path.read_text(encoding="utf-8")
+    assert "=cmd|'/C calc'!A0" in jsonl_text
+
+
+def test_log_scan_survives_lone_surrogates(tmp_path: Path):
+    jsonl_path = tmp_path / "history.jsonl"
+    csv_path = tmp_path / "history.csv"
+    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path)
+
+    # A lone surrogate is not encodable under strict UTF-8.
+    logger.log_scan(
+        {
+            "sha256": "hash2",
+            "original_filename": "scan.pdf",
+            "new_filename": "260901_Doc.pdf",
+            "destination_folder": "Utilities",
+            "destination_path": "/docs/260901_Doc.pdf",
+            "summary": "caf\udce9 content",
+            "status": "SUCCESS",
+        }
+    )
+
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "caf? content" in csv_text
+    jsonl_text = jsonl_path.read_text(encoding="utf-8")
+    assert json.loads(jsonl_text)["summary"] == "caf\udce9 content"
+
+
+def test_log_scan_local_time_always_australia_sydney(tmp_path, monkeypatch):
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    from scansort import audit_logger as audit_module
+
+    sydney_tz = ZoneInfo("Australia/Sydney")
+
+    # 2026-01-31T13:30Z == 2026-02-01 00:30 Sydney (AEDT, UTC+11).
+    frozen = _dt.fromisoformat("2026-01-31T13:30:00+00:00").astimezone(sydney_tz)
+    monkeypatch.setattr(audit_module, "sydney_now", lambda: frozen)
+
+    jsonl_path = tmp_path / "history.jsonl"
+    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=tmp_path / "history.csv")
+
+    logger.log_scan({"status": "SUCCESS"})
+
+    record = json.loads(jsonl_path.read_text(encoding="utf-8").strip())
+    assert record["local_time"].startswith("2026-02-01 00:30")
+    # The machine-independent UTC instant is preserved as an ISO +00:00 stamp.
+    assert record["timestamp"].endswith("+00:00")

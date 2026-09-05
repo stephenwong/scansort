@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0",
     "pypdf>=6.16.2",
     "pystray>=0.19.5",
+    "tzdata>=2026.3",
     "watchfiles>=1.2.0",
 ]
 

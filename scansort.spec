@@ -7,6 +7,8 @@ block_cipher = None
 
 datas = []
 datas += collect_data_files("scansort")
+# IANA timezone database required by zoneinfo on Windows (Australia/Sydney).
+datas += collect_data_files("tzdata")
 
 hiddenimports = [
     "pydantic",
@@ -18,6 +20,7 @@ hiddenimports = [
     "pypdf",
     "img2pdf",
     "PIL",
+    "tzdata.zoneinfo",
 ]
 
 a = Analysis(
