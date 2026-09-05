@@ -1,12 +1,21 @@
 """Unit tests for scansort.models module."""
 
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from scansort.models import (
     DocumentClassification,
     sanitize_date,
     sanitize_description,
 )
+from scansort.timeutil import sydney_now
+
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+
+
+def _sydney_from_utc(iso: str) -> datetime:
+    """Convert a UTC instant to its Australia/Sydney wall-clock representation."""
+    return datetime.fromisoformat(iso).astimezone(SYDNEY_TZ)
 
 
 def test_sanitize_description():
@@ -28,10 +37,39 @@ def test_sanitize_description():
 
 def test_sanitize_date():
     assert sanitize_date("260901") == "260901"
-    today = datetime.now(UTC).strftime("%y%m%d")
+    today = sydney_now().strftime("%y%m%d")
     assert sanitize_date("invalid") == today
     assert sanitize_date("") == today
     assert sanitize_date("2026-09-01") == "260901"
+
+
+def test_sanitize_date_rejects_impossible_calendar_dates():
+    today = sydney_now().strftime("%y%m%d")
+    assert sanitize_date("260932") == today  # day 32
+    assert sanitize_date("000000") == today  # zero year/month/day
+    assert sanitize_date("20261399") == today  # month 13
+    assert sanitize_date("260001") == today  # month 00
+    assert sanitize_date("20260230") == today  # Feb 30
+
+
+def test_sanitize_date_fallback_uses_sydney_wall_clock(monkeypatch):
+    import scansort.models as models
+
+    # 2026-09-05T14:30Z == 2026-09-06 00:30 in Sydney (AEST, UTC+10).
+    monkeypatch.setattr(
+        models,
+        "sydney_now",
+        lambda: _sydney_from_utc("2026-09-05T14:30:00+00:00"),
+    )
+    assert sanitize_date("no-date-here") == "260906"
+
+    # 2026-01-31T13:30Z == 2026-02-01 00:30 in Sydney (AEDT, UTC+11).
+    monkeypatch.setattr(
+        models,
+        "sydney_now",
+        lambda: _sydney_from_utc("2026-01-31T13:30:00+00:00"),
+    )
+    assert sanitize_date(None) == "260201"
 
 
 def test_document_classification_model():
@@ -57,9 +95,62 @@ def test_sanitizers_numeric_types():
     assert sanitize_description("   ") == "Scanned_Document"
     assert sanitize_description("???") == "Scanned_Document"
     assert sanitize_date(20260901) == "260901"
-    assert sanitize_date(None) == datetime.now(UTC).strftime("%y%m%d")
+    assert sanitize_date(None) == sydney_now().strftime("%y%m%d")
 
 
 def test_sanitize_description_null_bytes_and_control_chars():
     dirty = "Invoice\x00\x01\x1f\x7f_2026\tSpecial"
     assert sanitize_description(dirty) == "Invoice_2026_Special"
+
+
+def test_sanitize_description_truncates_on_word_boundaries():
+    long_title = "PaymentNotice " * 8
+    result = sanitize_description(long_title)
+    assert len(result) <= 60
+    # Trailing partial words must be dropped, not sliced mid-word.
+    assert not result.endswith("_")
+    assert result == "Paymentnotice_Paymentnotice_Paymentnotice_Paymentnotice"
+
+
+def test_sanitize_description_normalizes_fullwidth_and_format_chars():
+    assert sanitize_description("Payment／Notice Bill") == "Payment_Notice_Bill"
+    assert "\ufeff" not in sanitize_description("\ufeffBank Statement")
+    assert "\u200b" not in sanitize_description("Bank\u200bStatement Bill")
+    assert sanitize_description("Bank\u200bStatement") == "Bankstatement"
+    assert "Bank\u202eStatement" not in sanitize_description("Bank\u202eStatement")
+
+
+def test_document_classification_rejects_unsanitized_boundary_values():
+    import pytest
+
+    with pytest.raises(ValueError):
+        DocumentClassification(
+            document_date="2609",
+            description="Bad/name",
+            target_folder="Utilities",
+        )
+    with pytest.raises(ValueError):
+        DocumentClassification(
+            document_date="260901",
+            description="bad\\name",
+            target_folder="Utilities",
+        )
+    with pytest.raises(ValueError):
+        DocumentClassification(
+            document_date="260932",
+            description="Good",
+            target_folder="Utilities",
+        )
+    with pytest.raises(ValueError):
+        DocumentClassification(
+            document_date="260901",
+            description="\ufeffHidden",
+            target_folder="Utilities",
+        )
+    with pytest.raises(ValueError):
+        DocumentClassification(
+            document_date="260901",
+            description="Ok",
+            target_folder="Utilities",
+            confidence=1.5,
+        )

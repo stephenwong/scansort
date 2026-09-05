@@ -316,3 +316,105 @@ def test_windows_backslashes_in_target_folder_normalized(minimal_pdf: Path):
     )
     assert result.target_folder == "Utilities/Electricity"
     assert result.confidence == 0.95
+
+
+def _classify_text(text: str, taxonomy=None, api_key="AIzaSyTest"):
+    """Drive classify_document with a canned raw response text."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(b"%PDF-1.4")
+        dummy = Path(tmp.name)
+    try:
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.text = text
+        mock_client.models.generate_content.return_value = mock_resp
+        cls = GeminiClassifier(api_key=api_key)
+        cls._client = mock_client
+        cls._cached_key = api_key
+        return cls.classify_document(dummy, taxonomy=taxonomy or ["Utilities"])
+    finally:
+        dummy.unlink(missing_ok=True)
+
+
+def test_model_invented_review_subfolder_rerouted():
+    """Only the exact _Review_Needed literal may bypass the taxonomy gate."""
+    res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Insured",
+                "target_folder": "_Review_Needed/Home_Insurance",
+                "confidence": 0.95,
+            }
+        )
+    )
+    assert res.target_folder == "_Review_Needed"
+
+    res_lookalike = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Insured",
+                "target_folder": "_Review_NeededX",
+                "confidence": 0.95,
+            }
+        )
+    )
+    assert res_lookalike.target_folder == "_Review_Needed"
+
+    # A genuine low-confidence result still routes to the exact review folder.
+    res_low = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Insured",
+                "target_folder": "Utilities",
+                "confidence": 0.4,
+            }
+        )
+    )
+    assert res_low.target_folder == "_Review_Needed"
+
+
+def test_malformed_confidence_string_keeps_description():
+    res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Real Bill",
+                "target_folder": "Utilities",
+                "confidence": "not_a_float",
+            }
+        )
+    )
+    assert res.confidence == 0.0
+    assert res.description == "Real_Bill"
+    assert res.target_folder == "_Review_Needed"
+
+
+def test_container_confidence_does_not_escape():
+    res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Real Bill",
+                "target_folder": "Utilities",
+                "confidence": {"nested": 0.9},
+            }
+        )
+    )
+    assert res.confidence == 0.0
+    assert res.target_folder == "_Review_Needed"
+
+
+def test_nan_confidence_routed_to_review():
+    # json.loads accepts a non-standard NaN literal; it must not bypass the gate.
+    res = _classify_text(
+        '{"document_date":"260901","description":"Doc",'
+        '"target_folder":"Utilities","confidence":NaN}'
+    )
+    assert res.confidence == 0.0
+    assert res.target_folder == "_Review_Needed"

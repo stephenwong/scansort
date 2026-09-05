@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import UTC, datetime
+import math
 from pathlib import Path
 
 import httpx
@@ -87,7 +87,13 @@ class GeminiClassifier:
         doc_date = sanitize_date(data.get("document_date"))
         desc = sanitize_description(data.get("description"))
         target = str(data.get("target_folder", "") or "").strip()
-        conf = float(data.get("confidence", 0.0) or 0.0)
+        try:
+            conf = float(data.get("confidence", 0.0) or 0.0)
+            conf = conf if math.isfinite(conf) else 0.0
+        except (TypeError, ValueError):
+            # Malformed confidence must route to _Review_Needed, not abort or
+            # bypass the threshold (NaN/Infinity comparisons are unreliable).
+            conf = 0.0
         doc_type = str(data.get("document_type", "Other") or "Other")
 
         try:
@@ -106,7 +112,7 @@ class GeminiClassifier:
             if doc_type.lower() == "blank":
                 target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
             elif conf < MIN_CONFIDENCE_THRESHOLD or (
-                target not in taxonomy and not target.startswith(REVIEW_NEEDED_DIR)
+                target not in taxonomy and target != REVIEW_NEEDED_DIR
             ):
                 target = REVIEW_NEEDED_DIR
 
@@ -123,7 +129,7 @@ class GeminiClassifier:
     def _create_fallback_classification(self, error_msg: str) -> DocumentClassification:
         """Create a safe fallback classification pointing to _Review_Needed."""
         return DocumentClassification(
-            document_date=datetime.now(UTC).strftime("%y%m%d"),
+            document_date=sanitize_date(None),
             description="Failed_Scan_Classification",
             target_folder=REVIEW_NEEDED_DIR,
             confidence=0.0,
@@ -178,6 +184,7 @@ class GeminiClassifier:
             httpx.HTTPError,
             OSError,
             RuntimeError,
+            TypeError,
             ValueError,
         ) as e:
             redacted_err = redact_secrets_from_text(
