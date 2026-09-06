@@ -13,6 +13,7 @@ from scansort.constants import (
     HINTS_FILENAME,
     HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
+    LOG_FILENAME,
     STATUS_DUPLICATE,
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -222,7 +223,11 @@ class ScanSortPipeline:
         )
 
         logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
-        notify_file_filed(final_dest.name, classification.target_folder)
+        notify_file_filed(
+            final_dest.name,
+            classification.target_folder,
+            folder_path=final_dest.parent,
+        )
         return final_dest
 
     def process_file(self, file_path: Path) -> Path | None:
@@ -347,13 +352,24 @@ class ScanSortPipeline:
                     status=STATUS_FAILED,
                 )
             )
-            notify_filing_failed(file_path.name, folder_str, reason)
+            notify_filing_failed(
+                file_path.name,
+                folder_str,
+                reason,
+                folder_path=review_dir,
+                log_path=self.app_dir / LOG_FILENAME,
+            )
         except (OSError, ValueError) as e:
             logger.error(
                 "Could not route failed scan %s to review folder: %s", file_path, e
             )
             display_folder = str(self.config.fallback_folder).replace("\\", "/")
-            notify_scan_stranded(file_path.name, display_folder)
+            notify_scan_stranded(
+                file_path.name,
+                display_folder,
+                folder_path=self.config.watch_folder,
+                log_path=self.app_dir / LOG_FILENAME,
+            )
 
     def run_worker(self, file_queue: queue.Queue, stop_event: threading.Event) -> None:
         """Sequential background worker processing items from the queue with rate-limiting.

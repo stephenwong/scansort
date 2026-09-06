@@ -11,8 +11,8 @@ import logging.handlers
 from pathlib import Path
 
 from scansort.config import get_default_app_dir
+from scansort.constants import LOG_FILENAME
 
-LOG_FILENAME = "scansort.log"
 _LOG_MAX_BYTES = 1_048_576
 _LOG_BACKUP_COUNT = 3
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"

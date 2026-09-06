@@ -654,7 +654,9 @@ def test_pipeline_filed_toast_fired_with_destination(tmp_path: Path):
         dest = pipeline.process_file(scan_file)
     assert dest is not None
     mock_notify.assert_called_once_with(
-        "260901_Origin_Energy_Bill.pdf", "Utilities/Electricity"
+        "260901_Origin_Energy_Bill.pdf",
+        "Utilities/Electricity",
+        folder_path=dest.parent,
     )
 
 
@@ -678,7 +680,11 @@ def test_pipeline_failure_toast_when_routed_to_review(tmp_path: Path):
     assert not scan_file.exists()
     assert (docs_root / "_Review_Needed" / "scan001.jpg").exists()
     mock_notify.assert_called_once_with(
-        "scan001.jpg", "_Review_Needed", "rate limited 429"
+        "scan001.jpg",
+        "_Review_Needed",
+        "rate limited 429",
+        folder_path=docs_root / "_Review_Needed",
+        log_path=pipeline.app_dir / "scansort.log",
     )
 
 
@@ -704,4 +710,9 @@ def test_pipeline_stranded_toast_when_review_routing_fails(tmp_path: Path, monke
         result = pipeline.process_file(scan_file)
     assert result is None
     assert scan_file.exists()
-    mock_notify.assert_called_once_with("scan001.jpg", "_Review_Needed")
+    mock_notify.assert_called_once_with(
+        "scan001.jpg",
+        "_Review_Needed",
+        folder_path=inbox,
+        log_path=pipeline.app_dir / "scansort.log",
+    )

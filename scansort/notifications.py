@@ -6,6 +6,7 @@ wrappers degrade silently off Windows or when toasts are unavailable.
 """
 
 import logging
+from pathlib import Path
 
 from scansort.secrets import redact_secrets_from_text
 from scansort.toasts import show_toast
@@ -28,42 +29,59 @@ def _clean_reason(reason: str) -> str:
 
 def file_filed_message(filed_name: str, folder: str) -> tuple[str, str]:
     """Return (title, body) announcing a successfully filed document."""
-    return ("Document filed", f"{filed_name} → {folder}")
+    return ("ScanSort", f"{filed_name} → {folder}")
 
 
 def filing_failed_message(
     source_name: str, folder: str, reason: str | None = None
 ) -> tuple[str, str]:
     """Return (title, body) announcing a scan routed to the review folder."""
-    body = f"{source_name} → {folder}"
+    body = f"Filing failed: {source_name} → {folder}"
     if reason:
         cleaned = _clean_reason(reason)
         if cleaned:
             body = f"{body}\nReason: {cleaned}"
-    return ("Document filing failed", body)
+    return ("ScanSort", body)
 
 
 def scan_stranded_message(source_name: str, folder: str) -> tuple[str, str]:
     """Return (title, body) announcing a scan that could not be routed."""
     return (
-        "ScanSort needs attention",
-        f"{source_name} could not be processed or moved to {folder}.\n"
+        "ScanSort",
+        f"Attention needed: {source_name} could not be processed or moved to {folder}.\n"
         "Please check your drop folder.",
     )
 
 
-def notify_file_filed(filed_name: str, folder: str) -> bool:
+def notify_file_filed(
+    filed_name: str,
+    folder: str,
+    folder_path: Path | str | None = None,
+    log_path: Path | str | None = None,
+) -> bool:
     """Toast that a document was filed into ``folder`` (best effort)."""
-    return show_toast(*file_filed_message(filed_name, folder))
+    title, body = file_filed_message(filed_name, folder)
+    return show_toast(title, body, folder_path=folder_path, log_path=log_path)
 
 
 def notify_filing_failed(
-    source_name: str, folder: str, reason: str | None = None
+    source_name: str,
+    folder: str,
+    reason: str | None = None,
+    folder_path: Path | str | None = None,
+    log_path: Path | str | None = None,
 ) -> bool:
     """Toast that a document failed and was routed to ``folder`` (best effort)."""
-    return show_toast(*filing_failed_message(source_name, folder, reason))
+    title, body = filing_failed_message(source_name, folder, reason)
+    return show_toast(title, body, folder_path=folder_path, log_path=log_path)
 
 
-def notify_scan_stranded(source_name: str, folder: str) -> bool:
+def notify_scan_stranded(
+    source_name: str,
+    folder: str,
+    folder_path: Path | str | None = None,
+    log_path: Path | str | None = None,
+) -> bool:
     """Toast that a document needs manual attention in the drop folder."""
-    return show_toast(*scan_stranded_message(source_name, folder))
+    title, body = scan_stranded_message(source_name, folder)
+    return show_toast(title, body, folder_path=folder_path, log_path=log_path)
