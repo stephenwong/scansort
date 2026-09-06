@@ -194,8 +194,10 @@ class GeminiClassifier:
                 system_instruction=system_instruction,
                 response_mime_type="application/json",
                 response_schema=GeminiClassificationResponse,
-                temperature=0.1,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
             )
 
             response = client.models.generate_content(

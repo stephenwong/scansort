@@ -513,3 +513,62 @@ def test_routing_rationale_variations():
     )
     assert unsafe_res.target_folder == "_Review_Needed"
     assert "Unsafe target folder" in unsafe_res.routing_rationale
+
+
+def test_classify_document_config_thinking_level_minimal(minimal_pdf: Path):
+    """Verify Gemini 3.x GenerateContentConfig uses thinking_level='minimal' and omits thinking_budget."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Electricity_Bill",
+            "target_folder": "Utilities",
+            "confidence": 0.95,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(
+        api_key="AIzaSyDummyKey123", model="gemini-3.5-flash-lite"
+    )
+    classifier._client = mock_client
+
+    classifier.classify_document(minimal_pdf, taxonomy=["Utilities"])
+
+    mock_client.models.generate_content.assert_called_once()
+    _, kwargs = mock_client.models.generate_content.call_args
+    config = kwargs["config"]
+    assert config is not None
+    assert config.thinking_config is not None
+    assert config.thinking_config.thinking_level in ("minimal", "MINIMAL")
+    assert config.thinking_config.thinking_budget is None
+
+
+def test_classify_document_config_disables_automatic_function_calling(
+    minimal_pdf: Path,
+):
+    """Verify Gemini GenerateContentConfig explicitly disables automatic function calling (AFC)."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Electricity_Bill",
+            "target_folder": "Utilities",
+            "confidence": 0.95,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+
+    classifier.classify_document(minimal_pdf, taxonomy=["Utilities"])
+
+    mock_client.models.generate_content.assert_called_once()
+    _, kwargs = mock_client.models.generate_content.call_args
+    config = kwargs["config"]
+    assert config is not None
+    assert config.automatic_function_calling is not None
+    assert config.automatic_function_calling.disable is True
