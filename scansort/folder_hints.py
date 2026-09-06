@@ -55,6 +55,7 @@ def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
                 if clean_keywords:
                     normalized[norm_folder] = clean_keywords
 
+        logger.debug("Loaded %d folder hint mappings from %s", len(normalized), path)
         return normalized
     except (json.JSONDecodeError, OSError, ValueError) as e:
         logger.warning("Failed to load folder hints from %s: %s", path, e)

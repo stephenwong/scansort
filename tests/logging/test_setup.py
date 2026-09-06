@@ -1,10 +1,11 @@
-"""Unit tests for persistent rotating file logging (scansort.logging_setup)."""
+"""Unit tests for persistent rotating file logging (scansort.logging.setup)."""
 
 import logging
 import logging.handlers
 from pathlib import Path
 
-from scansort.logging_setup import LOG_FILENAME, configure_file_logging
+from scansort.constants import LOG_FILENAME
+from scansort.logging import configure_file_logging
 
 
 def _root_file_handlers(log_dir: Path) -> list[logging.Handler]:
@@ -93,18 +94,27 @@ def test_configure_returns_none_when_log_file_cannot_be_opened(tmp_path: Path):
 
 def test_configure_uses_default_app_dir_when_not_given(monkeypatch, tmp_path: Path):
     app_dir = tmp_path / "appdata"
-    monkeypatch.setattr("scansort.logging_setup.get_default_app_dir", lambda: app_dir)
+    monkeypatch.setattr("scansort.logging.setup.get_default_app_dir", lambda: app_dir)
     handler = configure_file_logging()
     assert handler is not None
     assert (app_dir / LOG_FILENAME).is_file()
 
 
+def test_configure_file_logging_debug_level(tmp_path: Path):
+    handler = configure_file_logging(tmp_path, level=logging.DEBUG)
+    assert handler is not None
+    assert handler.level == logging.DEBUG
+    assert logging.getLogger().level == logging.DEBUG
+    log_file = tmp_path / LOG_FILENAME
+    assert log_file.exists()
+
+
 def test_main_cli_wires_file_logging_into_app_dir(monkeypatch, tmp_path: Path, capsys):
     import scansort.__main__ as cli_module
-    from scansort.logging_setup import configure_file_logging as real_configure
+    from scansort.logging.setup import configure_file_logging as real_configure
 
     monkeypatch.setattr(cli_module, "configure_file_logging", real_configure)
-    monkeypatch.setattr("scansort.logging_setup.get_default_app_dir", lambda: tmp_path)
+    monkeypatch.setattr("scansort.logging.setup.get_default_app_dir", lambda: tmp_path)
     monkeypatch.setattr("scansort.__main__.get_default_app_dir", lambda: tmp_path)
     monkeypatch.setattr("scansort.config.get_default_app_dir", lambda: tmp_path)
 

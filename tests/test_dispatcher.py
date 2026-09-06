@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-from scansort.audit_logger import AuditLogger
 from scansort.dispatcher import (
     dispatch_file,
     generate_target_filename,
@@ -16,6 +15,7 @@ from scansort.dispatcher import (
     resolve_duplicates_dir,
     undo_last_move,
 )
+from scansort.logging import AuditLogger
 from scansort.models import DocumentClassification
 
 
@@ -554,3 +554,35 @@ def test_undo_csv_write_os_error(tmp_path: Path):
     with patch("builtins.open", side_effect=mock_open_csv_fail):
         restored = undo_last_move(jsonl_path)
         assert restored is not None
+
+
+def test_dispatch_file_move_os_error_cleans_up_destination(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    src = tmp_path / "scan.pdf"
+    src.write_bytes(b"%PDF-1.4")
+    meta = DocumentClassification(
+        document_date="260901",
+        description="Doc",
+        target_folder="_Review_Needed",
+    )
+
+    with (
+        patch("shutil.move", side_effect=OSError("Cross-device link failure")),
+        pytest.raises(OSError, match="Cross-device"),
+    ):
+        dispatch_file(src, docs_root, meta)
+
+
+def test_undo_read_os_error(tmp_path: Path):
+    jsonl_path = tmp_path / "history.jsonl"
+    jsonl_path.write_text('{"status": "SUCCESS"}\n', encoding="utf-8")
+
+    with patch.object(Path, "read_text", side_effect=OSError("Disk unreadable")):
+        assert undo_last_move(jsonl_path) is None
+
+
+def test_undo_skips_non_dict_and_blank_lines(tmp_path: Path):
+    jsonl_path = tmp_path / "history.jsonl"
+    jsonl_path.write_text('\n\n12345\n   \n"just a string"\n', encoding="utf-8")
+    assert undo_last_move(jsonl_path) is None

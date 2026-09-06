@@ -8,6 +8,10 @@ CONFIG_FILENAME: str = "config.json"
 HINTS_FILENAME: str = "folder_hints.json"
 # Single canonical source of truth for the default Gemini model across the application.
 DEFAULT_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+SUPPORTED_GEMINI_MODELS: tuple[str, ...] = (
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+)
 DEFAULT_MAX_FOLDER_DEPTH: int = 3
 
 DEFAULT_IGNORED_FOLDERS: set[str] = {

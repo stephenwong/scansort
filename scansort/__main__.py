@@ -26,7 +26,7 @@ from scansort.constants import (
 from scansort.dispatcher import undo_last_move
 from scansort.folder_mapper import FolderMapper
 from scansort.instance_guard import instance_guard
-from scansort.logging_setup import configure_file_logging
+from scansort.logging import configure_file_logging
 from scansort.pipeline import ScanSortPipeline
 from scansort.secrets import (
     get_api_key,
@@ -56,9 +56,19 @@ logger = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     """Construct command-line argument parser."""
+    verbose_parser = argparse.ArgumentParser(add_help=False)
+    verbose_parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Enable verbose debug logging",
+    )
+
     parser = argparse.ArgumentParser(
         prog="scansort",
         description="ScanSort: Intelligent automated desktop document filer powered by Google Gemini.",
+        parents=[verbose_parser],
     )
     parser.add_argument(
         "--version",
@@ -89,7 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # watch command
     watch_p = subparsers.add_parser(
-        "watch", help="Start background drop folder monitor"
+        "watch",
+        parents=[verbose_parser],
+        help="Start background drop folder monitor",
     )
     watch_p.add_argument("--watch-folder", type=Path, help="Override drop folder")
     watch_p.add_argument("--documents-root", type=Path, help="Override documents root")
@@ -107,14 +119,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # undo command
-    subparsers.add_parser("undo", help="Reverse the last filed document move")
+    subparsers.add_parser(
+        "undo",
+        parents=[verbose_parser],
+        help="Reverse the last filed document move",
+    )
 
     # rescan command
-    subparsers.add_parser("rescan", help="Rescan and display Documents folder taxonomy")
+    subparsers.add_parser(
+        "rescan",
+        parents=[verbose_parser],
+        help="Rescan and display Documents folder taxonomy",
+    )
+
+    # check-update command
+    subparsers.add_parser(
+        "check-update",
+        parents=[verbose_parser],
+        help="Check GitHub Releases for newer ScanSort versions",
+    )
 
     # config command
     cfg_p = subparsers.add_parser(
-        "config", help="Manage application settings and secrets"
+        "config",
+        parents=[verbose_parser],
+        help="Manage application settings and secrets",
     )
     cfg_p.add_argument(
         "--show", action="store_true", help="Display current configuration"
@@ -233,13 +262,25 @@ def _maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
     always proceeds. The check timestamp is only recorded once a decision is
     made or an install is handed off, so a failed install retries next launch.
     """
-    if not (
-        cfg.auto_update and sys.platform == "win32" and getattr(sys, "frozen", False)
-    ):
+    if not cfg.auto_update:
+        logger.debug(
+            "Auto-update check skipped: auto_update is disabled in configuration."
+        )
+        return False
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        logger.debug(
+            "Auto-update check skipped: running in non-frozen/development environment (%s, frozen=%s).",
+            sys.platform,
+            getattr(sys, "frozen", False),
+        )
         return False
     state_path = app_dir / UPDATE_STATE_FILENAME
     try:
         if not update_is_due(state_path, cfg.update_check_interval_days):
+            logger.debug(
+                "Auto-update check skipped: check interval (%d days) has not elapsed.",
+                cfg.update_check_interval_days,
+            )
             return False
         payload = fetch_latest_release()
         release = available_update(
@@ -255,6 +296,10 @@ def _maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
         show_toast(
             "ScanSort update available",
             f"Version {release.version} downloaded. Restarting to install it.",
+        )
+        logger.info(
+            "Restarting application to apply update %s via helper...",
+            release.version,
         )
         spawn_update_helper(install_dir, staged_dir, release.version, os.getpid())
         record_update_check(state_path)
@@ -446,6 +491,36 @@ def _handle_self_update(values: list[str]) -> int:
     return perform_self_update(pid, values[1], values[2], values[3])
 
 
+def _handle_check_update(parsed: argparse.Namespace) -> int:
+    """Check GitHub Releases for newer ScanSort versions and display findings."""
+    print(f"Checking for updates (current version: {__version__})...")
+    app_dir = get_default_app_dir()
+    state_path = app_dir / UPDATE_STATE_FILENAME
+    try:
+        payload = fetch_latest_release()
+        release = available_update(
+            payload,
+            installed_version(),
+            applied_version(state_path),
+        )
+        if release is None:
+            print(
+                f"ScanSort is up to date (version {__version__}). No new updates available."
+            )
+        else:
+            print(
+                f"Update available: version {release.version} (current: {__version__})"
+            )
+            print(f"Release asset:  {release.asset_name}")
+            print(f"Download URL:   {release.download_url}")
+            if release.size_bytes:
+                print(f"Asset size:     {release.size_bytes:,} bytes")
+        return 0
+    except UpdateError as e:
+        print(f"Update check failed: {e}", file=sys.stderr)
+        return 1
+
+
 def _attach_parent_console() -> None:
     """Bind stdout/stderr to the parent console in frozen windowed builds.
 
@@ -485,9 +560,10 @@ def _attach_parent_console() -> None:
 def main_cli(args: list[str] | None = None) -> int:
     """Main CLI execution router."""
     _attach_parent_console()
-    configure_file_logging()
     parser = build_parser()
     parsed = parser.parse_args(args)
+    log_level = logging.DEBUG if getattr(parsed, "verbose", False) else logging.INFO
+    configure_file_logging(level=log_level)
 
     if getattr(parsed, "self_update", None):
         return _handle_self_update(parsed.self_update)
@@ -498,6 +574,7 @@ def main_cli(args: list[str] | None = None) -> int:
         "config": _handle_config,
         "undo": _handle_undo,
         "rescan": _handle_rescan,
+        "check-update": _handle_check_update,
     }
     handler = handlers.get(command, _handle_watch)
     return handler(parsed)

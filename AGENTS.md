@@ -25,8 +25,13 @@ scansort/
 │   └── PRD.md                  # Comprehensive technical specification & requirements
 ├── scansort/                   # Core Python package (Python >=3.14)
 │   ├── __init__.py             # Version definition
-│   ├── __main__.py             # CLI entrypoint & subcommands (watch, config, undo, rescan, --version) + hidden --self-update helper mode
-│   ├── audit_logger.py         # Dual crash-safe JSONL and CSV logging engine
+│   ├── __main__.py             # CLI entrypoint & subcommands (watch, config, undo, rescan, check-update, --verbose, --version) + hidden --self-update helper mode
+│   ├── logging/                # Modular diagnostics, auditing, and cost accounting
+│   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── audit.py            # Dual crash-safe JSONL and CSV logging engine
+│   │   ├── cost.py             # Gemini API token usage accounting & USD cost estimation (3.1 & 3.5 Flash Lite)
+│   │   ├── gemini_logger.py    # Structured model response, reasoning, and token logging
+│   │   └── setup.py            # Persistent rotating file + stderr console logging (scansort.log)
 │   ├── autorun.py              # Windows Registry (HKCU Run) & Linux autostart manager
 │   ├── config.py               # Pydantic configuration loader (%APPDATA%\ScanSort\config.json)
 │   ├── constants.py            # Shared domain constants (review/duplicates/undo prefixes, history filenames, supported extensions)
@@ -39,7 +44,6 @@ scansort/
 │   ├── hasher.py               # Streaming SHA-256 duplicate scan interception
 │   ├── image_converter.py      # Lossless JPEG stream wrapping (img2pdf) & image normalization
 │   ├── instance_guard.py       # Non-blocking single-instance lock (fcntl/msvcrt)
-│   ├── logging_setup.py        # Persistent rotating file + stderr console logging (scansort.log)
 │   ├── models.py               # Vendor-neutral classification domain model & sanitizers
 │   ├── notifications.py        # Reusable filing-lifecycle toast messages (success/failure/stranded)
 │   ├── pdf_metadata.py         # XMP metadata embedding & pypdf auto-rotation
@@ -49,6 +53,13 @@ scansort/
 │   ├── updater.py              # GitHub Releases self-update engine (check/download/stage/swap/relaunch)
 │   └── watcher.py              # Rust-powered watchfiles monitor with debouncing
 ├── tests/                      # Pytest automated test suite (>=95% coverage enforced)
+│   ├── logging/                # Modular logging test suite (audit, setup, cost, gemini_logger)
+│   │   ├── test_audit.py       # Dual JSONL/CSV logging & formatting tests
+│   │   ├── test_cost.py        # Token accounting & USD pricing tests (Gemini 3.1 & 3.5 Flash Lite)
+│   │   ├── test_gemini_logger.py # Structured event & reasoning logging tests
+│   │   └── test_setup.py       # Rotating file & console handler tests
+│   ├── conftest.py             # Global test isolation fixtures & hermetic mocks
+│   └── test_*.py               # Domain and integration test suites
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
 ├── scansort.spec               # PyInstaller standalone Windows executable build spec (embeds dynamic PE version info)
 ├── config.example.json         # Reference configuration template
@@ -127,7 +138,7 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 ### M. Single-Instance Guard & Self-Update Safety
 - The background watcher must hold the non-blocking single-instance lock (`app_dir/instance.lock`, `scansort.instance_guard.instance_guard`) for its entire lifetime; a second `watch` process exits immediately instead of running a duplicate, double-filing watcher. The self-update swap must re-acquire this guard (plus `app_dir/update.lock`) before touching the install directory.
 - `scansort.updater` must **never** run an update check, download, or install outside a frozen Windows build with `auto_update` enabled: development runs (Linux or `python -m scansort`) are inert. Do not add API keys, tokens, or other secrets to the update channel or state files.
-- Release candidates must satisfy every gate: tag parses as clean `vMAJOR.MINOR.PATCH` (no pre-releases), asset name is exactly `ScanSort-<tag>-windows-x64.zip`, and the version is strictly newer than both the embedded `__version__` and the last applied version recorded in `app_dir/update_state.json` (malformed/missing state must count as "due for a check"). Persist check timestamps only after a completed decision/hand-off so failed installs retry on the next launch.
+- Release candidates must satisfy every gate: tag parses as clean `vMAJOR.MINOR.PATCH` (no pre-releases), asset name is exactly `ScanSort-<tag>-windows-x64.zip`, and the version is strictly newer than both the embedded `__version__` and the last applied version recorded in `app_dir/update_state.json` (malformed/missing state must count as "due for a check"). Updates check on every launch by default (`update_check_interval_days: 0`, bounded `0..60`). Users can manually check for updates anytime via `scansort check-update`. Persist check timestamps only after a completed decision/hand-off so failed installs retry on the next launch.
 - Downloads must be streamed to `app_dir/tmp` and verified against the declared size and, when GitHub publishes one, the SHA-256 digest. Archive extraction must reject absolute paths, `..` segments, and Windows drive prefixes (ZipSlip), and require a root `ScanSort.exe` before any swap.
 - Install swaps are rollback-safe: rename the current install aside, rename the staged tree into place, and only then remove the backup; on any step failure rename the backup back and exit nonzero — the auto-start target must never point at a missing directory. Staging lives in a sibling directory of the install directory (same volume).
 - The helper (spawned staged build, hidden `--self-update` mode) waits for the old PID using a native `OpenProcess`/`WaitForSingleObject` handle — never `os.kill(pid, 0)`, which is not an existence probe on Windows. Detached children must use `DETACHED_PROCESS | CREATE_NO_WINDOW` with all standard handles closed.
@@ -136,9 +147,11 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 ### N. Windowed Build Console Attachment (`ScanSort.exe` CLI Visibility)
 - The packaged exe is a GUI-subsystem build (`console=False`) whose standard streams are null writers, so `print()` output is invisible unless attached to a console. `main_cli` must call `scansort.__main__._attach_parent_console()` on entry: in a frozen Windows build only, best-effort `AttachConsole(ATTACH_PARENT_PROCESS)` re-points `sys.stdout`/`sys.stderr` at the launching terminal's console (streams line-buffered and encoded for `GetConsoleOutputCP`, falling back to UTF-8). Every failure mode (no parent console from double-click/auto-start/detached self-update helper, missing/invalid standard handles, Win32 API errors, missing `msvcrt`) must return silently so tray/background operation never raises or flashes a terminal. Attachment must never run in development (`python -m scansort`) — guard on `sys.frozen` and `sys.platform == "win32"`, and only when stdout is not already a TTY.
 
-### O. Persistent File Logging (Diagnostics Reach Background Runs)
-- Every `main_cli` entry (all subcommands, including the detached `--self-update` helper) must call `scansort.logging_setup.configure_file_logging()` so diagnostics survive operation where no console exists. It attaches a rotating `scansort.log` handler (INFO and above, 1 MB × 3 backups, UTF-8) in `app_dir` plus a WARNING-level stderr console handler so terminal launches keep their existing warning stream; repeat calls for the same directory must reuse handlers, never stack duplicates.
-- Root-logger level must be lowered to INFO so INFO records pass logger-level filtering. File logging is best-effort and never raises: `mkdir` or log-file open failures return `None` silently and must not abort any command, filing, update, or self-update path.
+### O. Persistent & Modular Logging Architecture (Diagnostics & Cost Visibility)
+- Logging is modularized in `scansort/logging/` (`setup.py`, `audit.py`, `cost.py`, `gemini_logger.py`).
+- Every `main_cli` entry (all subcommands, including the detached `--self-update` helper) calls `scansort.logging.configure_file_logging(level=...)` so diagnostics survive operation where no console exists. It attaches a rotating `scansort.log` handler (INFO or DEBUG with `--verbose` / `-v`, 1 MB × 3 backups, UTF-8) in `app_dir` plus a console stderr handler. Repeat calls for the same directory reuse handlers without stacking duplicates.
+- Root-logger level is lowered to INFO (or DEBUG under `--verbose`) so messages pass logger-level filtering. File logging is best-effort and never raises: `mkdir` or log-file open failures return `None` silently and must not abort any command, filing, update, or self-update path.
+- **Model Evaluation & Cost Visibility:** ScanSort supports only `gemini-3.1-flash-lite` (default) and `gemini-3.5-flash-lite`. Multimodal Gemini calls log structured classification events via `gemini_logger.py` including prompt/candidate/total token counts, execution latency (ms), and estimated USD cost based on official Gemini Flash Lite pricing ($0.075 input / $0.30 output per 1M tokens) in `cost.py`. Gemini's natural language `folder_reasoning` and ScanSort's deterministic `routing_rationale` are captured and logged at INFO level (raw API payloads at DEBUG), and recorded in `history.jsonl` for auditability.
 - Secrets stay covered by invariant A: only pre-redacted text (via `scansort.secrets.redact_secrets_from_text()`) may ever reach the log file — audit summaries in `history.jsonl` remain truncated to 100 chars, the full redacted reason lives in `scansort.log`.
 
 ### P. Version Bumping (Single Source of Truth)

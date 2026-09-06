@@ -35,7 +35,7 @@ def test_save_and_load_config(tmp_path: Path):
     original_cfg = AppConfig(
         watch_folder=custom_watch,
         documents_root=custom_docs,
-        gemini_model="custom-test-model",
+        gemini_model="gemini-3.5-flash-lite",
         fallback_folder="Unsorted",
         start_on_boot=False,
         max_folder_depth=5,
@@ -49,7 +49,7 @@ def test_save_and_load_config(tmp_path: Path):
     loaded_cfg = load_config(cfg_file)
     assert loaded_cfg.watch_folder == custom_watch.resolve()
     assert loaded_cfg.documents_root == custom_docs.resolve()
-    assert loaded_cfg.gemini_model == "custom-test-model"
+    assert loaded_cfg.gemini_model == "gemini-3.5-flash-lite"
     assert loaded_cfg.fallback_folder == "Unsorted"
     assert loaded_cfg.start_on_boot is False
     assert loaded_cfg.max_folder_depth == 5
@@ -112,11 +112,24 @@ def test_load_config_corrupt_json_fallback(tmp_path: Path):
     assert cfg.gemini_model == DEFAULT_GEMINI_MODEL
 
 
-def test_config_gemini_model_empty_fallback():
+def test_config_gemini_model_validation():
     assert AppConfig(gemini_model="").gemini_model == DEFAULT_GEMINI_MODEL
     assert AppConfig(gemini_model="   ").gemini_model == DEFAULT_GEMINI_MODEL
     assert AppConfig(gemini_model=None).gemini_model == DEFAULT_GEMINI_MODEL
-    assert AppConfig(gemini_model="custom-model").gemini_model == "custom-model"
+    assert (
+        AppConfig(gemini_model="gemini-3.5-flash-lite").gemini_model
+        == "gemini-3.5-flash-lite"
+    )
+    assert (
+        AppConfig(gemini_model="gemini-3.1-flash-lite-001").gemini_model
+        == "gemini-3.1-flash-lite-001"
+    )
+
+    with pytest.raises(ValueError, match="gemini_model must be one of"):
+        AppConfig(gemini_model="gemini-2.5-flash")
+
+    with pytest.raises(ValueError, match="gemini_model must be one of"):
+        AppConfig(gemini_model="unsupported-model")
 
 
 def test_fallback_folder_validation():
@@ -260,14 +273,15 @@ def test_config_assignment_validation(tmp_path: Path):
 def test_config_auto_update_defaults():
     cfg = AppConfig()
     assert cfg.auto_update is True
-    assert cfg.update_check_interval_days == 1
+    assert cfg.update_check_interval_days == 0
 
 
 def test_config_update_interval_bounds():
     with pytest.raises(ValueError):
-        AppConfig(update_check_interval_days=0)
+        AppConfig(update_check_interval_days=-1)
     with pytest.raises(ValueError):
         AppConfig(update_check_interval_days=61)
+    assert AppConfig(update_check_interval_days=0).update_check_interval_days == 0
     assert AppConfig(update_check_interval_days=30).update_check_interval_days == 30
     assert AppConfig(auto_update=False).auto_update is False
 
@@ -295,7 +309,7 @@ def test_load_config_rejects_invalid_update_interval(tmp_path: Path):
             {
                 "watch_folder": str(tmp_path / "Watch"),
                 "documents_root": str(tmp_path / "Docs"),
-                "update_check_interval_days": 0,
+                "update_check_interval_days": -1,
             }
         ),
         encoding="utf-8",
@@ -317,4 +331,4 @@ def test_config_backward_compatible_without_update_fields(tmp_path: Path):
     )
     cfg = load_config(cfg_file)
     assert cfg.auto_update is True
-    assert cfg.update_check_interval_days == 1
+    assert cfg.update_check_interval_days == 0

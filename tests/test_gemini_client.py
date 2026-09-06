@@ -418,3 +418,98 @@ def test_nan_confidence_routed_to_review():
     )
     assert res.confidence == 0.0
     assert res.target_folder == "_Review_Needed"
+
+
+def test_classify_document_with_usage_metadata_and_reasoning(minimal_pdf: Path, caplog):
+    caplog.set_level("INFO")
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260906",
+            "description": "Council Rates Notice",
+            "target_folder": "Finances/Rates",
+            "confidence": 0.96,
+            "orientation_correction": 0,
+            "document_type": "Invoice",
+            "summary": "Annual council rates notice.",
+            "folder_reasoning": "Council rates notice matches municipal finances.",
+        }
+    )
+    usage = MagicMock()
+    usage.prompt_token_count = 1200
+    usage.candidates_token_count = 80
+    mock_response.usage_metadata = usage
+
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(
+        api_key="AIzaSyDummyKey123", model="gemini-3.1-flash-lite"
+    )
+    classifier._client = mock_client
+
+    taxonomy = ["Finances/Rates", "Utilities/Electricity"]
+    res = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
+
+    assert res.target_folder == "Finances/Rates"
+    assert res.folder_reasoning == "Council rates notice matches municipal finances."
+    assert (
+        "Matched discovered taxonomy folder 'Finances/Rates'" in res.routing_rationale
+    )
+    assert res.prompt_tokens == 1200
+    assert res.candidates_tokens == 80
+    assert res.estimated_cost_usd > 0.0
+
+    log_text = caplog.text
+    assert "Classified 'minimal.pdf'" in log_text
+    assert "Folder reason: Council rates notice matches municipal finances." in log_text
+    assert "Tokens: 1,200 in / 80 out" in log_text
+    assert "Cost: $" in log_text
+
+
+def test_routing_rationale_variations():
+    # 1. Blank scan
+    blank_res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Blank Page",
+                "target_folder": "Utilities",
+                "confidence": 0.95,
+                "document_type": "Blank",
+            }
+        ),
+        taxonomy=["Utilities"],
+    )
+    assert blank_res.target_folder == "_Review_Needed/Blank_Scans"
+    assert "Blank scan detected" in blank_res.routing_rationale
+
+    # 2. Low confidence
+    low_conf_res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Doc",
+                "target_folder": "Utilities",
+                "confidence": 0.50,
+            }
+        ),
+        taxonomy=["Utilities"],
+    )
+    assert low_conf_res.target_folder == "_Review_Needed"
+    assert "below 0.70 threshold" in low_conf_res.routing_rationale
+
+    # 3. Unsafe folder
+    unsafe_res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Doc",
+                "target_folder": "../Escape",
+                "confidence": 0.95,
+            }
+        ),
+        taxonomy=["Utilities"],
+    )
+    assert unsafe_res.target_folder == "_Review_Needed"
+    assert "Unsafe target folder" in unsafe_res.routing_rationale

@@ -147,9 +147,12 @@ def record_update_check(state_path: Path, when: datetime | None = None) -> None:
 def update_is_due(state_path: Path, interval_days: int) -> bool:
     """Return True when the last completed check is older than the interval.
 
+    An interval of 0 (or negative) means check on every launch.
     Missing, malformed, or timezone-naive timestamps count as due so a corrupt
     state file can never suppress an update check.
     """
+    if interval_days <= 0:
+        return True
     state = load_state(state_path)
     raw = state.get("checked_at")
     if not raw or not isinstance(raw, str):
@@ -212,8 +215,10 @@ def fetch_latest_release(
         UpdateError: On transport errors, undecodable bodies, or payloads
             that are not JSON objects.
     """
+    target_url = url or RELEASE_API_URL
+    logger.info("Checking for updates from %s...", target_url)
     request = urllib.request.Request(
-        url or RELEASE_API_URL,
+        target_url,
         headers={"User-Agent": user_agent, "Accept": "application/vnd.github+json"},
     )
     try:
@@ -278,10 +283,19 @@ def available_update(
     if asset is None:
         return None
     if current_version is not None and tag_version <= current_version:
+        logger.info(
+            "ScanSort is up to date (installed: %s, latest release: %s).",
+            ".".join(str(part) for part in current_version),
+            tag_name,
+        )
         return None
     if applied_version is not None:
         applied = parse_version(applied_version)
         if applied is not None and tag_version <= applied:
+            logger.info(
+                "ScanSort update %s was already applied previously.",
+                tag_name,
+            )
             return None
 
     download_url = asset.get("browser_download_url")
@@ -290,7 +304,7 @@ def available_update(
     size = asset.get("size")
     size_bytes = size if isinstance(size, int) and size > 0 else None
     published_at = payload.get("published_at")
-    return ReleaseInfo(
+    rel_info = ReleaseInfo(
         version=".".join(str(part) for part in tag_version),
         tag_name=tag_name,
         asset_name=expected_name,
@@ -299,6 +313,14 @@ def available_update(
         sha256=_asset_sha256(asset),
         published_at=published_at if isinstance(published_at, str) else None,
     )
+    logger.info(
+        "Update available: %s (installed: %s). Asset: %s (%s bytes).",
+        tag_name,
+        ".".join(str(p) for p in current_version) if current_version else "unknown",
+        expected_name,
+        size_bytes or "unknown",
+    )
+    return rel_info
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +345,9 @@ def download_release(
     """
     dest_path = Path(dest_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Downloading release asset %s from %s...", info.asset_name, info.download_url
+    )
     request = urllib.request.Request(
         info.download_url, headers={"User-Agent": user_agent}
     )
@@ -349,6 +374,9 @@ def download_release(
         if actual != info.sha256:
             dest_path.unlink(missing_ok=True)
             raise UpdateError("Downloaded file checksum mismatch.")
+    logger.info(
+        "Downloaded release asset %s (%d bytes) successfully.", info.asset_name, total
+    )
     return dest_path
 
 
@@ -372,6 +400,7 @@ def extract_bundle(zip_path: Path, dest_dir: Path) -> Path:
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Extracting release bundle %s into %s...", zip_path.name, dest_dir)
     try:
         with zipfile.ZipFile(zip_path) as archive:
             for member in archive.infolist():
@@ -386,6 +415,7 @@ def extract_bundle(zip_path: Path, dest_dir: Path) -> Path:
         raise UpdateError("Release archive is corrupt.") from e
     if not (dest_dir / EXECUTABLE_NAME).is_file():
         raise UpdateError("Release bundle does not contain ScanSort.exe.")
+    logger.info("Extracted release bundle %s successfully.", zip_path.name)
     return dest_dir
 
 
@@ -452,6 +482,7 @@ def download_and_stage(
     install_dir.parent.mkdir(parents=True, exist_ok=True)
 
     stage_dir = _stage_dir_for(install_dir, info.version)
+    logger.info("Staging update %s into %s...", info.version, stage_dir)
     cleanup_stale_updates(install_dir, keep=stage_dir)
 
     zip_path = tmp_dir / info.asset_name
@@ -475,6 +506,7 @@ def download_and_stage(
     except UpdateError:
         shutil.rmtree(stage_dir, ignore_errors=True)
         raise
+    logger.info("Update %s successfully staged into %s.", info.version, stage_dir)
     return stage_dir
 
 
@@ -630,6 +662,9 @@ def spawn_update_helper(
     executable = Path(staged_dir) / EXECUTABLE_NAME
     if not executable.is_file():
         raise UpdateError("Staged update does not contain ScanSort.exe.")
+    logger.info(
+        "Spawning self-update helper (PID: %d, version: %s)...", parent_pid, version
+    )
     _popen_detached(
         [
             str(executable),
@@ -672,6 +707,11 @@ def perform_self_update(
     """
     install_dir = Path(install_dir)
     staged_dir = Path(staged_dir)
+    logger.info(
+        "Self-update helper launched for version %s (waiting for parent PID %d)...",
+        version,
+        pid,
+    )
     try:
         if sys.platform != "win32" or not getattr(sys, "frozen", False):
             raise UpdateError(
@@ -698,10 +738,19 @@ def perform_self_update(
                     "Another ScanSort instance is running; "
                     "the update will apply on a later start."
                 )
+            logger.info(
+                "Acquired instance and update locks. Swapping installation %s with staged %s...",
+                install_dir,
+                staged_dir,
+            )
             replace_install_dir(install_dir, staged_dir)
 
         record_applied_update(app_dir / UPDATE_STATE_FILENAME, version)
         cleanup_stale_updates(install_dir)
+        logger.info(
+            "Update to version %s installed successfully. Relaunching application...",
+            version,
+        )
         if relaunch:
             launch_installed_app(install_dir)
         return 0

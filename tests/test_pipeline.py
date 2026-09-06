@@ -716,3 +716,125 @@ def test_pipeline_stranded_toast_when_review_routing_fails(tmp_path: Path, monke
         folder_path=inbox,
         log_path=pipeline.app_dir / "scansort.log",
     )
+
+
+def test_build_audit_entry_with_rich_metadata(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs_root = tmp_path / "Documents"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+    pipeline.classifier.model = "gemini-3.5-flash-lite"
+
+    classification = DocumentClassification(
+        document_date="260906",
+        description="Electric_Bill",
+        target_folder="Utilities",
+        confidence=0.95,
+        document_type="Utility Bill",
+        folder_reasoning="Matches Utilities folder hint for power bills",
+        routing_rationale="Exact match with discovered taxonomy folder Utilities",
+        prompt_tokens=150,
+        candidates_tokens=50,
+        estimated_cost_usd=0.000045,
+    )
+
+    entry = pipeline._build_audit_entry(
+        file_hash="abcdef1234567890",
+        file_path=inbox / "bill.pdf",
+        destination_path=docs_root / "Utilities" / "260906_Electric_Bill.pdf",
+        destination_folder="Utilities",
+        summary="Power bill for August",
+        status="SUCCESS",
+        classification=classification,
+    )
+
+    assert entry["gemini_model"] == "gemini-3.5-flash-lite"
+    assert entry["confidence"] == 0.95
+    assert entry["document_type"] == "Utility Bill"
+    assert entry["folder_reasoning"] == "Matches Utilities folder hint for power bills"
+    assert (
+        entry["routing_rationale"]
+        == "Exact match with discovered taxonomy folder Utilities"
+    )
+    assert entry["tokens"] == {"prompt": 150, "candidates": 50, "total": 200}
+    assert entry["estimated_cost_usd"] == 0.000045
+
+
+def test_process_file_vanished_after_stability(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+
+    scan_file = inbox / "vanish.pdf"
+    scan_file.write_bytes(b"%PDF-1.4")
+
+    # Mock stat() on file_path to raise OSError simulating vanishing
+    orig_stat = Path.stat
+
+    def mock_stat(self, *args, **kwargs):
+        if self.name == "vanish.pdf":
+            raise OSError("No such file")
+        return orig_stat(self, *args, **kwargs)
+
+    with (
+        patch("scansort.pipeline.wait_for_file_stability", return_value=True),
+        patch.object(Path, "stat", mock_stat),
+    ):
+        res = pipeline.process_file(scan_file)
+        assert res is None
+
+
+def test_route_failed_to_review_missing_file(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+
+    missing = inbox / "never_existed.pdf"
+    # Calling _route_failed_to_review on a non-existent file should safely no-op
+    pipeline._route_failed_to_review(missing, reason="test")
+    assert not (docs_root / "_Review_Needed" / "never_existed.pdf").exists()
+
+
+def test_pipeline_records_resolved_destination_folder_when_redirected(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    mock_classifier = MagicMock()
+    # Model returns path traversal folder attempt
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260906",
+        description="Escape_Attempt",
+        target_folder="../../OutsideDocs",
+        confidence=0.9,
+        orientation_correction=0,
+        document_type="Other",
+        summary="Traversal test",
+    )
+
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir, classifier=mock_classifier)
+    scan_file = inbox / "sample.jpg"
+    _create_sample_scan(scan_file)
+
+    dest = pipeline.process_file(scan_file)
+    assert dest is not None
+    assert dest.parent == docs_root / "_Review_Needed"
+
+    # Verify audit log records _Review_Needed rather than the raw traversal string
+    import json
+
+    history_file = app_dir / "history.jsonl"
+    assert history_file.exists()
+    record = json.loads(
+        history_file.read_text(encoding="utf-8").strip().splitlines()[-1]
+    )
+    assert record["destination_folder"] == "_Review_Needed"
+    assert "../../OutsideDocs" not in record["destination_folder"]

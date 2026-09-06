@@ -68,8 +68,8 @@ def _convert_jpeg_lossless(input_path: Path, target_pdf: Path) -> None:
     """Lossless wrapping of JPEG streams via img2pdf (preserves exact DPI and zero re-compression)."""
     with open(input_path, "rb") as src:
         atomic_write(target_pdf, lambda out: img2pdf.convert(src, outputstream=out))
-    logger.debug(
-        "Wrapped JPEG %s into PDF %s losslessly.",
+    logger.info(
+        "Wrapped JPEG %s into PDF %s losslessly via img2pdf.",
         input_path.name,
         target_pdf.name,
     )
@@ -98,11 +98,12 @@ def _convert_image_via_pillow(input_path: Path, target_pdf: Path) -> int:
         )
         page_count = len(frames)
 
-    logger.debug(
-        "Converted image %s to PDF %s via Pillow (%d pages).",
+    logger.info(
+        "Converted image %s to PDF %s via Pillow (%d pages, %.0f DPI).",
         input_path.name,
         target_pdf.name,
         page_count,
+        res,
     )
     return page_count
 

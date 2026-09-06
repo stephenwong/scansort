@@ -186,6 +186,11 @@ class FolderMapper:
         except (OSError, ValueError) as e:
             logger.warning("Failed to write folder cache to %s: %s", self.cache_path, e)
 
+        logger.info(
+            "Discovered %d destination folders in taxonomy under %s",
+            len(self._cached_folders),
+            self.docs_root,
+        )
         return list(self._cached_folders)
 
     def _is_memory_cache_valid(self) -> bool:

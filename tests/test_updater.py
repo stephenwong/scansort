@@ -942,3 +942,35 @@ def test_launch_installed_app_requires_executable(tmp_path: Path):
     install_dir.mkdir()
     with pytest.raises(UpdateError, match="Installed ScanSort.exe not found"):
         launch_installed_app(install_dir)
+
+
+def test_update_is_due_zero_or_negative_always_true(tmp_path: Path):
+    state_file = tmp_path / "update_state.json"
+    # Even if checked just 1 second ago, interval_days=0 or -1 is always due
+    record_update_check(state_file)
+    assert update_is_due(state_file, 0) is True
+    assert update_is_due(state_file, -1) is True
+
+
+def test_updater_emits_lifecycle_logs(tmp_path: Path, caplog):
+    caplog.set_level("INFO")
+    payload = {
+        "tag_name": "v9.9.9",
+        "assets": [
+            {
+                "name": "ScanSort-v9.9.9-windows-x64.zip",
+                "browser_download_url": "https://example.com/dl.zip",
+                "size": len(_release_zip_bytes()),
+            }
+        ],
+    }
+    # Available update log
+    rel = available_update(payload, current_version=(1, 0, 0))
+    assert rel is not None
+    assert "Update available: v9.9.9" in caplog.text
+
+    # Up to date log
+    caplog.clear()
+    up_to_date = available_update(payload, current_version=(9, 9, 9))
+    assert up_to_date is None
+    assert "ScanSort is up to date" in caplog.text

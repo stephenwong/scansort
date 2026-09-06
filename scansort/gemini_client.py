@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import time
 from pathlib import Path
 
 import httpx
@@ -18,7 +19,14 @@ from scansort.constants import (
 )
 from scansort.folder_mapper import format_taxonomy_for_prompt
 from scansort.fs_utils import normalize_relative_folder, relative_folder_is_safe
-from scansort.models import DocumentClassification, sanitize_date, sanitize_description
+from scansort.logging.cost import calculate_gemini_cost
+from scansort.logging.gemini_logger import log_classification_event
+from scansort.models import (
+    DocumentClassification,
+    GeminiClassificationResponse,
+    sanitize_date,
+    sanitize_description,
+)
 from scansort.secrets import get_api_key, redact_secrets_from_text
 
 logger = logging.getLogger(__name__)
@@ -70,7 +78,8 @@ class GeminiClassifier:
             "   - If the document is foreign, translate the description to English.\n"
             "4. Orientation: Check if the text is upside-down or sideways. Output orientation_correction in clockwise degrees (0, 90, 180, or 270).\n"
             "5. Blank Detection: If the document is an empty white sheet or blank scan, set document_type to 'Blank'.\n"
-            "6. Summary: Provide a crisp 1-sentence summary of the document contents."
+            "6. Summary: Provide a crisp 1-sentence summary of the document contents.\n"
+            "7. Folder Reasoning: Briefly explain why the chosen target folder is the best match for this document (e.g. 'Origin Energy electricity bill matches Utilities/Electricity')."
         )
 
     def _parse_and_route_response(
@@ -103,18 +112,31 @@ class GeminiClassifier:
             orient = 0
 
         summary = str(data.get("summary", "") or "").strip()
+        folder_reasoning = str(data.get("folder_reasoning", "") or "").strip()
 
+        routing_rationale = ""
         clean_target = target.strip()
         if not relative_folder_is_safe(clean_target):
             target = REVIEW_NEEDED_DIR
+            routing_rationale = f"Unsafe target folder '{clean_target}' rejected -> routed to {REVIEW_NEEDED_DIR}."
         else:
             target = normalize_relative_folder(clean_target)
             if doc_type.lower() == "blank":
                 target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
-            elif conf < MIN_CONFIDENCE_THRESHOLD or (
-                target not in taxonomy and target != REVIEW_NEEDED_DIR
-            ):
+                routing_rationale = (
+                    f"Blank scan detected -> routed to {REVIEW_NEEDED_DIR}/Blank_Scans."
+                )
+            elif conf < MIN_CONFIDENCE_THRESHOLD:
+                routing_rationale = (
+                    f"Confidence {conf:.2f} below {MIN_CONFIDENCE_THRESHOLD:.2f} threshold "
+                    f"(suggested '{target}') -> routed to {REVIEW_NEEDED_DIR}."
+                )
                 target = REVIEW_NEEDED_DIR
+            elif target not in taxonomy and target != REVIEW_NEEDED_DIR:
+                routing_rationale = f"Suggested folder '{target}' not in discovered taxonomy -> routed to {REVIEW_NEEDED_DIR}."
+                target = REVIEW_NEEDED_DIR
+            else:
+                routing_rationale = f"Matched discovered taxonomy folder '{target}' with {conf * 100:.0f}% confidence."
 
         return DocumentClassification(
             document_date=doc_date,
@@ -124,6 +146,8 @@ class GeminiClassifier:
             orientation_correction=orient,
             document_type=doc_type,
             summary=summary,
+            folder_reasoning=folder_reasoning,
+            routing_rationale=routing_rationale,
         )
 
     def _create_fallback_classification(self, error_msg: str) -> DocumentClassification:
@@ -136,6 +160,11 @@ class GeminiClassifier:
             orientation_correction=0,
             document_type="Other",
             summary=f"Automated classification encountered error: {error_msg[:100]}",
+            folder_reasoning="Classification failed due to error",
+            routing_rationale=f"Classification encountered error ({error_msg[:60]}) -> routed to {REVIEW_NEEDED_DIR}.",
+            prompt_tokens=0,
+            candidates_tokens=0,
+            estimated_cost_usd=None,
         )
 
     def classify_document(
@@ -156,6 +185,7 @@ class GeminiClassifier:
         """
         client = self._get_client()
         system_instruction = self._build_system_instruction(taxonomy, hints)
+        start_time = time.monotonic()
 
         try:
             pdf_bytes = pdf_path.read_bytes()
@@ -163,7 +193,7 @@ class GeminiClassifier:
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 response_mime_type="application/json",
-                response_schema=DocumentClassification,
+                response_schema=GeminiClassificationResponse,
                 temperature=0.1,
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             )
@@ -176,8 +206,38 @@ class GeminiClassifier:
                 ],
                 config=config,
             )
+            latency = time.monotonic() - start_time
 
-            return self._parse_and_route_response(response.text or "{}", taxonomy)
+            usage = getattr(response, "usage_metadata", None)
+            prompt_tokens = 0
+            candidates_tokens = 0
+            if usage is not None:
+                pt = getattr(usage, "prompt_token_count", 0)
+                prompt_tokens = pt if isinstance(pt, int) else 0
+                ct = getattr(usage, "candidates_token_count", 0)
+                candidates_tokens = ct if isinstance(ct, int) else 0
+
+            cost = calculate_gemini_cost(self.model, prompt_tokens, candidates_tokens)
+
+            classification = self._parse_and_route_response(
+                response.text or "{}", taxonomy
+            )
+            classification.prompt_tokens = prompt_tokens
+            classification.candidates_tokens = candidates_tokens
+            classification.estimated_cost_usd = cost
+
+            log_classification_event(
+                file_name=pdf_path.name,
+                model=self.model,
+                latency_seconds=latency,
+                classification=classification,
+                routing_rationale=classification.routing_rationale,
+                prompt_tokens=prompt_tokens,
+                candidates_tokens=candidates_tokens,
+                raw_response_text=response.text,
+            )
+
+            return classification
 
         except (
             APIError,

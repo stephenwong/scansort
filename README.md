@@ -103,11 +103,13 @@ flowchart TD
 - **Sequential Undo Support:** Provides single-command undo (`scansort undo`) that can be executed repeatedly to roll back successive moves, restoring files safely with collision handling and resetting duplicate status. Failed restores are reported to the CLI instead of being silently skipped.
 - **Resilient Background Worker:** Robust queue worker designed to handle transient API rate limits (429/503) and network drops by falling back to review folders without terminating the daemon. Items still queued at shutdown are drained before exit.
 - **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`. CSV cells are neutralized against spreadsheet-formula injection, and the CSV mirror never diverges from the JSONL under concurrent processes.
-- **Persistent Diagnostic Log:** Every `scansort` invocation attaches a rotating `%APPDATA%\ScanSort\scansort.log` (INFO and above, 1 MB × 3 backups) so full, secret-redacted failure details — e.g. the complete Gemini API error behind a `_Review_Needed` routing — survive background tray operation where no console exists. WARNING+ messages also keep flowing to the terminal when one is attached.
+- **Model Evaluation, Token Counts & Cost Estimation:** Multimodal Gemini calls log exact token metrics (`prompt_tokens`, `candidates_tokens`, `total_tokens`), latency in milliseconds, and estimated USD cost calculated from official Gemini Flash Lite pricing tiers (`gemini-3.1-flash-lite` and `gemini-3.5-flash-lite`). Every audit record in `history.jsonl` preserves these metrics for model cost comparison and evaluation.
+- **Filing Rationale & Explainability:** Full visibility into why documents are filed into specific folders: logs Gemini's natural language `folder_reasoning` and ScanSort's deterministic taxonomy match `routing_rationale` for complete routing transparency.
+- **Persistent Modular Diagnostic Logging:** Modular diagnostics package (`scansort.logging`) attaches a rotating `%APPDATA%\ScanSort\scansort.log` (INFO and above, or DEBUG with `--verbose`, 1 MB × 3 backups) so full, secret-redacted diagnostic details survive background tray operation where no console exists. WARNING+ messages also flow to the terminal when attached.
 - **Dry-Run Mode:** Test and preview classification logic on your documents without moving or modifying files (`--dry-run`).
 - **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart (written atomically).
 - **Single-Instance Guard:** The watcher holds a non-blocking `instance.lock`, so a manual launch while auto-start is running (or a self-update relaunch) never spawns a second watcher that would double-file the same scans.
-- **Windows Self-Update:** Frozen Windows builds check GitHub Releases on every `watch` launch and auto-install newer releases with native toast notifications — download, integrity verification, rollback-safe directory swap, and automatic restart, all without admin rights. Runs only in standalone builds; the Python source tree never updates itself.
+- **Windows Self-Update:** Frozen Windows builds check GitHub Releases on every `watch` launch (default interval 0 days) and auto-install newer releases with native toast notifications — download, integrity verification, rollback-safe directory swap, and automatic restart, all without admin rights. Users can also manually check anytime via `scansort check-update`. Runs only in standalone builds; the Python source tree never updates itself.
 - **Filing Notifications & Folder Navigation:** Native Windows toasts (titled **ScanSort**) announce when a document is filed, when a scan fails and is routed to `_Review_Needed` (with a sanitized, truncated reason), and when a scan is stranded and needs manual attention. Clicking any notification automatically opens the target folder (destination directory, review folder, or drop folder) in File Explorer. On errors, notifications include a **View Logs** action button that opens `scansort.log` directly in your default text editor. Toasts are best-effort and never interrupt filing.
 - **Australia/Sydney Time:** All user-facing dates and times (filename date stamps and the audit CSV "Local Time" column) use Australia/Sydney wall-clock time regardless of the machine's timezone.
 
@@ -206,7 +208,23 @@ Verify the folders ScanSort will use for classification (respecting `max_folder_
 uv run scansort rescan
 ```
 
-### 9. Check Application Version
+### 9. Check for Updates Manually
+Query GitHub Releases immediately for newer versions:
+```bash
+uv run scansort check-update
+```
+*In packaged standalone builds, this checks against the published releases on GitHub. In development mode, it verifies the latest published release and reports your local development version.*
+
+### 10. Verbose / Debug Logging
+Enable detailed `DEBUG` level logging on console and to `%APPDATA%\ScanSort\scansort.log`:
+```bash
+uv run scansort --verbose watch
+# or
+uv run scansort -v watch
+```
+*Outputs raw Gemini API request/response payloads, folder discovery metrics, and detailed pipeline diagnostics.*
+
+### 11. Check Application Version
 Display the current ScanSort version:
 ```bash
 uv run scansort --version
@@ -265,12 +283,12 @@ YYMMDD_<Description>.pdf
 
 Standalone Windows builds self-update automatically from the project's public GitHub Releases:
 
-- **When:** Every `watch` launch (including auto-start at logon), a check runs when `auto_update` is enabled (default) and the interval `update_check_interval_days` (default 1 day) has elapsed since the last completed check. Progress is tracked in `%APPDATA%\ScanSort\update_state.json`; a malformed or missing file simply triggers a fresh check.
+- **When:** Every `watch` launch (including auto-start at logon), a check runs when `auto_update` is enabled (default) and the interval `update_check_interval_days` (default `0`: checks on every launch) has elapsed since the last completed check. Progress is tracked in `%APPDATA%\ScanSort\update_state.json`; a malformed or missing file simply triggers a fresh check. You can also trigger an immediate check anytime using `scansort check-update`.
 - **What qualifies:** A release tagged `vX.Y.Z` whose asset is named exactly `ScanSort-<tag>-windows-x64.zip` (this is what the release pipeline publishes). The tag must be strictly newer than the running version **and** any previously applied release, so a forgotten version bump can never cause re-install loops.
 - **How:** The ZIP is downloaded over HTTPS, verified by byte count and GitHub's SHA-256 digest, and extracted (ZipSlip-safe) into a staging directory beside the install. Because Windows locks a running executable, the staged **new** build is launched as a detached helper (`--self-update`): it waits for the current process to exit, swaps the install directory with automatic rollback (the old install is renamed aside first and restored on any failure), records the applied version, and relaunches `watch --minimized`.
 - **Toasts:** A native Windows toast announces *"ScanSort update available"* before the restart and *"ScanSort updated"* once the new version is running. Toast support ships as the optional `windows` extra (`windows-toasts`); if it is unavailable, updates still install silently.
 - **Safety:** Updates never run from the Python source tree (development mode is inert), never require administrator rights (installs are per-user under `%LOCALAPPDATA%`), and never touch your configuration, history, or documents. Offline or rate-limited checks simply log and continue watching; a failed install leaves the previous version running and retries on the next launch.
-- **Controlling it:** Set `"auto_update": false` in `%APPDATA%\ScanSort\config.json` to disable automatic checks, or raise `update_check_interval_days` (1–60) to check less often. `scansort config --show` displays both.
+- **Controlling it:** Set `"auto_update": false` in `%APPDATA%\ScanSort\config.json` to disable automatic checks, or configure `update_check_interval_days` (0–60, where 0 checks on every launch). `scansort config --show` displays both.
 
 ---
 

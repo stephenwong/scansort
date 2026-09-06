@@ -7,7 +7,6 @@ import shutil
 from contextlib import nullcontext
 from pathlib import Path
 
-from scansort.audit_logger import AuditLogger
 from scansort.constants import (
     DUPLICATES_DIR,
     REVERSIBLE_STATUSES,
@@ -20,6 +19,7 @@ from scansort.fs_utils import (
     relative_folder_is_safe,
     resolve_collision,
 )
+from scansort.logging import AuditLogger
 from scansort.models import DocumentClassification
 
 logger = logging.getLogger(__name__)

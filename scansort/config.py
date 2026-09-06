@@ -22,6 +22,7 @@ from scansort.constants import (
     DEFAULT_MAX_FOLDER_DEPTH,
     MIRROR_HISTORY_CSV_NAME,
     REVIEW_NEEDED_DIR,
+    SUPPORTED_GEMINI_MODELS,
 )
 from scansort.fs_utils import atomic_write, relative_folder_is_safe
 
@@ -73,7 +74,7 @@ class AppConfig(BaseModel):
     dry_run: bool = False
     mirror_log_to_documents: bool = False
     auto_update: bool = True
-    update_check_interval_days: int = Field(default=1, ge=1, le=60)
+    update_check_interval_days: int = Field(default=0, ge=0, le=60)
 
     @property
     def mirror_csv_path(self) -> Path | None:
@@ -87,7 +88,12 @@ class AppConfig(BaseModel):
     def validate_gemini_model(cls, v: Any) -> str:
         if v is None or not str(v).strip():
             return DEFAULT_GEMINI_MODEL
-        return str(v).strip()
+        clean = str(v).strip()
+        if not any(clean.startswith(prefix) for prefix in SUPPORTED_GEMINI_MODELS):
+            raise ValueError(
+                f"gemini_model must be one of {SUPPORTED_GEMINI_MODELS}, got '{clean}'"
+            )
+        return clean
 
     @field_validator("fallback_folder")
     @classmethod

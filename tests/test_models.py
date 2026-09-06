@@ -154,3 +154,36 @@ def test_document_classification_rejects_unsanitized_boundary_values():
             target_folder="Utilities",
             confidence=1.5,
         )
+
+
+def test_gemini_classification_response_schema_decoupling():
+    from scansort.models import GeminiClassificationResponse
+
+    # Ensure Gemini response schema does NOT expose internal pipeline fields
+    fields = GeminiClassificationResponse.model_fields.keys()
+    assert "document_date" in fields
+    assert "description" in fields
+    assert "target_folder" in fields
+    assert "folder_reasoning" in fields
+    assert "routing_rationale" not in fields
+    assert "prompt_tokens" not in fields
+    assert "candidates_tokens" not in fields
+    assert "estimated_cost_usd" not in fields
+
+
+def test_document_classification_telemetry_fields():
+    doc = DocumentClassification(
+        document_date="260906",
+        description="Electric_Bill",
+        target_folder="Utilities",
+        confidence=0.9,
+        prompt_tokens=450,
+        candidates_tokens=150,
+        estimated_cost_usd="$0.000078 USD",
+        routing_rationale="Matched taxonomy",
+    )
+    assert doc.prompt_tokens == 450
+    assert doc.candidates_tokens == 150
+    assert doc.total_tokens == 600
+    assert doc.estimated_cost_usd == "$0.000078 USD"
+    assert doc.routing_rationale == "Matched taxonomy"

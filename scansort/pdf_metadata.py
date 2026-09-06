@@ -147,7 +147,7 @@ def process_pdf_metadata_and_rotation(
     # Unified atomic write via temporary file replacement for all targets (S3-08)
     atomic_write(target_path, lambda out: writer.write(out))
 
-    logger.debug(
-        "Embedded metadata and rotation (%d deg) into %s.", norm_angle, target_path.name
+    logger.info(
+        "Embedded metadata and rotation (%d°) into %s.", norm_angle, target_path.name
     )
     return target_path

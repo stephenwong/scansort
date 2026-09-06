@@ -603,7 +603,11 @@ def test_maybe_apply_auto_update_skips_within_interval(tmp_path: Path, monkeypat
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
-    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox",
+        documents_root=tmp_path / "Docs",
+        update_check_interval_days=1,
+    )
     app_dir = tmp_path / "appdata"
     app_dir.mkdir()
     updater.record_update_check(app_dir / "update_state.json")
@@ -628,16 +632,16 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     app_dir = tmp_path / "appdata"
     payload = {
-        "tag_name": "v0.3.0",
+        "tag_name": "v1.0.0",
         "assets": [
             {
-                "name": "ScanSort-v0.3.0-windows-x64.zip",
+                "name": "ScanSort-v1.0.0-windows-x64.zip",
                 "browser_download_url": "https://example.com/a.zip",
                 "size": 1,
             }
         ],
     }
-    staged = tmp_path / "ScanSort.stage-0.3.0"
+    staged = tmp_path / "ScanSort.stage-1.0.0"
     staged.mkdir()
     (staged / "ScanSort.exe").write_bytes(b"new")
     with (
@@ -651,7 +655,7 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     mock_spawn.assert_called_once()
     args = mock_spawn.call_args[0]
     assert args[1] == staged
-    assert args[2] == "0.3.0"
+    assert args[2] == "1.0.0"
     assert args[3] == os.getpid()
     mock_toast.assert_called_once()
     assert "update available" in mock_toast.call_args[0][0].lower()
@@ -884,3 +888,92 @@ def test_main_cli_config_show_writes_to_attached_console(monkeypatch):
     assert "Watch Folder:" in out
     assert "AIza" in out
     assert "••••••••" in out
+
+
+def test_main_cli_check_update_up_to_date(capsys, monkeypatch):
+    from scansort.__main__ import main_cli
+
+    monkeypatch.setattr(
+        "scansort.__main__.fetch_latest_release",
+        lambda: {"tag_name": "v0.1.0"},
+    )
+    monkeypatch.setattr(
+        "scansort.__main__.available_update",
+        lambda *args, **kwargs: None,
+    )
+    code = main_cli(["check-update"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Checking for updates" in captured.out
+    assert "up to date" in captured.out
+
+
+def test_main_cli_check_update_available(capsys, monkeypatch):
+    from scansort.__main__ import main_cli
+    from scansort.updater import ReleaseInfo
+
+    fake_info = ReleaseInfo(
+        version="2.0.0",
+        tag_name="v2.0.0",
+        asset_name="ScanSort-v2.0.0-windows-x64.zip",
+        download_url="https://example.com/download.zip",
+        size_bytes=1024000,
+        sha256=None,
+        published_at="2026-09-06",
+    )
+    monkeypatch.setattr(
+        "scansort.__main__.fetch_latest_release",
+        lambda: {"tag_name": "v2.0.0"},
+    )
+    monkeypatch.setattr(
+        "scansort.__main__.available_update",
+        lambda *args, **kwargs: fake_info,
+    )
+    code = main_cli(["check-update"])
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "Update available: version 2.0.0" in captured.out
+    assert "ScanSort-v2.0.0-windows-x64.zip" in captured.out
+    assert "https://example.com/download.zip" in captured.out
+
+
+def test_main_cli_check_update_failure(capsys, monkeypatch):
+    from scansort.__main__ import main_cli
+    from scansort.updater import UpdateError
+
+    def fail():
+        raise UpdateError("Network error 503")
+
+    monkeypatch.setattr("scansort.__main__.fetch_latest_release", fail)
+    code = main_cli(["check-update"])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "Update check failed: Network error 503" in captured.err
+
+
+def test_main_cli_verbose_sets_debug_logging(monkeypatch):
+    import logging
+
+    from scansort.__main__ import main_cli
+
+    captured_level = []
+
+    def fake_configure(log_dir=None, level=None):
+        captured_level.append(level)
+
+    monkeypatch.setattr("scansort.__main__.configure_file_logging", fake_configure)
+
+    # Prefix flag
+    main_cli(["-v", "undo"])
+    assert captured_level[-1] == logging.DEBUG
+
+    # Trailing flag on subcommands
+    main_cli(["undo", "-v"])
+    assert captured_level[-1] == logging.DEBUG
+
+    main_cli(["check-update", "--verbose"])
+    assert captured_level[-1] == logging.DEBUG
+
+    # Default without verbose flag is INFO
+    main_cli(["undo"])
+    assert captured_level[-1] == logging.INFO

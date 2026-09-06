@@ -29,10 +29,18 @@ def should_process_path(path: Path) -> bool:
 
     name = path.name
     lower_name = name.lower()
-    if name.startswith(IGNORED_PREFIXES) or lower_name.endswith(TEMPORARY_EXTENSIONS):
+    if name.startswith(IGNORED_PREFIXES):
+        logger.debug("Ignoring prefixed path in drop folder: %s", name)
+        return False
+    if lower_name.endswith(TEMPORARY_EXTENSIONS):
+        logger.debug("Ignoring temporary file in drop folder: %s", name)
         return False
 
-    return is_supported_format(path)
+    supported = is_supported_format(path)
+    if not supported:
+        logger.debug("Ignoring unsupported file in drop folder: %s", name)
+        return False
+    return True
 
 
 class DropFolderWatcher:

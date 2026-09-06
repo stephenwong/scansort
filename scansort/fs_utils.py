@@ -1,5 +1,6 @@
 """Shared atomic file-writing and relative-path safety utilities."""
 
+import logging
 import os
 import sys
 import tempfile
@@ -7,6 +8,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PureWindowsPath
 from typing import BinaryIO
+
+logger = logging.getLogger(__name__)
 
 
 def atomic_write(
@@ -147,5 +150,11 @@ def resolve_collision(dest_folder: Path, filename: str) -> Path:
     while True:
         collision_candidate = dest_folder / f"{stem}_{counter}{suffix}"
         if not collision_candidate.exists():
+            logger.info(
+                "Collision detected for %s in %s; renamed to %s",
+                filename,
+                dest_folder,
+                collision_candidate.name,
+            )
             return collision_candidate
         counter += 1

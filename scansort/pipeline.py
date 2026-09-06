@@ -6,7 +6,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from scansort.audit_logger import AuditLogger
 from scansort.config import AppConfig, get_default_app_dir
 from scansort.constants import (
     FOLDER_MAP_FILENAME,
@@ -33,6 +32,7 @@ from scansort.fs_utils import interprocess_file_lock
 from scansort.gemini_client import GeminiClassifier
 from scansort.hasher import check_duplicate, compute_file_sha256
 from scansort.image_converter import convert_to_pdf
+from scansort.logging import AuditLogger
 from scansort.models import DocumentClassification
 from scansort.notifications import (
     notify_file_filed,
@@ -84,9 +84,10 @@ class ScanSortPipeline:
         destination_folder: str,
         summary: str,
         status: str,
+        classification: DocumentClassification | None = None,
     ) -> dict[str, Any]:
         """Build a standardized audit log entry dictionary."""
-        return {
+        entry: dict[str, Any] = {
             "sha256": file_hash,
             "original_filename": file_path.name,
             "original_path": str(file_path),
@@ -96,6 +97,36 @@ class ScanSortPipeline:
             "summary": summary,
             "status": status,
         }
+        if classification is not None:
+            model_val = getattr(self.classifier, "model", None)
+            if isinstance(model_val, str):
+                entry["gemini_model"] = model_val
+            if isinstance(classification.confidence, (int, float)):
+                entry["confidence"] = float(classification.confidence)
+            if isinstance(classification.document_type, str):
+                entry["document_type"] = classification.document_type
+            reason = getattr(classification, "folder_reasoning", None)
+            if isinstance(reason, str) and reason.strip():
+                entry["folder_reasoning"] = reason.strip()
+            rationale = getattr(classification, "routing_rationale", None)
+            if isinstance(rationale, str) and rationale.strip():
+                entry["routing_rationale"] = rationale.strip()
+            prompt_tokens = getattr(classification, "prompt_tokens", 0)
+            candidates_tokens = getattr(classification, "candidates_tokens", 0)
+            if (
+                isinstance(prompt_tokens, int)
+                and isinstance(candidates_tokens, int)
+                and (prompt_tokens or candidates_tokens)
+            ):
+                entry["tokens"] = {
+                    "prompt": prompt_tokens,
+                    "candidates": candidates_tokens,
+                    "total": prompt_tokens + candidates_tokens,
+                }
+            cost_val = getattr(classification, "estimated_cost_usd", None)
+            if isinstance(cost_val, (int, float)):
+                entry["estimated_cost_usd"] = float(cost_val)
+        return entry
 
     def _route_duplicate(
         self,
@@ -210,22 +241,29 @@ class ScanSortPipeline:
                     e,
                 )
 
+        # Derive destination folder relative to documents_root for accurate audit and notifications
+        resolved_docs = self.config.documents_root.resolve()
+        folder_str = str(final_dest.parent.relative_to(resolved_docs)).replace(
+            "\\", "/"
+        )
+
         # Record audit log
         self.audit_logger.log_scan(
             self._build_audit_entry(
                 file_hash=file_hash,
                 file_path=file_path,
                 destination_path=final_dest,
-                destination_folder=classification.target_folder,
+                destination_folder=folder_str,
                 summary=classification.summary,
                 status=STATUS_SUCCESS,
+                classification=classification,
             )
         )
 
         logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
         notify_file_filed(
             final_dest.name,
-            classification.target_folder,
+            folder_str,
             folder_path=final_dest.parent,
         )
         return final_dest

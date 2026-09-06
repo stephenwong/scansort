@@ -22,7 +22,9 @@ def _isolate_root_logging(monkeypatch):
     root = logging.getLogger()
     initial_handlers = list(root.handlers)
     initial_level = root.level
-    monkeypatch.setattr(cli_module, "configure_file_logging", lambda app_dir=None: None)
+    monkeypatch.setattr(
+        cli_module, "configure_file_logging", lambda *args, **kwargs: None
+    )
     yield
     for handler in list(root.handlers):
         if handler not in initial_handlers:

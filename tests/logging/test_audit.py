@@ -1,12 +1,15 @@
-"""Unit tests for scansort.audit_logger module."""
+"""Unit tests for scansort.logging.audit module."""
 
 import csv
 import json
 import threading
+from datetime import datetime as _dt
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
-from scansort.audit_logger import AuditLogger
+from scansort.logging import AuditLogger
+from scansort.logging import audit as audit_module
 
 
 def test_audit_logger_records_jsonl_and_csv(tmp_path: Path):
@@ -147,15 +150,12 @@ def test_ensure_csv_headers_concurrent_creation_never_truncates(tmp_path: Path):
         thread.start()
         old_truncating_behavior = entered.wait(timeout=1.0)
         if old_truncating_behavior:
-            # Old implementation is paused before its truncating open("w"):
-            # append a row as the concurrent process would, then let it run.
             with open(csv_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(["MUST_SURVIVE"])
             release.set()
         thread.join(timeout=5)
         assert not thread.is_alive()
         if not old_truncating_behavior:
-            # New implementation never opens "w"; simulate the concurrent append.
             with open(csv_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(["MUST_SURVIVE"])
 
@@ -217,11 +217,6 @@ def test_log_scan_survives_lone_surrogates(tmp_path: Path):
 
 
 def test_log_scan_local_time_always_australia_sydney(tmp_path, monkeypatch):
-    from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo
-
-    from scansort import audit_logger as audit_module
-
     sydney_tz = ZoneInfo("Australia/Sydney")
 
     # 2026-01-31T13:30Z == 2026-02-01 00:30 Sydney (AEDT, UTC+11).
