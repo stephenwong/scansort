@@ -4,7 +4,7 @@ import logging
 import logging.handlers
 from pathlib import Path
 
-from scansort.constants import LOG_FILENAME
+from scansort.core.constants import LOG_FILENAME
 from scansort.logging import configure_file_logging
 
 
@@ -114,9 +114,10 @@ def test_main_cli_wires_file_logging_into_app_dir(monkeypatch, tmp_path: Path, c
     from scansort.logging.setup import configure_file_logging as real_configure
 
     monkeypatch.setattr(cli_module, "configure_file_logging", real_configure)
+    monkeypatch.setattr("scansort.cli.root.configure_file_logging", real_configure)
     monkeypatch.setattr("scansort.logging.setup.get_default_app_dir", lambda: tmp_path)
-    monkeypatch.setattr("scansort.__main__.get_default_app_dir", lambda: tmp_path)
-    monkeypatch.setattr("scansort.config.get_default_app_dir", lambda: tmp_path)
+    monkeypatch.setattr("scansort.cli.undo.get_default_app_dir", lambda: tmp_path)
+    monkeypatch.setattr("scansort.core.config.get_default_app_dir", lambda: tmp_path)
 
     exit_code = cli_module.main_cli(["undo"])
 

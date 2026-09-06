@@ -9,7 +9,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from scansort.fs_utils import atomic_write
+from scansort.core.fs import atomic_write
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from scansort.hasher import compute_file_sha256
+from scansort.pipeline.hasher import compute_file_sha256
 from scansort.updater.feed import (
     REQUEST_TIMEOUT,
     USER_AGENT,

@@ -14,37 +14,52 @@ ScanSort is built with modular, loosely coupled components designed around safet
 
 ```mermaid
 graph TB
-    subgraph Input ["Scanner Input & Ingestion"]
+    subgraph Input ["Scanner Input & Ingestion (scansort.pipeline.watcher)"]
         Scanner["Physical Scanner / ADF"] -->|Writes PDF/JPG/PNG| DropFolder["Scanner Drop Folder\n(%USERPROFILE%\\Scans\\Inbox)"]
         DropFolder -->|Rust Inotify Event| Watcher["Watcher Engine\n(watchfiles debounce: 1500ms)"]
         Watcher -->|Thread-safe Push| Queue["Worker Queue\n(FIFO Producer-Consumer)"]
     end
 
-    subgraph Processing ["Processing Pipeline (scansort.pipeline)"]
-        Queue -->|Pop Item| Stabilizer["File Stabilizer\n(Lock Polling & Growth Tracking)"]
-        Stabilizer --> Hasher["SHA-256 Hasher\n(Duplicate Scan Interceptor)"]
-        Hasher -->|New Scan| Converter["Image Normalizer\n(img2pdf Lossless / Pillow)"]
+    subgraph Processing ["Processing Pipeline (scansort.pipeline / document / classification)"]
+        Queue -->|Pop Item| Stabilizer["File Stabilizer\n(scansort.pipeline.stabilizer)"]
+        Stabilizer --> Hasher["SHA-256 Hasher\n(scansort.pipeline.hasher)"]
+        Hasher -->|New Scan| Converter["Image Normalizer\n(scansort.document.converter)"]
         Hasher -->|Duplicate Detected| DupReview["Documents\\_Review_Needed\\Duplicates"]
         
-        Converter --> Mapper["Folder Mapper & Taxonomy\n(Documents Tree & folder_hints.json)"]
-        Mapper --> Gemini["Gemini Client\n(Multimodal OCR & Classification)"]
+        Converter --> Mapper["Taxonomy Scanner\n(scansort.classification.taxonomy)"]
+        Mapper --> Gemini["Gemini Client\n(scansort.classification.client)"]
         
-        Gemini --> MetadataEngine["PDF Metadata & Orientation\n(pypdf Auto-Rotate & XMP Embedding)"]
-        MetadataEngine --> Dispatcher["Dispatcher\n(Collision Resolution & Atomic Move)"]
+        Gemini --> MetadataEngine["PDF Metadata & Orientation\n(scansort.document.metadata)"]
+        MetadataEngine --> Dispatcher["Dispatcher\n(scansort.pipeline.dispatcher)"]
     end
 
     subgraph Storage ["Destination & Audit"]
         Dispatcher --> DestDocs["Target Leaf Folder\n(Documents\\Utilities\\Electricity\\...)"]
         Dispatcher --> FallbackReview["Documents\\_Review_Needed"]
-        Dispatcher --> Audit["Audit Logger\n(history.jsonl & history.csv)"]
+        Dispatcher --> Audit["Audit Logger\n(scansort.logging.audit)"]
     end
 
-    subgraph Security ["Security & OS Integration"]
-        Vault["Windows Credential Vault\n(DPAPI via keyring)"] -.->|Supplies API Key| Gemini
-        Config["Configuration Manager\n(%APPDATA%\\ScanSort\\config.json)"] -.-> Pipeline
-        Autorun["Windows Registry\n(HKCU Run Key)"] -.->|Boot Auto-Start| Watcher
+    subgraph Security ["Platform & Configuration (scansort.platform / scansort.core)"]
+        Vault["Windows Credential Vault\n(scansort.platform.secrets)"] -.->|Supplies API Key| Gemini
+        Config["Configuration Manager\n(scansort.core.config)"] -.-> Processing
+        Autorun["Windows Registry\n(scansort.platform.autorun)"] -.->|Boot Auto-Start| Watcher
     end
 ```
+
+---
+
+### Package & Module Map
+
+| Package | Purpose & Key Modules |
+| :--- | :--- |
+| `scansort.classification` | Gemini multimodal classification (`client.py`), prompt hints (`hints.py`), Pydantic models & sanitizers (`models.py`), taxonomy scanner (`taxonomy.py`). |
+| `scansort.cli` | Modular CLI router (`root.py`), subcommands (`watch.py`, `config.py`, `rescan.py`, `undo.py`, `update.py`), argument parser (`parser.py`). |
+| `scansort.core` | Core configuration loader (`config.py`), domain constants (`constants.py`), filesystem & atomic lock utilities (`fs.py`), timezone helpers (`timeutil.py`). |
+| `scansort.document` | Lossless image wrapping & normalization (`converter.py`), XMP metadata embedding & auto-rotation (`metadata.py`). |
+| `scansort.logging` | Structured audit logging (`audit.py`), Gemini token accounting & pricing (`cost.py`), model event diagnostics (`gemini_logger.py`), rotating file setup (`setup.py`). |
+| `scansort.pipeline` | End-to-end coordinator (`coordinator.py`), worker queue (`worker.py`), drop folder watcher (`watcher.py`), file stabilizer (`stabilizer.py`), SHA-256 hasher (`hasher.py`), atomic dispatcher (`dispatcher.py`), move reversal (`undo.py`). |
+| `scansort.platform` | System boot autostart (`autorun.py`), Windows console attachment (`console.py`), single-instance locking (`instance_guard.py`), filing notifications (`notifications.py`), credential vault & secret masking (`secrets.py`), Windows native toasts (`toasts.py`). |
+| `scansort.updater` | GitHub Releases self-update engine: feed checker (`feed.py`), streaming downloader (`downloader.py`), atomic installer (`installer.py`), process supervisor (`process.py`), update state tracking (`state.py`). |
 
 ---
 

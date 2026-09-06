@@ -9,14 +9,14 @@ import sys
 import time
 from pathlib import Path
 
-from scansort.config import get_default_app_dir
-from scansort.constants import (
+from scansort.core.config import get_default_app_dir
+from scansort.core.constants import (
     INSTANCE_LOCK_FILENAME,
     UPDATE_LOCK_FILENAME,
     UPDATE_STATE_FILENAME,
 )
-from scansort.fs_utils import interprocess_file_lock
-from scansort.instance_guard import instance_guard
+from scansort.core.fs import interprocess_file_lock
+from scansort.platform.instance_guard import instance_guard
 from scansort.updater.installer import (
     EXECUTABLE_NAME,
     UpdateError,

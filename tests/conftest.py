@@ -18,12 +18,16 @@ def _isolate_root_logging(monkeypatch):
     to the root logger afterwards.
     """
     import scansort.__main__ as cli_module
+    import scansort.cli.root as cli_root
 
     root = logging.getLogger()
     initial_handlers = list(root.handlers)
     initial_level = root.level
     monkeypatch.setattr(
         cli_module, "configure_file_logging", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        cli_root, "configure_file_logging", lambda *args, **kwargs: None
     )
     yield
     for handler in list(root.handlers):

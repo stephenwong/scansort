@@ -2,8 +2,8 @@
 
 import logging
 
+from scansort.classification.models import DocumentClassification
 from scansort.logging.gemini_logger import log_classification_event
-from scansort.models import DocumentClassification
 
 
 def test_log_classification_event(caplog):

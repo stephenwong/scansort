@@ -4,8 +4,8 @@ import logging
 import logging.handlers
 from pathlib import Path
 
-from scansort.config import get_default_app_dir
-from scansort.constants import LOG_FILENAME
+from scansort.core.config import get_default_app_dir
+from scansort.core.constants import LOG_FILENAME
 
 _LOG_MAX_BYTES = 1_048_576
 _LOG_BACKUP_COUNT = 3

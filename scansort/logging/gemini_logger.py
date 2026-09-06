@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from scansort.logging.cost import format_token_cost_summary
 
 if TYPE_CHECKING:
-    from scansort.models import DocumentClassification
+    from scansort.classification.models import DocumentClassification
 
 logger = logging.getLogger(__name__)
 
