@@ -24,7 +24,6 @@ from scansort.constants import (
     INSTANCE_LOCK_FILENAME,
     UPDATE_STATE_FILENAME,
 )
-from scansort.dispatcher import undo_last_move
 from scansort.folder_mapper import FolderMapper
 from scansort.instance_guard import instance_guard
 from scansort.logging import configure_file_logging
@@ -36,6 +35,7 @@ from scansort.secrets import (
     set_api_key,
 )
 from scansort.toasts import show_toast
+from scansort.undo import undo_last_move
 from scansort.updater import (
     UpdateError,
     applied_version,

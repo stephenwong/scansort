@@ -35,7 +35,7 @@ scansort/
 │   ├── autorun.py              # Windows Registry (HKCU Run) & Linux autostart manager
 │   ├── config.py               # Pydantic configuration loader (%APPDATA%\ScanSort\config.json)
 │   ├── constants.py            # Shared domain constants (review/duplicates/undo prefixes, history filenames, supported extensions)
-│   ├── dispatcher.py           # Destination safety resolution, collision handling, atomic moves, and move reversal
+│   ├── dispatcher.py           # Destination safety resolution, collision handling, and atomic filing
 │   ├── file_stabilizer.py      # Exclusive file-lock polling and size growth tracker
 │   ├── folder_hints.py         # User keyword aliases loader (folder_hints.json)
 │   ├── folder_mapper.py        # Recursive taxonomy scanner with noise & dotfile filtering
@@ -50,6 +50,7 @@ scansort/
 │   ├── pipeline.py             # End-to-end coordinator & sequential queue worker
 │   ├── secrets.py              # OS credential vault, key masking, & regex log redaction
 │   ├── toasts.py               # Windows native toast notifications (lazy optional 'windows' extra)
+│   ├── undo.py                 # Filing move reversal, drop folder restoration, & audit update
 │   ├── updater/                # Modular GitHub Releases self-update engine
 │   │   ├── __init__.py         # Package interface re-exports
 │   │   ├── downloader.py       # Chunked streaming, SHA-256 verification, zip extraction, & staging

@@ -59,6 +59,7 @@ FOLDER_MAP_FILENAME: str = "folder_map.json"
 UPDATE_STATE_FILENAME: str = "update_state.json"
 INSTANCE_LOCK_FILENAME: str = "instance.lock"
 UPDATE_LOCK_FILENAME: str = "update.lock"
+OPERATIONS_LOCK_FILENAME: str = "operations.lock"
 LOG_FILENAME: str = "scansort.log"
 
 SUPPORTED_EXTENSIONS: set[str] = {
