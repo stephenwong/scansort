@@ -1,59 +1,16 @@
 """Unit tests for CLI commands in scansort.__main__."""
 
-import io
 import json
 import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from scansort.__main__ import build_parser, main_cli
 from scansort.config import AppConfig
-
-
-def _fake_console_api(
-    monkeypatch,
-    *,
-    attach_result=1,
-    output_cp=437,
-    stdout_handle=11,
-    stderr_handle=12,
-):
-    """Fake a frozen windowed Windows build running under a parent console.
-
-    Returns ``(kernel32, msvcrt, opened)`` where ``opened`` records each
-    ``os.fdopen`` call as ``(fd, mode, kwargs)``.
-    """
-    import scansort.__main__ as cli_module
-    from scansort.__main__ import _attach_parent_console
-
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "stdout", io.StringIO())
-    monkeypatch.setattr(sys, "stderr", io.StringIO())
-
-    fake_ctypes = MagicMock()
-    kernel32 = fake_ctypes.WinDLL.return_value
-    kernel32.AttachConsole.return_value = attach_result
-    kernel32.GetConsoleOutputCP.return_value = output_cp
-    kernel32.GetStdHandle.side_effect = [stdout_handle, stderr_handle]
-    monkeypatch.setattr(cli_module, "ctypes", fake_ctypes)
-
-    fake_msvcrt = MagicMock()
-    fake_msvcrt.open_osfhandle.side_effect = [100, 101]
-    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
-
-    opened = []
-
-    def fake_fdopen(fd, mode, **kwargs):
-        opened.append((fd, mode, kwargs))
-        return io.StringIO()
-
-    monkeypatch.setattr(cli_module.os, "fdopen", fake_fdopen)
-    return kernel32, fake_msvcrt, opened, _attach_parent_console
 
 
 @contextmanager
@@ -798,131 +755,18 @@ def test_announce_applied_update_noop_without_marker(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_attach_parent_console_noop_off_windows(monkeypatch):
-    from scansort.__main__ import _attach_parent_console
-
-    monkeypatch.setattr("sys.platform", "linux")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    real_out = sys.stdout
-    _attach_parent_console()
-    assert sys.stdout is real_out
-
-
-def test_attach_parent_console_noop_when_not_frozen(monkeypatch):
-    from scansort.__main__ import _attach_parent_console
-
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.delattr(sys, "frozen", raising=False)
-    real_out = sys.stdout
-    _attach_parent_console()
-    assert sys.stdout is real_out
-
-
-def test_attach_parent_console_skips_when_stdout_is_terminal(monkeypatch):
-    import scansort.__main__ as cli_module
-    from scansort.__main__ import _attach_parent_console
-
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    tty_out = MagicMock()
-    tty_out.isatty.return_value = True
-    monkeypatch.setattr(sys, "stdout", tty_out)
-    fake_ctypes = MagicMock()
-    monkeypatch.setattr(cli_module, "ctypes", fake_ctypes)
-
-    _attach_parent_console()
-    fake_ctypes.WinDLL.assert_not_called()
-    assert sys.stdout is tty_out
-
-
-def test_attach_parent_console_silent_without_parent_console(monkeypatch):
-    kernel32, fake_msvcrt, opened, attach = _fake_console_api(
-        monkeypatch, attach_result=0
-    )
-    real_out = sys.stdout
-
-    assert attach() is None
-    kernel32.AttachConsole.assert_called_once_with(-1)
-    kernel32.GetStdHandle.assert_not_called()
-    fake_msvcrt.open_osfhandle.assert_not_called()
-    assert opened == []
-    assert sys.stdout is real_out
-
-
-def test_attach_parent_console_binds_stdout_and_stderr(monkeypatch):
-    kernel32, fake_msvcrt, opened, attach = _fake_console_api(monkeypatch)
-    original_out, original_err = sys.stdout, sys.stderr
-
-    assert attach() is None
-    kernel32.AttachConsole.assert_called_once_with(-1)
-    kernel32.GetConsoleOutputCP.assert_called_once_with()
-    assert kernel32.GetStdHandle.call_args_list == [
-        call(-11),
-        call(-12),
-    ]
-    assert fake_msvcrt.open_osfhandle.call_args_list == [
-        call(11, os.O_WRONLY),
-        call(12, os.O_WRONLY),
-    ]
-    assert opened == [
-        (100, "w", {"encoding": "cp437", "buffering": 1}),
-        (101, "w", {"encoding": "cp437", "buffering": 1}),
-    ]
-    assert sys.stdout is not original_out
-    assert sys.stderr is not original_err
-
-
-def test_attach_parent_console_skips_missing_stdout_handle(monkeypatch):
-    _, fake_msvcrt, opened, attach = _fake_console_api(monkeypatch, stdout_handle=0)
-    original_out, original_err = sys.stdout, sys.stderr
-
-    assert attach() is None
-    assert fake_msvcrt.open_osfhandle.call_args_list == [call(12, os.O_WRONLY)]
-    assert opened == [(100, "w", {"encoding": "cp437", "buffering": 1})]
-    assert sys.stdout is original_out
-    assert sys.stderr is not original_err
-
-
-def test_attach_parent_console_falls_back_to_utf8_without_codepage(monkeypatch):
-    _, _, opened, attach = _fake_console_api(monkeypatch, output_cp=0)
-
-    assert attach() is None
-    assert opened == [
-        (100, "w", {"encoding": "utf-8", "buffering": 1}),
-        (101, "w", {"encoding": "utf-8", "buffering": 1}),
-    ]
-
-
-def test_attach_parent_console_swallows_win32_api_failures(monkeypatch):
-    import scansort.__main__ as cli_module
-
-    _, _, _, attach = _fake_console_api(monkeypatch)
-    cli_module.ctypes.WinDLL.side_effect = OSError(5, "access denied")
-    original_out, original_err = sys.stdout, sys.stderr
-
-    assert attach() is None
-    assert sys.stdout is original_out
-    assert sys.stderr is original_err
-
-
-def test_main_cli_config_show_writes_to_attached_console(monkeypatch):
+def test_main_cli_attaches_console_on_entry():
     from scansort.__main__ import main_cli
 
-    kernel32, _, opened, _ = _fake_console_api(monkeypatch, output_cp=65001)
-    kernel32.AttachConsole.return_value = 1
     with (
+        patch("scansort.__main__.attach_parent_console") as mock_attach,
         patch("scansort.__main__.get_api_key", return_value="AIzaSyTestKey123456"),
         patch("scansort.__main__.load_config", return_value=AppConfig()),
         patch("scansort.__main__.is_autorun_enabled", return_value=False),
     ):
         exit_code = main_cli(["config", "--show"])
     assert exit_code == 0
-    assert len(opened) == 2
-    out = sys.stdout.getvalue()
-    assert "================ ScanSort Configuration" in out
-    assert "Watch Folder:" in out
-    assert "AIza" in out
-    assert "••••••••" in out
+    mock_attach.assert_called_once()
 
 
 def test_main_cli_check_update_up_to_date(capsys, monkeypatch):
