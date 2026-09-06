@@ -50,7 +50,13 @@ scansort/
 │   ├── pipeline.py             # End-to-end coordinator & sequential queue worker
 │   ├── secrets.py              # OS credential vault, key masking, & regex log redaction
 │   ├── toasts.py               # Windows native toast notifications (lazy optional 'windows' extra)
-│   ├── updater.py              # GitHub Releases self-update engine (check/download/stage/swap/relaunch)
+│   ├── updater/                # Modular GitHub Releases self-update engine
+│   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── downloader.py       # Chunked streaming, SHA-256 verification, zip extraction, & staging
+│   │   ├── feed.py             # Release feed query, tag parsing, & candidate evaluation
+│   │   ├── installer.py        # Rollback-safe directory swap, collision handling, & lock retry
+│   │   ├── process.py          # Process waiting, detached child spawn, & helper orchestration
+│   │   └── state.py            # Update state persistence & check interval tracking
 │   └── watcher.py              # Rust-powered watchfiles monitor with debouncing
 ├── tests/                      # Pytest automated test suite (>=95% coverage enforced)
 │   ├── logging/                # Modular logging test suite (audit, setup, cost, gemini_logger)
@@ -58,6 +64,12 @@ scansort/
 │   │   ├── test_cost.py        # Token accounting & USD pricing tests (Gemini 3.1 & 3.5 Flash Lite)
 │   │   ├── test_gemini_logger.py # Structured event & reasoning logging tests
 │   │   └── test_setup.py       # Rotating file & console handler tests
+│   ├── updater/                # Modular updater test suite (downloader, feed, installer, process, state)
+│   │   ├── test_downloader.py  # Streaming download, archive extraction, and staging tests
+│   │   ├── test_feed.py        # Release feed query, tag parsing, & candidate evaluation tests
+│   │   ├── test_installer.py   # Directory swapping, lock retries, and rollback tests
+│   │   ├── test_process.py     # Process exit waiting and helper orchestration tests
+│   │   └── test_state.py       # Update state persistence and check interval tests
 │   ├── conftest.py             # Global test isolation fixtures & hermetic mocks
 │   └── test_*.py               # Domain and integration test suites
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
@@ -140,8 +152,9 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - `scansort.updater` must **never** run an update check, download, or install outside a frozen Windows build with `auto_update` enabled: development runs (Linux or `python -m scansort`) are inert. Do not add API keys, tokens, or other secrets to the update channel or state files.
 - Release candidates must satisfy every gate: tag parses as clean `vMAJOR.MINOR.PATCH` (no pre-releases), asset name is exactly `ScanSort-<tag>-windows-x64.zip`, and the version is strictly newer than both the embedded `__version__` and the last applied version recorded in `app_dir/update_state.json` (malformed/missing state must count as "due for a check"). Updates check on every launch by default (`update_check_interval_days: 0`, bounded `0..60`). Users can manually check for updates anytime via `scansort check-update`. Persist check timestamps only after a completed decision/hand-off so failed installs retry on the next launch.
 - Downloads must be streamed to `app_dir/tmp` and verified against the declared size and, when GitHub publishes one, the SHA-256 digest. Archive extraction must reject absolute paths, `..` segments, and Windows drive prefixes (ZipSlip), and require a root `ScanSort.exe` before any swap.
-- Install swaps are rollback-safe: rename the current install aside, rename the staged tree into place, and only then remove the backup; on any step failure rename the backup back and exit nonzero — the auto-start target must never point at a missing directory. Staging lives in a sibling directory of the install directory (same volume).
-- The helper (spawned staged build, hidden `--self-update` mode) waits for the old PID using a native `OpenProcess`/`WaitForSingleObject` handle — never `os.kill(pid, 0)`, which is not an existence probe on Windows. Detached children must use `DETACHED_PROCESS | CREATE_NO_WINDOW` with all standard handles closed.
+- **Installer & Process Separation (`scansort.updater.installer`, `scansort.updater.process`):** Installation swapping, directory management, process waiting, and helper execution are encapsulated in the modular `scansort.updater` package. Install swaps are rollback-safe: rename the current install aside, rename the staged tree into place, and only then remove the backup; on any step failure rename the backup back and exit nonzero — the auto-start target must never point at a missing directory. Staging lives in a sibling directory of the install directory (same volume).
+- **CWD Safety & Transient Lock Tolerance:** On Windows, holding a directory as CWD prevents rename or deletion. The parent process shifts CWD to `install_dir.parent` before spawning the helper, the helper is spawned with `cwd=install_dir.parent`, and `perform_self_update` ensures its own CWD is outside `install_dir` and `staged_dir`. Directory renames (`_rename_dir_with_retry`) retry with backoff on transient sharing violations (`WinError 32` / `WinError 5`) while antivirus (Windows Defender) and kernel handle teardown finish clearing.
+- The helper (spawned staged build, hidden `--self-update` mode) waits for the old PID using a native `OpenProcess`/`WaitForSingleObject` handle — never `os.kill(pid, 0)`, which is not an existence probe on Windows. If `OpenProcess` fails with `ERROR_ACCESS_DENIED` during parent termination, it polls until handle acquisition or `ERROR_INVALID_PARAMETER` (process gone). Detached children must use `DETACHED_PROCESS | CREATE_NO_WINDOW` with all standard handles closed.
 - Toasts (`scansort.toasts`) are best-effort and never raise: they no-op off-Windows, lazily import the optional `windows-toasts` extra, and swallow display failures. The "update installed" toast must be fired by the *relaunched* app from the `just_installed` state marker — never by the helper after the swap, whose bundled module paths no longer exist. Filing-lifecycle messages (filed / failed-with-reason / stranded) live in `scansort.notifications` with word-for-word testable builders under the `ScanSort` title; failure reasons shown in toasts must be whitespace-collapsed, secret-redacted, and truncated (~140 chars). Notifications support interactive click-to-open targeting the destination directory (`os.startfile` / system file manager) and, on failure states, provide a native "View Logs" action button opening `scansort.log`. The toast backend retains active toasts in a bounded memory buffer so WinRT activation callbacks survive garbage collection during background operation.
 
 ### N. Windowed Build Console Attachment (`ScanSort.exe` CLI Visibility)

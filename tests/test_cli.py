@@ -663,6 +663,41 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     assert state["checked_at"]
 
 
+def test_maybe_apply_auto_update_tolerates_chdir_failure(tmp_path: Path, monkeypatch):
+    from scansort.__main__ import _maybe_apply_auto_update
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe_path = tmp_path / "ScanSort" / "ScanSort.exe"
+    exe_path.parent.mkdir(parents=True)
+    exe_path.write_bytes(b"old")
+    monkeypatch.setattr(sys, "executable", str(exe_path), raising=False)
+    monkeypatch.setattr("os.chdir", MagicMock(side_effect=OSError("permission denied")))
+
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    payload = {
+        "tag_name": "v1.0.0",
+        "assets": [
+            {
+                "name": "ScanSort-v1.0.0-windows-x64.zip",
+                "browser_download_url": "https://example.com/a.zip",
+                "size": 1,
+            }
+        ],
+    }
+    staged = tmp_path / "ScanSort.stage-1.0.0"
+    staged.mkdir()
+    (staged / "ScanSort.exe").write_bytes(b"new")
+    with (
+        patch("scansort.__main__.fetch_latest_release", return_value=payload),
+        patch("scansort.__main__.download_and_stage", return_value=staged),
+        patch("scansort.__main__.spawn_update_helper"),
+        patch("scansort.__main__.show_toast"),
+    ):
+        assert _maybe_apply_auto_update(cfg, app_dir) is True
+
+
 def test_maybe_apply_auto_update_no_release_records_check(tmp_path: Path, monkeypatch):
     from scansort.__main__ import _maybe_apply_auto_update
 

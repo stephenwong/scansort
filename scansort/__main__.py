@@ -1,6 +1,7 @@
 """CLI entry point and command router for ScanSort."""
 
 import argparse
+import contextlib
 import ctypes
 import logging
 import os
@@ -301,6 +302,8 @@ def _maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
             "Restarting application to apply update %s via helper...",
             release.version,
         )
+        with contextlib.suppress(OSError):
+            os.chdir(install_dir.parent)
         spawn_update_helper(install_dir, staged_dir, release.version, os.getpid())
         record_update_check(state_path)
         return True
