@@ -83,6 +83,7 @@ def test_cli_root_flags_inherited_by_watch(capsys):
         patch("scansort.cli.watch.DropFolderWatcher"),
         patch("scansort.cli.watch.ScanSortPipeline"),
         patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.SystemTrayApp"),
     ):
         # Root --minimized before watch
         exit_code = main_cli(["--minimized", "watch"])

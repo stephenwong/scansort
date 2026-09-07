@@ -284,7 +284,8 @@ class SystemTrayApp:
         if self.watcher is not None and hasattr(self.watcher, "stop"):
             self.watcher.stop()
         if self.icon is not None:
-            self.icon.stop()
+            with contextlib.suppress(Exception):
+                self.icon.stop()
 
     def start(self) -> None:
         """Launch the system tray icon in detached mode."""
@@ -293,4 +294,5 @@ class SystemTrayApp:
     def stop(self) -> None:
         """Stop the system tray icon."""
         if self.icon is not None:
-            self.icon.stop()
+            with contextlib.suppress(Exception):
+                self.icon.stop()

@@ -25,6 +25,7 @@ def test_cli_watch_overrides(capsys, tmp_path: Path):
         patch("scansort.cli.watch.DropFolderWatcher") as mock_watcher_cls,
         patch("scansort.cli.watch.ScanSortPipeline"),
         patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.SystemTrayApp"),
     ):
         exit_code = main_cli(
             [
@@ -49,6 +50,7 @@ def test_cli_watch_minimized_suppresses_banner(capsys, tmp_path: Path):
         patch("scansort.cli.watch.DropFolderWatcher"),
         patch("scansort.cli.watch.ScanSortPipeline"),
         patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.SystemTrayApp"),
     ):
         exit_code = main_cli(["watch", "--minimized"])
         assert exit_code == 0
@@ -63,6 +65,7 @@ def test_cli_watch_worker_join_timeout():
         patch("scansort.cli.watch.DropFolderWatcher"),
         patch("scansort.cli.watch.ScanSortPipeline"),
         patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.SystemTrayApp"),
         patch("threading.Thread", return_value=mock_thread),
     ):
         exit_code = main_cli(["watch"])
@@ -77,6 +80,7 @@ def test_cli_watch_keyboard_interrupt():
         patch("scansort.cli.watch.DropFolderWatcher", mock_watcher_cls),
         patch("scansort.cli.watch.ScanSortPipeline"),
         patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.SystemTrayApp"),
     ):
         exit_code = main_cli(["watch"])
         assert exit_code == 0

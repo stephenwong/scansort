@@ -37,6 +37,47 @@ def _isolate_root_logging(monkeypatch):
     root.setLevel(initial_level)
 
 
+class _HermeticTrayIcon:
+    """Hermetic replacement for pystray.Icon in test environments.
+
+    Prevents connecting to the host X11/Win32 display server, spawning
+    unmanaged non-daemon threads, and encountering socket errors during
+    garbage collection.
+    """
+
+    def __init__(
+        self, name: str, icon=None, title: str | None = None, menu=None
+    ) -> None:
+        self.name = name
+        self.icon = icon
+        self.title = title
+        self.menu = menu
+        self.visible = False
+        self._running = False
+
+    def run(self, setup=None) -> None:
+        self._running = True
+        if setup:
+            setup(self)
+
+    def run_detached(self, setup=None) -> None:
+        self.run(setup=setup)
+
+    def stop(self) -> None:
+        self._running = False
+
+    def update_menu(self) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pystray(monkeypatch):
+    """Keep pystray system tray hermetic across tests."""
+    import pystray
+
+    monkeypatch.setattr(pystray, "Icon", _HermeticTrayIcon)
+
+
 @pytest.fixture
 def minimal_pdf_bytes() -> bytes:
     """Return raw bytes of a valid minimal single-page PDF."""

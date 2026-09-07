@@ -75,6 +75,12 @@ hiddenimports = [
     "pypdf",
     "img2pdf",
     "PIL",
+    "pystray",
+    "pystray._win32",
+    "pystray._util",
+    "pystray._util.win32",
+    "tkinter",
+    "tkinter.ttk",
     "tzdata.zoneinfo",
     # Windows toast notifications (optional 'windows' extra) - lazily imported
     # by scansort.platform.toasts, so their winrt extension modules must be named here.
@@ -85,6 +91,7 @@ hiddenimports = [
     "winrt.windows.foundation.collections",
     "winrt.windows.ui.notifications",
 ]
+hiddenimports += collect_submodules("pystray")
 
 a = Analysis(
     ["scansort/__main__.py"],
