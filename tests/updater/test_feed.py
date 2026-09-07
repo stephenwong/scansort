@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-import scansort.updater as updater
 from scansort import __version__
 from scansort.updater.feed import (
     REQUEST_TIMEOUT,
@@ -230,26 +229,6 @@ def test_updater_emits_lifecycle_logs(caplog):
     up_to_date = available_update(payload, current_version=parse_version(NEXT_VERSION))
     assert up_to_date is None
     assert "ScanSort is up to date" in caplog.text
-
-
-def test_updater_re_exports_symbols():
-    from scansort.updater.installer import (
-        cleanup_stale_updates,
-        replace_install_dir,
-    )
-    from scansort.updater.process import (
-        launch_installed_app,
-        perform_self_update,
-        spawn_update_helper,
-        wait_for_process_exit,
-    )
-
-    assert updater.cleanup_stale_updates is cleanup_stale_updates
-    assert updater.launch_installed_app is launch_installed_app
-    assert updater.perform_self_update is perform_self_update
-    assert updater.replace_install_dir is replace_install_dir
-    assert updater.spawn_update_helper is spawn_update_helper
-    assert updater.wait_for_process_exit is wait_for_process_exit
 
 
 def test_check_for_updates_available(tmp_path: Path):

@@ -86,7 +86,9 @@ def test_ensure_directories_creates_missing(tmp_path: Path):
 def test_load_nonexistent_config_returns_default(tmp_path: Path):
     missing_file = tmp_path / "does_not_exist.json"
     cfg = load_config(missing_file)
-    assert isinstance(cfg, AppConfig)
+    assert cfg.gemini_model == DEFAULT_GEMINI_MODEL
+    assert cfg.fallback_folder == "_Review_Needed"
+    assert cfg.start_on_boot is True
 
 
 def test_get_default_config_path():

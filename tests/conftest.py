@@ -94,3 +94,52 @@ def minimal_pdf(tmp_path: Path, minimal_pdf_bytes: bytes) -> Path:
     pdf_path = tmp_path / "minimal.pdf"
     pdf_path.write_bytes(minimal_pdf_bytes)
     return pdf_path
+
+
+@pytest.fixture(scope="session")
+def sample_jpeg_bytes() -> bytes:
+    """Return raw bytes of a minimal valid 10x10 JPEG."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), color="white").save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def sample_jpeg(tmp_path: Path, sample_jpeg_bytes: bytes) -> Path:
+    """Create a temporary valid JPEG image file."""
+    jpeg_path = tmp_path / "sample.jpg"
+    jpeg_path.write_bytes(sample_jpeg_bytes)
+    return jpeg_path
+
+
+@pytest.fixture
+def make_install_tree():
+    """Factory fixture to create an install or staged directory tree with ScanSort.exe."""
+
+    def _factory(
+        root: Path, name: str = "ScanSort", marker: str = "exe-marker"
+    ) -> Path:
+        tree = root / name
+        tree.mkdir(parents=True, exist_ok=True)
+        (tree / "ScanSort.exe").write_bytes(marker.encode("utf-8"))
+        return tree
+
+    return _factory
+
+
+@pytest.fixture
+def sample_release_info():
+    """Factory fixture to create a valid ReleaseInfo object."""
+    from scansort.updater.feed import ReleaseInfo
+
+    return ReleaseInfo(
+        version="0.2.0",
+        tag_name="v0.2.0",
+        asset_name="ScanSort-v0.2.0-windows-x64.zip",
+        download_url="https://example.com/ScanSort-v0.2.0-windows-x64.zip",
+        size_bytes=1024,
+        sha256="a" * 64,
+        published_at=None,
+    )

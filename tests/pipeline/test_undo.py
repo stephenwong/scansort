@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
-import scansort.pipeline.dispatcher as dispatcher
+from scansort.core.config import AppConfig
 from scansort.logging import AuditLogger
-from scansort.pipeline.undo import undo_last_move
+from scansort.pipeline.undo import run_undo, undo_last_move
 
 
 def _create_undo_entry(original_path: Path, destination_path: Path) -> dict:
@@ -51,7 +51,8 @@ def test_undo_last_move_success(tmp_path: Path):
     assert json.loads(last_line)["status"] == "UNDONE"
 
 
-def test_undo_updates_csv_audit_log(tmp_path: Path):
+@pytest.mark.parametrize("with_mirror", [False, True])
+def test_undo_updates_csv_audit_logs(tmp_path: Path, with_mirror: bool):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
     docs = tmp_path / "Documents" / "Utilities"
@@ -62,33 +63,9 @@ def test_undo_updates_csv_audit_log(tmp_path: Path):
 
     jsonl_path = tmp_path / "history.jsonl"
     csv_path = tmp_path / "history.csv"
-    orig_file = inbox / "bill.pdf"
-
-    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path)
-    logger.log_scan(_create_undo_entry(orig_file, moved_file))
-
-    restored = undo_last_move(jsonl_path)
-    assert restored is not None
-
-    # Verify CSV has UNDONE status recorded
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-        assert len(rows) == 2
-        assert rows[-1]["Status"] == "UNDONE"
-
-
-def test_undo_updates_mirror_csv_audit_log(tmp_path: Path):
-    inbox = tmp_path / "Inbox"
-    inbox.mkdir()
-    docs = tmp_path / "Documents" / "Utilities"
-    docs.mkdir(parents=True)
-
-    moved_file = docs / "260901_Bill.pdf"
-    moved_file.write_bytes(b"content")
-
-    jsonl_path = tmp_path / "history.jsonl"
-    csv_path = tmp_path / "history.csv"
-    mirror_csv = tmp_path / "Documents" / "_ScanSort_History.csv"
+    mirror_csv = (
+        (tmp_path / "Documents" / "_ScanSort_History.csv") if with_mirror else None
+    )
     orig_file = inbox / "bill.pdf"
 
     AuditLogger(
@@ -98,9 +75,9 @@ def test_undo_updates_mirror_csv_audit_log(tmp_path: Path):
     restored = undo_last_move(jsonl_path, csv_path=csv_path, mirror_csv_path=mirror_csv)
     assert restored is not None
 
-    # Verify both the primary and mirrored CSV logs recorded the UNDONE status
-    for csv_target in [csv_path, mirror_csv]:
-        with open(csv_target, newline="", encoding="utf-8") as f:
+    targets = [csv_path] + ([mirror_csv] if with_mirror else [])
+    for target in targets:
+        with open(target, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
             assert len(rows) == 2
             assert rows[-1]["Status"] == "UNDONE"
@@ -381,14 +358,7 @@ def test_undo_skips_non_dict_and_blank_lines(tmp_path: Path):
     assert undo_last_move(jsonl_path) is None
 
 
-def test_dispatcher_re_exports_undo_last_move():
-    assert dispatcher.undo_last_move is undo_last_move
-
-
 def test_run_undo_success(tmp_path: Path):
-    from scansort.core.config import AppConfig
-    from scansort.pipeline.undo import run_undo
-
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
     docs = tmp_path / "Documents"
@@ -415,9 +385,6 @@ def test_run_undo_success(tmp_path: Path):
 
 
 def test_run_undo_no_action(tmp_path: Path):
-    from scansort.core.config import AppConfig
-    from scansort.pipeline.undo import run_undo
-
     app_dir = tmp_path / "app_dir"
     app_dir.mkdir()
     cfg = AppConfig(
@@ -431,9 +398,6 @@ def test_run_undo_no_action(tmp_path: Path):
 
 
 def test_run_undo_os_error(tmp_path: Path):
-    from scansort.core.config import AppConfig
-    from scansort.pipeline.undo import run_undo
-
     app_dir = tmp_path / "app_dir"
     app_dir.mkdir()
     cfg = AppConfig(
@@ -452,8 +416,6 @@ def test_run_undo_os_error(tmp_path: Path):
 
 
 def test_run_undo_cfg_none_config_error():
-    from scansort.pipeline.undo import run_undo
-
     with patch(
         "scansort.pipeline.undo.load_config", side_effect=ValueError("corrupt config")
     ):

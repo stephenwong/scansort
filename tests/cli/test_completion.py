@@ -5,36 +5,21 @@ import pytest
 from scansort.cli.root import main_cli
 
 
-def test_completion_bash(capsys):
-    exit_code = main_cli(["completion", "bash"])
+@pytest.mark.parametrize(
+    ("shell", "expected_snippets"),
+    [
+        ("bash", ["_scansort_completion", "watch", "history"]),
+        ("zsh", ["#compdef scansort", "watch"]),
+        ("fish", ["complete -c scansort"]),
+        ("powershell", ["Register-ArgumentCompleter", "scansort"]),
+    ],
+)
+def test_completion_supported_shells(capsys, shell, expected_snippets):
+    exit_code = main_cli(["completion", shell])
     assert exit_code == 0
     captured = capsys.readouterr()
-    assert "_scansort_completion" in captured.out
-    assert "watch" in captured.out
-    assert "history" in captured.out
-
-
-def test_completion_zsh(capsys):
-    exit_code = main_cli(["completion", "zsh"])
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "#compdef scansort" in captured.out
-    assert "watch" in captured.out
-
-
-def test_completion_fish(capsys):
-    exit_code = main_cli(["completion", "fish"])
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "complete -c scansort" in captured.out
-
-
-def test_completion_powershell(capsys):
-    exit_code = main_cli(["completion", "powershell"])
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "Register-ArgumentCompleter" in captured.out
-    assert "scansort" in captured.out
+    for snippet in expected_snippets:
+        assert snippet in captured.out
 
 
 def test_completion_invalid_shell():

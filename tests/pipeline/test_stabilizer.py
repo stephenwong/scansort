@@ -94,10 +94,7 @@ def test_wait_for_file_stability_stat_os_error(tmp_path: Path):
     test_file = tmp_path / "stat_err.pdf"
     test_file.write_text("data", encoding="utf-8")
 
-    with (
-        patch.object(Path, "stat", side_effect=OSError("Read error")),
-        patch.object(Path, "exists", return_value=True),
-    ):
+    with patch.object(Path, "stat", side_effect=OSError("Read error")):
         assert (
             wait_for_file_stability(test_file, timeout=0.05, poll_interval=0.01)
             is False
@@ -154,7 +151,14 @@ def test_is_file_locked_permission_denied(tmp_path: Path):
     test_file = tmp_path / "perm_denied.pdf"
     test_file.write_bytes(b"content")
 
-    with patch("builtins.open", side_effect=PermissionError("Permission denied")):
+    orig_open = open
+
+    def guarded_open(file, *args, **kwargs):
+        if str(file) == str(test_file):
+            raise PermissionError("Permission denied")
+        return orig_open(file, *args, **kwargs)
+
+    with patch("builtins.open", guarded_open):
         assert is_file_locked(test_file) is True
 
 
@@ -202,7 +206,6 @@ def test_wait_for_file_stability_resets_last_size_on_empty(tmp_path: Path):
 
     with (
         patch.object(Path, "stat", mock_stat),
-        patch.object(Path, "is_file", return_value=True),
         patch("scansort.pipeline.stabilizer.is_file_locked", return_value=False),
     ):
         result = wait_for_file_stability(

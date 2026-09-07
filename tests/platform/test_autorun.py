@@ -194,8 +194,8 @@ def test_autorun_windows_import_error(monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
 
     with (
-        patch("builtins.__import__", side_effect=ImportError("No module winreg")),
         patch.dict("sys.modules", {"winreg": None}),
+        patch("scansort.platform.autorun._winreg", None),
     ):
         assert is_autorun_enabled() is False
         assert enable_autorun("C:\\app.exe") is False

@@ -294,8 +294,15 @@ def test_cache_mtime_stat_oserror(tmp_path: Path):
     mapper = FolderMapper(docs_root=docs_dir, cache_path=cache_file)
     assert mapper.get_taxonomy() == ["Alpha"]
 
-    # When stat raises OSError
-    with patch.object(Path, "stat", side_effect=OSError("Disk error")):
+    # When cache_file.stat raises OSError
+    with patch.object(Path, "stat", autospec=True) as mock_stat:
+
+        def side_effect(self, *args, **kwargs):
+            if str(self) == str(cache_file):
+                raise OSError("Disk error")
+            return os.stat(self, *args, **kwargs)
+
+        mock_stat.side_effect = side_effect
         # Should cleanly return in-memory cached folders without crashing
         assert mapper.get_taxonomy() == ["Alpha"]
 

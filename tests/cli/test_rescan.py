@@ -9,7 +9,6 @@ from scansort.core.config import AppConfig
 
 def test_cli_rescan(capsys, tmp_path: Path):
     docs = tmp_path / "Docs"
-    (docs / "Bills").mkdir(parents=True)
     cfg = AppConfig(
         documents_root=docs,
         max_folder_depth=5,

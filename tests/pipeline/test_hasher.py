@@ -73,7 +73,14 @@ def test_check_duplicate_skips_empty_and_corrupt_lines(tmp_path: Path):
 def test_check_duplicate_handles_os_error(tmp_path: Path):
     history_file = tmp_path / "history.jsonl"
     history_file.touch()
-    with patch("builtins.open", side_effect=OSError("Read error")):
+    orig_open = open
+
+    def guarded_open(file, *args, **kwargs):
+        if str(file) == str(history_file):
+            raise OSError("Read error")
+        return orig_open(file, *args, **kwargs)
+
+    with patch("builtins.open", guarded_open):
         assert check_duplicate("somehash", history_file) is None
 
 
@@ -123,6 +130,13 @@ def test_check_duplicate_mid_stream_os_error_returns_none(tmp_path: Path):
         def __exit__(self, *args):
             pass
 
-    with patch("builtins.open", return_value=FaultyFile()):
+    orig_open = open
+
+    def guarded_open(file, *args, **kwargs):
+        if str(file) == str(hist):
+            return FaultyFile()
+        return orig_open(file, *args, **kwargs)
+
+    with patch("builtins.open", guarded_open):
         # Mid-stream error must return None, not r1
         assert check_duplicate(h, hist) is None

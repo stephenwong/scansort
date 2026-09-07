@@ -145,18 +145,28 @@ def test_interprocess_file_lock_serializes_concurrent_movers(tmp_path):
 def test_interprocess_file_lock_windows_branch(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     mock_msvcrt = MagicMock()
+    mock_msvcrt.LK_LOCK = 1
+    mock_msvcrt.LK_UNLCK = 2
     with (
         patch.dict("sys.modules", {"msvcrt": mock_msvcrt}),
         interprocess_file_lock(tmp_path / "operations.lock"),
     ):
         pass
     assert mock_msvcrt.locking.call_count == 2
+    assert mock_msvcrt.locking.call_args_list[0][0][1] == mock_msvcrt.LK_LOCK
+    assert mock_msvcrt.locking.call_args_list[1][0][1] == mock_msvcrt.LK_UNLCK
 
 
 def test_interprocess_file_lock_posix_branch(tmp_path):
+    import fcntl
+
     lock_path = tmp_path / "operations.lock"
     with interprocess_file_lock(lock_path):
         assert lock_path.exists()
+        # Verify mutual exclusion: another open file descriptor fails non-blocking exclusive lock
+        with open(lock_path, "a+b") as second_fd, pytest.raises(OSError):
+            fcntl.flock(second_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     # Lock must be released: a second acquisition succeeds immediately.
     with interprocess_file_lock(lock_path):
         pass

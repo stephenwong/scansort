@@ -3,6 +3,8 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from scansort.classification.models import (
     DocumentClassification,
     sanitize_date,
@@ -114,46 +116,46 @@ def test_sanitize_description_truncates_on_word_boundaries():
 
 def test_sanitize_description_normalizes_fullwidth_and_format_chars():
     assert sanitize_description("Payment／Notice Bill") == "Payment_Notice_Bill"
-    assert "\ufeff" not in sanitize_description("\ufeffBank Statement")
-    assert "\u200b" not in sanitize_description("Bank\u200bStatement Bill")
+    assert sanitize_description("\ufeffBank Statement") == "Bank_Statement"
+    assert sanitize_description("Bank\u200bStatement Bill") == "Bankstatement_Bill"
     assert sanitize_description("Bank\u200bStatement") == "Bankstatement"
-    assert "Bank\u202eStatement" not in sanitize_description("Bank\u202eStatement")
+    assert sanitize_description("Bank\u202eStatement") == "Bankstatement"
 
 
-def test_document_classification_rejects_unsanitized_boundary_values():
-    import pytest
-
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {
+            "document_date": "2609",
+            "description": "Bad/name",
+            "target_folder": "Utilities",
+        },
+        {
+            "document_date": "260901",
+            "description": "bad\\name",
+            "target_folder": "Utilities",
+        },
+        {
+            "document_date": "260932",
+            "description": "Good",
+            "target_folder": "Utilities",
+        },
+        {
+            "document_date": "260901",
+            "description": "\ufeffHidden",
+            "target_folder": "Utilities",
+        },
+        {
+            "document_date": "260901",
+            "description": "Ok",
+            "target_folder": "Utilities",
+            "confidence": 1.5,
+        },
+    ],
+)
+def test_document_classification_rejects_unsanitized_boundary_values(kwargs):
     with pytest.raises(ValueError):
-        DocumentClassification(
-            document_date="2609",
-            description="Bad/name",
-            target_folder="Utilities",
-        )
-    with pytest.raises(ValueError):
-        DocumentClassification(
-            document_date="260901",
-            description="bad\\name",
-            target_folder="Utilities",
-        )
-    with pytest.raises(ValueError):
-        DocumentClassification(
-            document_date="260932",
-            description="Good",
-            target_folder="Utilities",
-        )
-    with pytest.raises(ValueError):
-        DocumentClassification(
-            document_date="260901",
-            description="\ufeffHidden",
-            target_folder="Utilities",
-        )
-    with pytest.raises(ValueError):
-        DocumentClassification(
-            document_date="260901",
-            description="Ok",
-            target_folder="Utilities",
-            confidence=1.5,
-        )
+        DocumentClassification(**kwargs)
 
 
 def test_gemini_classification_response_schema_decoupling():
