@@ -2,7 +2,6 @@
 
 import queue
 import threading
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -94,9 +93,8 @@ def test_watcher_start_and_stop_cleanly(tmp_path: Path):
     # Mock watchfiles.watch as a generator
     def mock_watch(*args, **kwargs):
         started.set()
-        while not watcher._stop_event.is_set():
-            time.sleep(0.01)
-            yield []
+        watcher._stop_event.wait(timeout=2.0)
+        yield []
 
     with patch("scansort.pipeline.watcher.watch", side_effect=mock_watch):
         thread = threading.Thread(target=watcher.start)
@@ -178,8 +176,8 @@ def test_switch_folder_unblocks_watch(tmp_path: Path):
         elif folder == folder_b:
             folder_b_watched.set()
         stop_event = kwargs.get("stop_event")
-        while not (stop_event and stop_event.is_set()):
-            time.sleep(0.01)
+        if stop_event:
+            stop_event.wait(timeout=2.0)
         yield []
 
     with patch("scansort.pipeline.watcher.watch", side_effect=mock_watch):
@@ -198,7 +196,6 @@ def test_watcher_sweeps_preexisting_files_on_start(tmp_path: Path):
     inbox.mkdir()
     stale = inbox / "stale.pdf"
     stale.write_bytes(b"%PDF-1.4 stale")
-    inbox / "notes.txt"
     (inbox / "notes.txt").write_text("ignored")
 
     file_queue = queue.Queue()
@@ -255,7 +252,10 @@ def test_watcher_mkdir_error_retried(tmp_path: Path):
         # On second attempt, stop the watcher
         watcher.stop()
 
-    with patch.object(Path, "mkdir", side_effect=mock_mkdir):
+    with (
+        patch.object(Path, "mkdir", side_effect=mock_mkdir),
+        patch.object(watcher._stop_event, "wait", return_value=True),
+    ):
         watcher.start()
 
     assert attempt >= 2

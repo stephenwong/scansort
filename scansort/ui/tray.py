@@ -215,7 +215,7 @@ class SystemTrayApp:
         """Open the application data / log directory in Windows Explorer."""
         open_in_file_manager(get_default_app_dir())
 
-    def open_settings(self) -> None:
+    def open_settings(self, async_task: bool = True) -> threading.Thread | None:
         """Display the Tkinter settings dialog with instant hot-reload."""
 
         def _task():
@@ -231,10 +231,15 @@ class SystemTrayApp:
                 with contextlib.suppress(Exception):
                     dialog.mainloop()
 
-        threading.Thread(
+        if not async_task:
+            _task()
+            return None
+        t = threading.Thread(
             target=_task,
             daemon=True,
-        ).start()
+        )
+        t.start()
+        return t
 
     def check_updates(self, async_task: bool = True) -> threading.Thread | None:
         """Check for updates on GitHub Releases."""

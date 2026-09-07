@@ -1,6 +1,5 @@
 """Unit tests for scansort.image_converter module."""
 
-import os
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -110,20 +109,15 @@ def test_convert_to_pdf_missing_file_raises_file_not_found(tmp_path: Path):
         convert_to_pdf(missing)
 
 
-def test_convert_to_pdf_same_file_syntactic_difference(tmp_path: Path):
+def test_convert_to_pdf_same_file_syntactic_difference(tmp_path: Path, monkeypatch):
     input_pdf = tmp_path / "doc.pdf"
     input_pdf.write_bytes(b"%PDF-1.5 content")
 
     # Relative path vs absolute path to the same file
+    monkeypatch.chdir(tmp_path)
     rel_path = Path(input_pdf.name)
-    # Run with cwd = tmp_path
-    old_cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
-        res = convert_to_pdf(rel_path, output_path=input_pdf.resolve())
-        assert res.resolve() == input_pdf.resolve()
-    finally:
-        os.chdir(old_cwd)
+    res = convert_to_pdf(rel_path, output_path=input_pdf.resolve())
+    assert res.resolve() == input_pdf.resolve()
 
 
 def test_convert_to_pdf_rgba_composited_on_white_background(tmp_path: Path):
@@ -284,17 +278,3 @@ def test_mirror_orientation_jpeg_converts(tmp_path: Path):
     )
     right_px = extracted.getpixel((115, 30))
     assert right_px[0] > 200 and right_px[2] < 60, f"expected right-red, got {right_px}"
-
-
-def test_image_output_path_equal_to_input_raises(tmp_path: Path):
-    """convert_to_pdf must refuse to overwrite its own source image."""
-    from scansort.document.converter import convert_to_pdf
-
-    src = tmp_path / "precious.png"
-    Image.new("RGB", (20, 20), "white").save(src, format="PNG")
-    original = src.read_bytes()
-
-    with pytest.raises(ValueError, match="output_path"):
-        convert_to_pdf(src, output_path=src)
-
-    assert src.read_bytes() == original

@@ -88,20 +88,26 @@ def test_tray_app_rescan_action(tmp_path: Path):
 
 
 def test_tray_app_open_folders(tmp_path: Path):
+    from scansort.core.config import get_default_app_dir
+
     app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    app_dir = get_default_app_dir()
 
     with patch("scansort.ui.tray.open_in_file_manager") as mock_open:
         app.open_drop_folder()
-        mock_open.assert_called_with(cfg.watch_folder)
+        mock_open.assert_called_once_with(cfg.watch_folder)
 
+        mock_open.reset_mock()
         app.open_docs_folder()
-        mock_open.assert_called_with(cfg.documents_root)
+        mock_open.assert_called_once_with(cfg.documents_root)
 
+        mock_open.reset_mock()
         app.open_log_folder()
-        mock_open.assert_called()
+        mock_open.assert_called_once_with(app_dir)
 
+        mock_open.reset_mock()
         app.view_scan_history()
-        mock_open.assert_called()
+        mock_open.assert_called_once_with(app_dir)
 
 
 def test_tray_app_check_updates(tmp_path: Path):
@@ -206,11 +212,7 @@ def test_tray_app_open_settings(tmp_path: Path):
     app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
 
     with patch("scansort.ui.tray.open_settings_dialog") as mock_dialog:
-        app.open_settings()
-        # Thread spawns and invokes open_settings_dialog
-        import time
-
-        time.sleep(0.1)
+        app.open_settings(async_task=False)
         mock_dialog.assert_called_once()
 
 

@@ -2,7 +2,6 @@
 
 import csv
 import json
-import threading
 from datetime import datetime as _dt
 from pathlib import Path
 from unittest.mock import patch
@@ -89,7 +88,7 @@ def test_audit_logger_os_error_handling(tmp_path: Path):
         jsonl_path=tmp_path / "history.jsonl",
         csv_path=tmp_path / "history.csv",
     )
-    with patch("pathlib.Path.open", side_effect=OSError("Read-only filesystem")):
+    with patch("builtins.open", side_effect=OSError("Read-only filesystem")):
         # Should not raise exception
         logger.log_scan({"status": "SUCCESS"})
 
@@ -109,12 +108,14 @@ def test_audit_logger_ensure_csv_headers_zero_byte_file(tmp_path: Path):
 
 def test_audit_logger_ensure_csv_headers_os_error(tmp_path: Path):
     """_ensure_csv_headers should handle OSError gracefully."""
+    error_csv = tmp_path / "error.csv"
+    error_csv.touch()
     logger = AuditLogger(
         jsonl_path=tmp_path / "history.jsonl",
         csv_path=tmp_path / "history.csv",
     )
-    with patch("pathlib.Path.stat", side_effect=OSError("Disk error")):
-        logger._ensure_csv_headers(tmp_path / "error.csv")
+    with patch.object(Path, "stat", side_effect=OSError("Disk error")):
+        logger._ensure_csv_headers(error_csv)
 
 
 def test_ensure_csv_headers_concurrent_creation_never_truncates(tmp_path: Path):
@@ -126,40 +127,18 @@ def test_ensure_csv_headers_concurrent_creation_never_truncates(tmp_path: Path):
     )
 
     orig_open = open
-    entered = threading.Event()
-    release = threading.Event()
 
-    def guarded_open(file, mode="r", *args, **kwargs):
-        name = getattr(file, "name", file)
-        if str(name) == str(csv_path) and mode == "w":
-            entered.set()
-            release.wait(timeout=5)
+    def race_open(file, mode="r", *args, **kwargs):
+        if str(file) == str(csv_path) and mode == "x":
+            # Another process created the file and wrote a row
+            with orig_open(csv_path, "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(["MUST_SURVIVE"])
+            raise FileExistsError("File exists")
         return orig_open(file, mode, *args, **kwargs)
 
-    results: list[object] = []
+    with patch("scansort.logging.audit.open", race_open):
+        logger._ensure_csv_headers(csv_path)
 
-    def initialize() -> None:
-        try:
-            logger._ensure_csv_headers(csv_path)
-            results.append("ok")
-        except BaseException as exc:  # noqa: BLE001 - test failure capture
-            results.append(exc)
-
-    thread = threading.Thread(target=initialize)
-    with patch("builtins.open", guarded_open):
-        thread.start()
-        old_truncating_behavior = entered.wait(timeout=1.0)
-        if old_truncating_behavior:
-            with open(csv_path, "a", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(["MUST_SURVIVE"])
-            release.set()
-        thread.join(timeout=5)
-        assert not thread.is_alive()
-        if not old_truncating_behavior:
-            with open(csv_path, "a", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(["MUST_SURVIVE"])
-
-    assert results == ["ok"]
     content = csv_path.read_text(encoding="utf-8")
     assert "MUST_SURVIVE" in content
 

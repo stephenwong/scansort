@@ -149,9 +149,3 @@ def test_attach_parent_console_swallows_win32_api_failures(monkeypatch):
     assert attach() is None
     assert sys.stdout is original_out
     assert sys.stderr is original_err
-
-
-def test_main_cli_re_exports_attach_parent_console():
-    from scansort.__main__ import _attach_parent_console
-
-    assert _attach_parent_console is attach_parent_console

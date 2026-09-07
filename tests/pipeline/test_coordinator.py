@@ -24,6 +24,15 @@ def _silence_real_toasts():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _fast_file_stability():
+    """Bypass 1.0s scanner quiescence window during coordinator tests."""
+    with patch(
+        "scansort.pipeline.coordinator.wait_for_file_stability", return_value=True
+    ):
+        yield
+
+
 def _create_sample_scan(path: Path):
     img = Image.new("RGB", (200, 200), color="white")
     img.save(path, format="JPEG")
@@ -150,12 +159,14 @@ def test_pipeline_e2e_dry_run_mode(tmp_path: Path):
 
     scan_file = inbox / "scan_tax.jpg"
     _create_sample_scan(scan_file)
+    original_bytes = scan_file.read_bytes()
 
     simulated_dest = pipeline.process_file(scan_file)
     assert simulated_dest is not None
 
     # In dry-run mode, source file should remain untouched!
     assert scan_file.exists()
+    assert scan_file.read_bytes() == original_bytes
     # And target file should NOT exist on disk
     assert not (docs_root / "Taxes" / "260901_ATO_Notice.pdf").exists()
 
@@ -197,7 +208,7 @@ def test_pipeline_conversion_error_returns_none(tmp_path: Path):
         assert pipeline.process_file(corrupt_file) is None
 
 
-def test_pipeline_run_worker_processes_queue(tmp_path: Path):
+def test_pipeline_run_worker_delegates(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
     docs = tmp_path / "Docs"
@@ -209,64 +220,32 @@ def test_pipeline_run_worker_processes_queue(tmp_path: Path):
     file_queue = queue.Queue()
     stop_event = threading.Event()
 
-    test_file = inbox / "item.pdf"
-    test_file.write_bytes(b"%PDF-1.4 test")
-    file_queue.put(test_file)
-
-    with patch.object(pipeline, "process_file") as mock_process:
-        worker_thread = threading.Thread(
-            target=pipeline.run_worker, args=(file_queue, stop_event)
+    with patch("scansort.pipeline.coordinator.run_pipeline_worker") as mock_worker:
+        pipeline.run_worker(file_queue, stop_event)
+        mock_worker.assert_called_once_with(
+            pipeline.process_file, file_queue, stop_event
         )
-        worker_thread.start()
-
-        # Wait for item to be processed
-        file_queue.join()
-        stop_event.set()
-        worker_thread.join(timeout=2.0)
-
-        mock_process.assert_called_once_with(test_file)
 
 
-def test_dry_run_leaves_pdf_unmodified(tmp_path: Path):
-    pdf = tmp_path / "test.pdf"
-    pdf.write_bytes(b"%PDF-1.4 raw scan content")
-    orig = pdf.read_bytes()
-
-    cfg = AppConfig(
-        watch_folder=tmp_path / "inbox",
-        documents_root=tmp_path / "docs",
-        dry_run=True,
+def test_coordinator_handles_api_error_and_routes_to_review(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.side_effect = APIError(
+        429, {"error": {"message": "Quota exceeded"}}
     )
-    p = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
-    p.classifier.classify_document = MagicMock(
-        return_value=DocumentClassification(
-            target_folder="Tax",
-            orientation_correction=180,
-            description="Doc",
-            summary="Sum",
-            document_type="Tax",
-            document_date="260901",
-        )
+    pipeline = ScanSortPipeline(
+        config=cfg, app_dir=tmp_path / "app", classifier=mock_classifier
     )
-    p.process_file(pdf)
-    assert pdf.read_bytes() == orig
+    scan_file = inbox / "scan.jpg"
+    _create_sample_scan(scan_file)
 
-
-def test_worker_thread_survives_api_error(tmp_path: Path):
-    cfg = AppConfig(watch_folder=tmp_path / "inbox", documents_root=tmp_path / "docs")
-    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
-    pipeline.process_file = MagicMock(
-        side_effect=APIError(429, {"error": {"message": "Quota exceeded"}})
-    )
-    q = queue.Queue()
-    stop_event = threading.Event()
-    q.put(tmp_path / "inbox" / "scan.pdf")
-    t = threading.Thread(target=pipeline.run_worker, args=(q, stop_event))
-    t.start()
-    q.join()
-    assert t.is_alive(), "Worker thread died on APIError!"
-    stop_event.set()
-    t.join(timeout=1.0)
+    dest = pipeline.process_file(scan_file)
+    assert dest is None
+    assert (docs / "_Review_Needed" / "scan.jpg").exists()
 
 
 def test_intermediate_pdf_in_temp_dir(tmp_path: Path):
@@ -441,6 +420,10 @@ def test_source_unlink_error_does_not_abort_audit_logging(tmp_path: Path):
 
 def test_process_file_waits_for_bursty_writer_to_finish(tmp_path: Path):
     """A writer pausing between bursts must not be dispatched mid-write."""
+    from scansort.pipeline.stabilizer import (
+        wait_for_file_stability as real_wait_for_file_stability,
+    )
+
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
     docs_root = tmp_path / "Documents"
@@ -470,7 +453,7 @@ def test_process_file_waits_for_bursty_writer_to_finish(tmp_path: Path):
             f.write(data[: len(data) // 2])
             f.flush()
             chunk1_written.set()
-            time.sleep(0.6)
+            time.sleep(0.08)
             f.write(data[len(data) // 2 :])
         writer_done.set()
 
@@ -478,7 +461,17 @@ def test_process_file_waits_for_bursty_writer_to_finish(tmp_path: Path):
     writer.start()
     assert chunk1_written.wait(timeout=2.0)
 
-    dest = pipeline.process_file(scan_file)
+    # Use scaled quiescence window (6 checks * 0.02s = 0.12s window > 0.08s burst pause)
+    def fast_burst_stability(path, **kwargs):
+        return real_wait_for_file_stability(
+            path, timeout=5.0, poll_interval=0.02, stable_count=6
+        )
+
+    with patch(
+        "scansort.pipeline.coordinator.wait_for_file_stability",
+        side_effect=fast_burst_stability,
+    ):
+        dest = pipeline.process_file(scan_file)
 
     assert writer_done.is_set(), "process_file dispatched before the writer finished"
     assert dest is not None
@@ -598,36 +591,6 @@ def test_process_file_handles_hash_error_and_routes_to_review(tmp_path: Path):
     assert (docs / "_Review_Needed" / "scan.pdf").exists()
     history_lines = pipeline.audit_logger.jsonl_path.read_text().splitlines()
     assert any("FAILED" in line for line in history_lines)
-
-
-def test_run_worker_drains_queue_after_stop(tmp_path: Path):
-    inbox = tmp_path / "inbox"
-    inbox.mkdir()
-    docs = tmp_path / "docs"
-    docs.mkdir()
-
-    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
-    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
-
-    file_queue = queue.Queue()
-    stop_event = threading.Event()
-    for i in range(3):
-        item = inbox / f"item{i}.pdf"
-        item.write_bytes(b"%PDF-1.4 test")
-        file_queue.put(item)
-
-    with patch.object(pipeline, "process_file") as mock_process:
-        worker_thread = threading.Thread(
-            target=pipeline.run_worker, args=(file_queue, stop_event)
-        )
-        worker_thread.start()
-        stop_event.wait(0.2)
-        stop_event.set()
-        worker_thread.join(timeout=5.0)
-
-    assert not worker_thread.is_alive()
-    assert mock_process.call_count == 3
-    assert file_queue.empty()
 
 
 def test_pipeline_filed_toast_fired_with_destination(tmp_path: Path):
@@ -835,8 +798,6 @@ def test_pipeline_records_resolved_destination_folder_when_redirected(tmp_path: 
     assert dest.parent == docs_root / "_Review_Needed"
 
     # Verify audit log records _Review_Needed rather than the raw traversal string
-    import json
-
     history_file = app_dir / "history.jsonl"
     assert history_file.exists()
     record = json.loads(

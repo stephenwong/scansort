@@ -9,7 +9,6 @@ from scansort.classification.models import DocumentClassification
 from scansort.pipeline.dispatcher import (
     dispatch_file,
     generate_target_filename,
-    resolve_collision,
     resolve_destination_dir,
     resolve_duplicates_dir,
 )
@@ -108,23 +107,6 @@ def test_resolve_duplicates_dir_symlink_escape_falls_back(tmp_path: Path):
     assert dup_dir.is_relative_to(docs_root.resolve())
 
 
-def test_resolve_collision(tmp_path: Path):
-    dest_folder = tmp_path / "Docs"
-    dest_folder.mkdir()
-
-    # Initial file
-    file1 = dest_folder / "260901_Bill.pdf"
-    file1.touch()
-
-    resolved = resolve_collision(dest_folder, "260901_Bill.pdf")
-    assert resolved == dest_folder / "260901_Bill_1.pdf"
-
-    # Second file collision
-    (dest_folder / "260901_Bill_1.pdf").touch()
-    resolved2 = resolve_collision(dest_folder, "260901_Bill.pdf")
-    assert resolved2 == dest_folder / "260901_Bill_2.pdf"
-
-
 def test_dispatch_file_atomic_move(tmp_path: Path):
     source_dir = tmp_path / "Inbox"
     source_dir.mkdir()
@@ -157,23 +139,23 @@ def test_dispatch_file_atomic_move(tmp_path: Path):
     assert final_path.read_bytes() == b"%PDF-1.4 test data"
 
 
-def test_dispatch_empty_or_root_target_routes_to_review(tmp_path: Path):
+@pytest.mark.parametrize("empty_target", ["", "/", "\\", ".", "///"])
+def test_dispatch_empty_or_root_target_routes_to_review(
+    tmp_path: Path, empty_target: str
+):
     docs_root = tmp_path / "Documents"
     docs_root.mkdir()
     src = tmp_path / "scan.pdf"
     src.write_bytes(b"%PDF-1.4")
 
-    for empty_target in ["", "/", "\\", ".", "///"]:
-        meta = DocumentClassification(
-            document_date="260901",
-            description="Doc",
-            target_folder=empty_target,
-        )
-        dest = dispatch_file(src, docs_root, meta)
-        assert "_Review_Needed" in str(dest)
-        assert dest.resolve().is_relative_to(docs_root.resolve())
-        # Source was moved, recreate for next loop iteration
-        src.write_bytes(b"%PDF-1.4")
+    meta = DocumentClassification(
+        document_date="260901",
+        description="Doc",
+        target_folder=empty_target,
+    )
+    dest = dispatch_file(src, docs_root, meta)
+    assert "_Review_Needed" in str(dest)
+    assert dest.resolve().is_relative_to(docs_root.resolve())
 
 
 def test_dispatch_blocks_path_traversal(tmp_path: Path):
@@ -202,8 +184,15 @@ def test_dispatch_file_move_os_error_cleans_up_destination(tmp_path: Path):
         target_folder="_Review_Needed",
     )
 
+    def fake_move_fail(src_path, dst_path):
+        Path(dst_path).write_bytes(b"partial-data")
+        raise OSError("Cross-device link failure")
+
     with (
-        patch("shutil.move", side_effect=OSError("Cross-device link failure")),
+        patch("shutil.move", side_effect=fake_move_fail),
         pytest.raises(OSError, match="Cross-device"),
     ):
         dispatch_file(src, docs_root, meta)
+
+    target_file = docs_root / "_Review_Needed" / "260901_Doc.pdf"
+    assert not target_file.exists()

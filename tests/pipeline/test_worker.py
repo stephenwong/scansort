@@ -25,11 +25,12 @@ def test_worker_processes_items_sequentially(tmp_path: Path):
     worker_thread = threading.Thread(
         target=run_pipeline_worker,
         args=(mock_process, file_queue, stop_event),
+        kwargs={"rate_limit_delay": 0.0},
     )
     worker_thread.start()
 
     # Give worker time to process and stop it
-    stop_event.wait(0.2)
+    file_queue.join()
     stop_event.set()
     worker_thread.join(timeout=5.0)
 
@@ -55,10 +56,11 @@ def test_worker_survives_process_exception(tmp_path: Path):
     worker_thread = threading.Thread(
         target=run_pipeline_worker,
         args=(mock_process, file_queue, stop_event),
+        kwargs={"rate_limit_delay": 0.0},
     )
     worker_thread.start()
 
-    stop_event.wait(0.2)
+    file_queue.join()
     stop_event.set()
     worker_thread.join(timeout=5.0)
 

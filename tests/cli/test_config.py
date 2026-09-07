@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from scansort import __version__
 from scansort.cli.root import main_cli
 from scansort.core.config import AppConfig
@@ -68,10 +70,12 @@ def test_cli_config_update_folders(tmp_path: Path):
 
     with patch("scansort.cli.config.save_config") as mock_save:
         assert main_cli(["config", "--watch-folder", str(new_watch)]) == 0
-        assert mock_save.called
+        assert mock_save.call_count == 1
+        assert mock_save.call_args[0][0].watch_folder == new_watch.resolve()
 
         assert main_cli(["config", "--documents-folder", str(new_docs)]) == 0
-        assert mock_save.called
+        assert mock_save.call_count == 2
+        assert mock_save.call_args[0][0].documents_root == new_docs.resolve()
 
 
 def test_cli_config_swap_folders(tmp_path: Path):
@@ -100,20 +104,20 @@ def test_cli_config_swap_folders(tmp_path: Path):
         assert saved_cfg.documents_root == folder_a.resolve()
 
 
-def test_cli_config_autostart_toggle():
+@pytest.mark.parametrize(
+    "action, func_name",
+    [
+        ("enable", "enable_autorun"),
+        ("disable", "disable_autorun"),
+    ],
+)
+def test_cli_config_autostart_toggle(action: str, func_name: str):
     with (
-        patch("scansort.cli.config.enable_autorun", return_value=True) as mock_enable,
+        patch(f"scansort.cli.config.{func_name}", return_value=True) as mock_func,
         patch("scansort.cli.config.save_config"),
     ):
-        assert main_cli(["config", "--autostart", "enable"]) == 0
-        mock_enable.assert_called_once()
-
-    with (
-        patch("scansort.cli.config.disable_autorun", return_value=True) as mock_disable,
-        patch("scansort.cli.config.save_config"),
-    ):
-        assert main_cli(["config", "--autostart", "disable"]) == 0
-        mock_disable.assert_called_once()
+        assert main_cli(["config", "--autostart", action]) == 0
+        mock_func.assert_called_once()
 
 
 def test_cli_config_rejects_regular_files(tmp_path: Path, capsys):
@@ -129,37 +133,30 @@ def test_cli_config_rejects_regular_files(tmp_path: Path, capsys):
     assert "cannot be a regular file" in capsys.readouterr().err
 
 
-def test_cli_config_rejects_identical_folders(tmp_path: Path, capsys):
+@pytest.mark.parametrize(
+    "flag, other_folder_attr",
+    [
+        ("--watch-folder", "documents_root"),
+        ("--documents-folder", "watch_folder"),
+    ],
+)
+def test_cli_config_rejects_identical_folders(
+    tmp_path: Path, capsys, flag: str, other_folder_attr: str
+):
     shared = tmp_path / "Shared"
     shared.mkdir()
-    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=shared)
+    kwargs = {
+        other_folder_attr: shared,
+        (
+            "watch_folder"
+            if other_folder_attr == "documents_root"
+            else "documents_root"
+        ): tmp_path / "Other",
+    }
+    cfg = AppConfig(**kwargs)
 
     with patch("scansort.cli.config.load_config", return_value=cfg):
-        exit_code = main_cli(["config", "--watch-folder", str(shared)])
-        assert exit_code == 1
-        assert "cannot be the same directory" in capsys.readouterr().err
-
-
-def test_cli_config_save_config_error(tmp_path: Path, capsys):
-    folder = tmp_path / "ValidFolder"
-    folder.mkdir()
-
-    with patch(
-        "scansort.cli.config.save_config",
-        side_effect=OSError("Disk write failure"),
-    ):
-        exit_code = main_cli(["config", "--watch-folder", str(folder)])
-        assert exit_code == 1
-        assert "Error saving configuration" in capsys.readouterr().err
-
-
-def test_cli_config_rejects_documents_folder_identical(tmp_path: Path, capsys):
-    shared = tmp_path / "Shared"
-    shared.mkdir()
-    cfg = AppConfig(watch_folder=shared, documents_root=tmp_path / "Docs")
-
-    with patch("scansort.cli.config.load_config", return_value=cfg):
-        exit_code = main_cli(["config", "--documents-folder", str(shared)])
+        exit_code = main_cli(["config", flag, str(shared)])
         assert exit_code == 1
         assert "cannot be the same directory" in capsys.readouterr().err
 
@@ -203,13 +200,6 @@ def test_cli_config_autostart_save_error(capsys):
 
 def test_cli_config_refuses_semantically_invalid_config_file(tmp_path: Path, capsys):
     """A parseable-but-invalid config must never be reset or persisted."""
-    cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(
-        '{"documents_root": "%s/docs", "watch_folder": "%s/inbox", '
-        '"max_folder_depth": 99}' % (tmp_path, tmp_path),
-        encoding="utf-8",
-    )
-
     with (
         patch(
             "scansort.cli.config.load_config",

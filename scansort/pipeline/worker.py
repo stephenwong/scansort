@@ -14,6 +14,7 @@ def run_pipeline_worker(
     process_fn: Callable[[Path], Any],
     file_queue: queue.Queue,
     stop_event: threading.Event,
+    rate_limit_delay: float = 1.0,
 ) -> None:
     """Sequential background worker processing items from the queue with rate-limiting.
 
@@ -22,6 +23,9 @@ def run_pipeline_worker(
     """
     logger.info("ScanSort pipeline worker started.")
     while True:
+        if stop_event.is_set() and file_queue.empty():
+            break
+
         try:
             item = file_queue.get(timeout=0.5)
         except queue.Empty:
@@ -35,6 +39,7 @@ def run_pipeline_worker(
             logger.error("Unexpected error processing %s: %s", item, e)
         finally:
             file_queue.task_done()
-            stop_event.wait(1.0)  # Gentle spacing for API rate limits
+            if rate_limit_delay > 0:
+                stop_event.wait(rate_limit_delay)  # Gentle spacing for API rate limits
 
     logger.info("ScanSort pipeline worker stopped.")

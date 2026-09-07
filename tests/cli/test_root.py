@@ -16,21 +16,12 @@ def _granted_guard(*args, **kwargs):
     yield True
 
 
-def test_cli_version_flag_long(capsys):
+@pytest.mark.parametrize("flag", ["--version", "-V"])
+def test_cli_version_flags(capsys, flag):
     from scansort import __version__
 
     with pytest.raises(SystemExit) as exc_info:
-        main_cli(["--version"])
-    assert exc_info.value.code == 0
-    captured = capsys.readouterr()
-    assert f"scansort {__version__}" in captured.out
-
-
-def test_cli_version_flag_short(capsys):
-    from scansort import __version__
-
-    with pytest.raises(SystemExit) as exc_info:
-        main_cli(["-V"])
+        main_cli([flag])
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert f"scansort {__version__}" in captured.out

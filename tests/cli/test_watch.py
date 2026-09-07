@@ -18,72 +18,52 @@ def _denied_guard(*args, **kwargs):
     yield False
 
 
-def test_cli_watch_overrides(capsys, tmp_path: Path):
+def test_cli_watch_overrides(capsys, tmp_path: Path, mock_watch_stack):
+    mock_watcher, _, _ = mock_watch_stack
     custom_inbox = tmp_path / "MyInbox"
     custom_docs = tmp_path / "MyDocs"
-    with (
-        patch("scansort.cli.watch.DropFolderWatcher") as mock_watcher_cls,
-        patch("scansort.cli.watch.ScanSortPipeline"),
-        patch("scansort.cli.watch.instance_guard", _granted_guard),
-        patch("scansort.cli.watch.SystemTrayApp"),
-    ):
-        exit_code = main_cli(
-            [
-                "watch",
-                "--watch-folder",
-                str(custom_inbox),
-                "--documents-root",
-                str(custom_docs),
-                "--dry-run",
-            ]
-        )
-        assert exit_code == 0
-        mock_watcher_cls.return_value.start.assert_called_once()
-        captured = capsys.readouterr()
-        assert str(custom_inbox) in captured.out
-        assert str(custom_docs) in captured.out
-        assert "DRY-RUN MODE ACTIVE" in captured.out
+    exit_code = main_cli(
+        [
+            "watch",
+            "--watch-folder",
+            str(custom_inbox),
+            "--documents-root",
+            str(custom_docs),
+            "--dry-run",
+        ]
+    )
+    assert exit_code == 0
+    mock_watcher.start.assert_called_once()
+    captured = capsys.readouterr()
+    assert str(custom_inbox) in captured.out
+    assert str(custom_docs) in captured.out
+    assert "DRY-RUN MODE ACTIVE" in captured.out
 
 
-def test_cli_watch_minimized_suppresses_banner(capsys, tmp_path: Path):
-    with (
-        patch("scansort.cli.watch.DropFolderWatcher"),
-        patch("scansort.cli.watch.ScanSortPipeline"),
-        patch("scansort.cli.watch.instance_guard", _granted_guard),
-        patch("scansort.cli.watch.SystemTrayApp"),
-    ):
-        exit_code = main_cli(["watch", "--minimized"])
-        assert exit_code == 0
-        captured = capsys.readouterr()
-        assert "Starting ScanSort monitor" not in captured.out
+def test_cli_watch_minimized_suppresses_banner(capsys, mock_watch_stack):
+    exit_code = main_cli(["watch", "--minimized"])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Starting ScanSort monitor" not in captured.out
 
 
-def test_cli_watch_worker_join_timeout():
+def test_cli_watch_worker_join_timeout(mock_watch_stack, monkeypatch):
     mock_thread = MagicMock()
     mock_thread.is_alive.return_value = True
-    with (
-        patch("scansort.cli.watch.DropFolderWatcher"),
-        patch("scansort.cli.watch.ScanSortPipeline"),
-        patch("scansort.cli.watch.instance_guard", _granted_guard),
-        patch("scansort.cli.watch.SystemTrayApp"),
-        patch("threading.Thread", return_value=mock_thread),
-    ):
-        exit_code = main_cli(["watch"])
-        assert exit_code == 0
-        mock_thread.join.assert_called_once_with(timeout=20.0)
+    monkeypatch.setattr(
+        "scansort.cli.watch.threading.Thread", MagicMock(return_value=mock_thread)
+    )
+
+    exit_code = main_cli(["watch"])
+    assert exit_code == 0
+    mock_thread.join.assert_called_once_with(timeout=20.0)
 
 
-def test_cli_watch_keyboard_interrupt():
-    mock_watcher_cls = MagicMock()
-    mock_watcher_cls.return_value.start.side_effect = KeyboardInterrupt
-    with (
-        patch("scansort.cli.watch.DropFolderWatcher", mock_watcher_cls),
-        patch("scansort.cli.watch.ScanSortPipeline"),
-        patch("scansort.cli.watch.instance_guard", _granted_guard),
-        patch("scansort.cli.watch.SystemTrayApp"),
-    ):
-        exit_code = main_cli(["watch"])
-        assert exit_code == 0
+def test_cli_watch_keyboard_interrupt(mock_watch_stack):
+    mock_watcher, _, _ = mock_watch_stack
+    mock_watcher.start.side_effect = KeyboardInterrupt
+    exit_code = main_cli(["watch"])
+    assert exit_code == 0
 
 
 def test_cli_watch_graceful_when_directories_unavailable(tmp_path: Path, capsys):

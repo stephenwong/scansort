@@ -26,28 +26,26 @@ def _make_tree(root: Path, name: str, marker: str) -> Path:
     return tree
 
 
-# ---------------------------------------------------------------------------
-# Process waiting & process launching
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _speed_up_wait_poll_interval(monkeypatch):
+    monkeypatch.setattr(proc, "WAIT_POLL_INTERVAL", 0.001)
 
 
-def test_wait_for_process_exit_posix_live_and_exited(tmp_path: Path):
+def test_wait_for_process_exit_posix_live_and_exited(tmp_path: Path, monkeypatch):
     if sys.platform == "win32":
         pytest.skip("Uses POSIX process semantics")
-    process = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        assert wait_for_process_exit(process.pid, timeout=0.2) is False
-        process.terminate()
-        process.wait(timeout=10)
-        assert wait_for_process_exit(process.pid, timeout=5.0) is True
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
+    monkeypatch.setattr("scansort.updater.process.WAIT_POLL_INTERVAL", 0.001)
+    # Simulate a running pid that transitions to exited
+    state = {"alive": True}
+
+    def fake_kill(pid, sig):
+        if not state["alive"]:
+            raise ProcessLookupError()
+
+    monkeypatch.setattr("scansort.updater.process.os.kill", fake_kill)
+    assert wait_for_process_exit(1234, timeout=0.01) is False
+    state["alive"] = False
+    assert wait_for_process_exit(1234, timeout=0.05) is True
 
 
 def test_wait_for_process_exit_posix_missing_pid(tmp_path: Path):

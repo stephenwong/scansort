@@ -48,6 +48,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=scansort --cov-report=term-missing --cov-fail-under=95"
+filterwarnings = [
+    "ignore:'_UnionGenericAlias' is deprecated and slated for removal in Python 3.17:DeprecationWarning:google.genai.types",
+]
 
 [tool.coverage.report]
 fail_under = 95

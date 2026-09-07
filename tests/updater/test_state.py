@@ -77,11 +77,15 @@ def test_applied_version_missing_returns_none(tmp_path: Path):
 
 def test_state_writes_tolerate_os_errors(tmp_path: Path, monkeypatch):
     state_path = tmp_path / "update_state.json"
-    state_path.write_text(json.dumps({"just_installed": True}), encoding="utf-8")
-    monkeypatch.setattr(
-        "scansort.updater.state.atomic_write",
-        MagicMock(side_effect=OSError("disk full")),
-    )
+    initial_content = json.dumps({"just_installed": True})
+    state_path.write_text(initial_content, encoding="utf-8")
+    mock_atomic = MagicMock(side_effect=OSError("disk full"))
+    monkeypatch.setattr("scansort.updater.state.atomic_write", mock_atomic)
+
     record_update_check(state_path)
     record_applied_update(state_path, "0.2.0")
     clear_applied_notification(state_path)
+
+    assert mock_atomic.call_count == 3
+    # Existing state on disk remains untouched
+    assert state_path.read_text(encoding="utf-8") == initial_content
