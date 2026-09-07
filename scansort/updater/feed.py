@@ -4,6 +4,7 @@ import json
 import logging
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 from scansort.updater.installer import UpdateError
 
@@ -179,6 +180,39 @@ def available_update(
     return rel_info
 
 
+def check_for_updates(
+    app_dir=None,
+    fetch_fn=None,
+    available_fn=None,
+) -> tuple[ReleaseInfo | None, str | None]:
+    """Check GitHub Releases for newer ScanSort versions.
+
+    Returns:
+        tuple[ReleaseInfo | None, str | None]: (release_info, error_message)
+    """
+    from scansort.core.config import get_default_app_dir
+    from scansort.core.constants import UPDATE_STATE_FILENAME
+    from scansort.updater.state import applied_version
+
+    active_app_dir = Path(app_dir) if app_dir else get_default_app_dir()
+    state_path = active_app_dir / UPDATE_STATE_FILENAME
+    fetcher = fetch_fn or fetch_latest_release
+    evaluator = available_fn or available_update
+    try:
+        payload = fetcher()
+        release = evaluator(
+            payload,
+            installed_version(),
+            applied_version(state_path),
+        )
+        return release, None
+    except UpdateError as e:
+        return None, str(e)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Unexpected error during update check")
+        return None, f"Unexpected error: {e}"
+
+
 __all__ = [
     "GITHUB_REPO",
     "RELEASE_API_URL",
@@ -188,6 +222,7 @@ __all__ = [
     "WINDOWS_ASSET_SUFFIX",
     "ReleaseInfo",
     "available_update",
+    "check_for_updates",
     "fetch_latest_release",
     "installed_version",
     "parse_version",

@@ -46,12 +46,14 @@ from scansort.core.fs import (
     atomic_write,
     interprocess_file_lock,
     normalize_relative_folder,
+    open_in_file_manager,
     relative_folder_is_safe,
     resolve_collision,
 )
 from scansort.core.timeutil import SYDNEY_TZ, sydney_now
 
 __all__ = [
+    "open_in_file_manager",
     "AppConfig",
     "get_default_app_dir",
     "get_default_config_path",

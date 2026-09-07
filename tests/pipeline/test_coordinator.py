@@ -844,3 +844,39 @@ def test_pipeline_records_resolved_destination_folder_when_redirected(tmp_path: 
     )
     assert record["destination_folder"] == "_Review_Needed"
     assert "../../OutsideDocs" not in record["destination_folder"]
+
+
+def test_pipeline_update_config(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs_root1 = tmp_path / "Docs1"
+    docs_root2 = tmp_path / "Docs2"
+    inbox.mkdir()
+    docs_root1.mkdir()
+    docs_root2.mkdir()
+
+    cfg1 = AppConfig(
+        watch_folder=inbox,
+        documents_root=docs_root1,
+        gemini_model="gemini-3.1-flash-lite",
+        fallback_folder="_Review_Needed",
+    )
+    pipeline = ScanSortPipeline(config=cfg1, app_dir=tmp_path / "appdata")
+
+    assert pipeline.folder_mapper.docs_root == docs_root1
+    assert pipeline.classifier.model == "gemini-3.1-flash-lite"
+
+    cfg2 = AppConfig(
+        watch_folder=inbox,
+        documents_root=docs_root2,
+        gemini_model="gemini-3.5-flash-lite",
+        fallback_folder="Custom_Review",
+        mirror_log_to_documents=True,
+    )
+    pipeline.update_config(cfg2)
+
+    assert pipeline.config == cfg2
+    assert pipeline.folder_mapper.docs_root == docs_root2
+    assert pipeline.folder_mapper.fallback_folder == "Custom_Review"
+    assert pipeline.classifier.model == "gemini-3.5-flash-lite"
+    assert pipeline.audit_logger.mirror_csv_path == cfg2.mirror_csv_path
+    assert pipeline.audit_logger.mirror_csv_path is not None

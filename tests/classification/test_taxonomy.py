@@ -399,3 +399,59 @@ def test_scan_folders_skips_windows_hidden_attribute(tmp_path, monkeypatch):
 
     monkeypatch.setattr("sys.platform", "linux")
     assert scan_documents_folders(docs_root) == ["Private", "Visible"]
+
+
+def test_build_taxonomy_tree():
+    from scansort.classification.taxonomy import build_taxonomy_tree
+
+    folders = [
+        "Finances",
+        "Finances/Banking",
+        "Finances/Banking/ANZ",
+        "Finances/Taxes",
+        "Personal/Health",
+    ]
+    tree = build_taxonomy_tree(folders)
+    assert tree == {
+        "Finances": {
+            "Banking": {
+                "ANZ": {},
+            },
+            "Taxes": {},
+        },
+        "Personal": {
+            "Health": {},
+        },
+    }
+
+
+def test_render_taxonomy_tree():
+    from scansort.classification.taxonomy import render_taxonomy_tree
+
+    folders = [
+        "Finances/Banking/ANZ",
+        "Finances/Taxes",
+        "Personal/Health",
+    ]
+    lines = render_taxonomy_tree(folders)
+    assert len(lines) == 6
+    assert lines[0] == "├── Finances"
+    assert lines[1] == "│   ├── Banking"
+    assert lines[2] == "│   │   └── ANZ"
+    assert lines[3] == "│   └── Taxes"
+    assert lines[4] == "└── Personal"
+    assert lines[5] == "    └── Health"
+    # Empty case
+    assert render_taxonomy_tree([]) == []
+
+
+def test_run_rescan(tmp_path: Path):
+    from scansort.classification.taxonomy import run_rescan
+    from scansort.core.config import AppConfig
+
+    docs = tmp_path / "Documents"
+    (docs / "Receipts" / "2026").mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs)
+    discovered = run_rescan(cfg)
+    assert "Receipts" in discovered
+    assert "Receipts/2026" in discovered

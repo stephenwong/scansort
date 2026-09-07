@@ -11,7 +11,9 @@ import os
 import shutil
 from pathlib import Path
 
+from scansort.core.config import get_default_app_dir, load_config
 from scansort.core.constants import (
+    HISTORY_JSONL_NAME,
     OPERATIONS_LOCK_FILENAME,
     REVERSIBLE_STATUSES,
     STATUS_UNDONE,
@@ -22,7 +24,9 @@ from scansort.logging import AuditLogger
 
 logger = logging.getLogger(__name__)
 
+
 __all__ = [
+    "run_undo",
     "undo_last_move",
 ]
 
@@ -109,15 +113,14 @@ def undo_last_move(
     Raises:
         OSError: If the physical restore fails (e.g. the destination is locked).
     """
-    target_record = _find_last_reversible_record(jsonl_path)
-    if target_record is None:
-        return None
-
-    dest_path = Path(str(target_record["destination_path"]))
-    original_path = Path(str(target_record["original_path"]))
     lock_file = lock_path or (jsonl_path.parent / OPERATIONS_LOCK_FILENAME)
-
     with interprocess_file_lock(lock_file):
+        target_record = _find_last_reversible_record(jsonl_path)
+        if target_record is None:
+            return None
+
+        dest_path = Path(str(target_record["destination_path"]))
+        original_path = Path(str(target_record["original_path"]))
         restore_path = _resolve_restored_path(original_path, dest_path)
 
         try:
@@ -129,17 +132,55 @@ def undo_last_move(
             restore_path.unlink(missing_ok=True)
             raise
 
-    undo_record = dict(target_record)
-    undo_record.pop("timestamp", None)
-    undo_record.pop("local_time", None)
-    undo_record["status"] = STATUS_UNDONE
-    undo_record["note"] = f"Reversed move of {dest_path.name} back to {restore_path}"
+        undo_record = dict(target_record)
+        undo_record.pop("timestamp", None)
+        undo_record.pop("local_time", None)
+        undo_record["status"] = STATUS_UNDONE
+        undo_record["note"] = (
+            f"Reversed move of {dest_path.name} back to {restore_path}"
+        )
 
-    AuditLogger(
-        jsonl_path=jsonl_path,
-        csv_path=csv_path or jsonl_path.with_suffix(".csv"),
-        mirror_csv_path=mirror_csv_path,
-    ).log_scan(undo_record)
+        AuditLogger(
+            jsonl_path=jsonl_path,
+            csv_path=csv_path or jsonl_path.with_suffix(".csv"),
+            mirror_csv_path=mirror_csv_path,
+        ).log_scan(undo_record)
 
     logger.info("Undid filing: %s moved back to %s", dest_path.name, restore_path)
     return restore_path
+
+
+def run_undo(cfg=None, undo_fn=None, app_dir=None) -> tuple[bool, str, Path | None]:
+    """Execute an undo operation on the most recent filing action.
+
+    Args:
+        cfg: Optional loaded AppConfig. If None, loaded from disk.
+        undo_fn: Optional callable replacing undo_last_move for testing/dependency injection.
+        app_dir: Optional application directory path (defaults to get_default_app_dir()).
+
+    Returns:
+        tuple[bool, str, Path | None]: (success, message, restored_path)
+    """
+    active_cfg = cfg
+    if active_cfg is None:
+        try:
+            active_cfg = load_config()
+        except ValueError as e:
+            return False, f"Configuration error: {e}", None
+
+    active_app_dir = app_dir or get_default_app_dir()
+    jsonl_path = active_app_dir / HISTORY_JSONL_NAME
+    executor = undo_fn or undo_last_move
+
+    try:
+        mirror_csv = active_cfg.mirror_csv_path if active_cfg else None
+        restored = executor(jsonl_path, mirror_csv_path=mirror_csv)
+        if restored:
+            return (
+                True,
+                f"Successfully reversed move. File restored to: {restored}",
+                restored,
+            )
+        return False, "No reversible document filing action found in history.", None
+    except OSError as e:
+        return False, f"Error reversing last move: {e}", None

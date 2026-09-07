@@ -259,3 +259,59 @@ def test_watcher_mkdir_error_retried(tmp_path: Path):
         watcher.start()
 
     assert attempt >= 2
+
+
+def test_watcher_pause_resume(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    assert watcher.is_paused() is False
+
+    scan = inbox / "scan001.pdf"
+    scan.touch()
+
+    # Pause watcher
+    watcher.pause()
+    assert watcher.is_paused() is True
+
+    # When paused, changes are ignored
+    watcher._handle_changes([(Change.added, str(scan))])
+    assert file_queue.empty()
+
+    # Resume watcher: sweeps pre-existing files in drop folder
+    watcher.resume()
+    assert watcher.is_paused() is False
+    assert file_queue.qsize() == 1
+    assert file_queue.get_nowait() == scan
+
+    # Calling resume when already unpaused is a no-op (idempotent, no re-sweep)
+    watcher.resume()
+    assert file_queue.empty()
+
+
+def test_watcher_paused_cycle_skips_preexisting_sweep(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    scan = inbox / "scan002.pdf"
+    scan.touch()
+
+    watcher.pause()
+    stop_event = threading.Event()
+    stop_event.set()  # Stop watch loop immediately
+
+    # Run cycle while paused
+    with patch("scansort.pipeline.watcher.watch", return_value=[]):
+        watcher._run_watch_cycle(inbox, stop_event)
+
+    # Queue should still be empty because watcher is paused
+    assert file_queue.empty()
+
+    # Subsequently resuming discovers the skipped file
+    watcher.resume()
+    assert file_queue.qsize() == 1
+    assert file_queue.get_nowait() == scan

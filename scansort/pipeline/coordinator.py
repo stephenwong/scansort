@@ -79,6 +79,28 @@ class ScanSortPipeline:
             mirror_csv_path=config.mirror_csv_path,
         )
 
+    def update_config(self, new_config: AppConfig) -> None:
+        """Update active configuration and propagate changes to sub-components."""
+        self.config = new_config
+        self.folder_mapper.docs_root = new_config.documents_root
+        self.folder_mapper.max_depth = new_config.max_folder_depth
+        self.folder_mapper.fallback_folder = new_config.fallback_folder
+        if hasattr(self.folder_mapper, "refresh"):
+            self.folder_mapper.refresh()
+        else:
+            self.folder_mapper._cached_folders = None
+
+        if (
+            hasattr(self.classifier, "model")
+            and self.classifier.model != new_config.gemini_model
+        ):
+            self.classifier.model = new_config.gemini_model
+            if hasattr(self.classifier, "_client"):
+                self.classifier._client = None
+
+        if hasattr(self.audit_logger, "mirror_csv_path"):
+            self.audit_logger.mirror_csv_path = new_config.mirror_csv_path
+
     def _build_audit_entry(
         self,
         file_hash: str,

@@ -2,6 +2,7 @@
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -242,3 +243,54 @@ def test_updater_re_exports_symbols():
     assert updater.replace_install_dir is replace_install_dir
     assert updater.spawn_update_helper is spawn_update_helper
     assert updater.wait_for_process_exit is wait_for_process_exit
+
+
+def test_check_for_updates_available(tmp_path: Path):
+    from unittest.mock import patch
+
+    from scansort.updater.feed import ReleaseInfo, check_for_updates
+
+    fake_release = ReleaseInfo(
+        version="1.0.0",
+        tag_name="v1.0.0",
+        asset_name="ScanSort-v1.0.0-windows-x64.zip",
+        download_url="https://example.com/dl.zip",
+        size_bytes=100,
+        sha256="abc",
+        published_at=None,
+    )
+    with (
+        patch("scansort.updater.feed.fetch_latest_release", return_value={}),
+        patch("scansort.updater.feed.available_update", return_value=fake_release),
+    ):
+        rel, err = check_for_updates(tmp_path)
+        assert rel == fake_release
+        assert err is None
+
+
+def test_check_for_updates_none_available(tmp_path: Path):
+    from unittest.mock import patch
+
+    from scansort.updater.feed import check_for_updates
+
+    with (
+        patch("scansort.updater.feed.fetch_latest_release", return_value={}),
+        patch("scansort.updater.feed.available_update", return_value=None),
+    ):
+        rel, err = check_for_updates(tmp_path)
+        assert rel is None
+        assert err is None
+
+
+def test_check_for_updates_error(tmp_path: Path):
+    from unittest.mock import patch
+
+    from scansort.updater.feed import UpdateError, check_for_updates
+
+    with patch(
+        "scansort.updater.feed.fetch_latest_release",
+        side_effect=UpdateError("Network down"),
+    ):
+        rel, err = check_for_updates(tmp_path)
+        assert rel is None
+        assert err == "Network down"

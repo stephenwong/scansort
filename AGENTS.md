@@ -79,6 +79,11 @@ scansort/
 │   │   ├── notifications.py    # Reusable filing-lifecycle toast messages (success/failure/stranded)
 │   │   ├── secrets.py          # OS credential vault, key masking, & regex log redaction
 │   │   └── toasts.py           # Windows native toast notifications (lazy optional 'windows' extra)
+│   ├── ui/                     # Desktop system tray and settings user interface
+│   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── icon.py             # Procedural high-DPI Pillow icons (active & paused badge states)
+│   │   ├── settings.py         # Tkinter settings modal dialog with treeview folder picker & hot-reload
+│   │   └── tray.py             # Pystray background system tray application & menu actions
 │   └── updater/                # Modular GitHub Releases self-update engine
 │       ├── __init__.py         # Package interface re-exports
 │       ├── downloader.py       # Chunked streaming, SHA-256 verification, zip extraction, & staging
@@ -94,6 +99,7 @@ scansort/
 │   ├── logging/                # Tests for audit, setup, cost, and gemini_logger
 │   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, stabilizer, undo, watcher, worker
 │   ├── platform/               # Tests for autorun, console, instance_guard, notifications, secrets, toasts
+│   ├── ui/                     # Tests for tray application, procedural icon, and settings dialog
 │   ├── updater/                # Tests for downloader, feed, installer, process, and state
 │   └── conftest.py             # Global test isolation fixtures & hermetic mocks
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
@@ -203,6 +209,23 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
      git push origin main --tags
      ```
 - `pyproject.toml`, the CLI (`--version`), and `scansort.spec` (Windows `ProductVersion`) all derive the version automatically. Never hardcode version strings anywhere else.
+
+### Q. System Tray, Settings GUI & Hierarchical Taxonomies
+- **Shared Business Logic:** CLI commands and UI/tray actions must share identical underlying functions without duplication:
+  - Move reversal: `scansort.pipeline.undo.run_undo` is shared between `scansort undo` and tray's "Undo Last Move".
+  - Taxonomy discovery: `scansort.classification.taxonomy.run_rescan` and `render_taxonomy_tree` are shared between `scansort rescan` and tray's "Rescan Taxonomies".
+  - Update checks: `scansort.updater.feed.check_for_updates` is shared between `scansort check-update` and tray's "Check for Updates".
+  - Explorer launching: `scansort.core.fs.open_in_file_manager` provides cross-platform directory and file opening (`os.startfile` / `xdg-open`).
+- **Watcher Pause & Resume:** `DropFolderWatcher` supports thread-safe pausing and resuming. When paused, drop folder filesystem events are ignored. When resumed, the watcher triggers an immediate sweep of pre-existing drop-folder files.
+- **Unified Settings Modal Dialog:** `SettingsDialog` (`scansort.ui.settings`) manages directory paths, model selection, autorun registration, and Gemini API keys as a singleton modal window:
+  - API keys are securely saved via `set_api_key` in Windows Credential Manager / DPAPI keyring (never written to `config.json`, conforming to Invariant A).
+  - Validations reject self-containment, path traversal, or empty required directories.
+  - Active settings hot-reload into running `DropFolderWatcher` and `ScanSortPipeline` instances via `on_applied` callback without requiring application restart.
+- **Hierarchical Taxonomy Representation:** Taxonomies are structured as trees (`build_taxonomy_tree`) across:
+  - Gemini prompt formatting (`format_taxonomy_for_prompt` with indented paths and hints).
+  - CLI rendering (`render_taxonomy_tree` ASCII trees).
+  - Nested System Tray submenus (`Browse Destination Folders >`).
+  - Interactive `ttk.Treeview` directory picker in Settings.
 
 ---
 

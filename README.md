@@ -59,6 +59,7 @@ graph TB
 | `scansort.logging` | Structured audit logging (`audit.py`), Gemini token accounting & pricing (`cost.py`), model event diagnostics (`gemini_logger.py`), rotating file setup (`setup.py`). |
 | `scansort.pipeline` | End-to-end coordinator (`coordinator.py`), worker queue (`worker.py`), drop folder watcher (`watcher.py`), file stabilizer (`stabilizer.py`), SHA-256 hasher (`hasher.py`), atomic dispatcher (`dispatcher.py`), move reversal (`undo.py`). |
 | `scansort.platform` | System boot autostart (`autorun.py`), Windows console attachment (`console.py`), single-instance locking (`instance_guard.py`), filing notifications (`notifications.py`), credential vault & secret masking (`secrets.py`), Windows native toasts (`toasts.py`). |
+| `scansort.ui` | Desktop system tray integration (`tray.py`), procedural high-DPI icon generator (`icon.py`), Tkinter settings dialog with taxonomy explorer & hot-reloading (`settings.py`). |
 | `scansort.updater` | GitHub Releases self-update engine: feed checker (`feed.py`), streaming downloader (`downloader.py`), atomic installer (`installer.py`), process supervisor (`process.py`), update state tracking (`state.py`). |
 
 ---
@@ -108,6 +109,9 @@ flowchart TD
 
 ## Core Features
 
+- **Desktop System Tray & Controls:** Runs quietly in your system notification tray with high-DPI procedural status icons. Easily pause and resume monitoring on demand (automatically sweeping pre-existing files upon resumption), trigger manual rescans, undo file moves, check for updates, or browse your destination folder taxonomy directly from the tray.
+- **Unified Settings Modal Dialog:** Configure monitored directories, select Gemini AI models, toggle auto-start, securely manage API keys in the Windows Credential Vault (never saved to plaintext config files), and explore folder taxonomies with an interactive `ttk.Treeview` folder picker — featuring instant hot-reloading into the running background watcher.
+- **Hierarchical Taxonomy Exploration & AI Prompting:** Folder structures are represented as rich visual hierarchies in Gemini system prompts, formatted as ASCII trees in `scansort rescan`, nested in system tray submenus (`Browse Destination Folders >`), and displayed in the Settings folder explorer.
 - **Zero-Leak Secret Vault:** Your Gemini API key is never written to plaintext config files. It is stored directly in the OS-encrypted credential vault (Windows Credential Manager / DPAPI via `keyring`).
 - **Rust-Powered Filesystem Watcher:** Built on `watchfiles` (wrapping Rust's `notify` crate) with native debouncing to handle scanner buffers and multi-page ADF batch scans. Files already present when monitoring starts (e.g. scans that arrived while the app was off) are swept and filed automatically.
 - **Deepest Subfolder Matching:** Scans your real `Documents` directory hierarchy and classifies scans into the most specific leaf folder. If no existing folder fits or confidence is below 70%, files route safely to `Documents/_Review_Needed/` (never inventing rogue folders). The taxonomy cache is refreshed hourly and on every `rescan`, so new folders are picked up and deleted folders are never re-created; symlinked/junction and Windows-hidden folders are excluded.
@@ -197,9 +201,9 @@ uv run scansort watch --dry-run
 uv run scansort --dry-run
 ```
 
-### 6. Start Live Background Monitoring
+### 6. Start Live Background Monitoring & System Tray
 ```bash
-# Standard interactive foreground monitor
+# Standard interactive monitor with System Tray icon
 uv run scansort watch
 
 # Run silently / minimized without banner output (supported via root or subparser)
@@ -209,6 +213,16 @@ uv run scansort --minimized watch
 # Optional: Override drop folder or documents root for a single session
 uv run scansort watch --watch-folder "C:\Scans\Inbox" --documents-root "D:\Documents"
 ```
+When running `scansort watch`, ScanSort initializes a system tray icon with full background controls:
+- **Status Indicator:** Displays current state (`Status: Monitoring Active` or `Status: Monitoring Paused`).
+- **Pause / Resume Monitoring:** Temporarily halts watcher event ingestion without stopping the daemon. Resuming immediately sweeps any documents that arrived in the drop folder while paused.
+- **Undo Last Move:** Instantly reverses the most recent filing using the shared move-reversal engine.
+- **Rescan Taxonomies:** Refreshes and caches discovered directory paths immediately.
+- **Open Folders:** Fast one-click shortcuts to open Drop Folder, Documents Root, Application Log (`scansort.log`), and Audit History (`history.csv`) in File Explorer.
+- **Browse Destination Folders:** Dynamically generated nested submenus mirroring your destination taxonomy for quick navigation.
+- **Settings...:** Launches the unified Tkinter Settings modal dialog to configure folders, models, autorun, and API key with live hot-reloading into the running watcher.
+- **Check for Updates:** Manually checks GitHub Releases for new versions.
+- **Exit:** Drains the queue worker, flushes logs, terminates the watcher, and closes the tray.
 
 ### 7. Reverse Document Moves (Undo)
 Misplaced a document or want to re-scan? Reverse the last move instantly. You can run `undo` successively to roll back multiple previous filings:
@@ -217,11 +231,12 @@ uv run scansort undo
 ```
 *Restores the file to its original location in your drop folder prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`) with automatic numerical collision resolution so existing files are never overwritten. The active watcher strictly ignores the `_undone_` prefix to prevent automated re-filing loops, while `history.jsonl`, `history.csv`, and the optional mirrored CSV in your Documents folder are atomically updated with `UNDONE` status.*
 
-### 8. Inspect Discovered Taxonomy
-Verify the folders ScanSort will use for classification (respecting `max_folder_depth` between 1 and 10, and `fallback_folder` exclusions):
+### 8. Inspect Discovered Taxonomy Hierarchy
+Verify the folder tree ScanSort will use for classification (respecting `max_folder_depth` between 1 and 10, and `fallback_folder` exclusions):
 ```bash
 uv run scansort rescan
 ```
+*Renders a clean ASCII hierarchy tree representing your document taxonomies.*
 
 ### 9. Check for Updates Manually
 Query GitHub Releases immediately for newer versions:

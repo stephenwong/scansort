@@ -74,16 +74,16 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     app_dir = tmp_path / "appdata"
     payload = {
-        "tag_name": "v1.0.0",
+        "tag_name": "v2.0.0",
         "assets": [
             {
-                "name": "ScanSort-v1.0.0-windows-x64.zip",
+                "name": "ScanSort-v2.0.0-windows-x64.zip",
                 "browser_download_url": "https://example.com/a.zip",
                 "size": 1,
             }
         ],
     }
-    staged = tmp_path / "ScanSort.stage-1.0.0"
+    staged = tmp_path / "ScanSort.stage-2.0.0"
     staged.mkdir()
     (staged / "ScanSort.exe").write_bytes(b"new")
     with (
@@ -97,7 +97,7 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     mock_spawn.assert_called_once()
     args = mock_spawn.call_args[0]
     assert args[1] == staged
-    assert args[2] == "1.0.0"
+    assert args[2] == "2.0.0"
     assert args[3] == os.getpid()
     mock_toast.assert_called_once()
     assert "update available" in mock_toast.call_args[0][0].lower()
@@ -117,16 +117,16 @@ def test_maybe_apply_auto_update_tolerates_chdir_failure(tmp_path: Path, monkeyp
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     app_dir = tmp_path / "appdata"
     payload = {
-        "tag_name": "v1.0.0",
+        "tag_name": "v2.0.0",
         "assets": [
             {
-                "name": "ScanSort-v1.0.0-windows-x64.zip",
+                "name": "ScanSort-v2.0.0-windows-x64.zip",
                 "browser_download_url": "https://example.com/a.zip",
                 "size": 1,
             }
         ],
     }
-    staged = tmp_path / "ScanSort.stage-1.0.0"
+    staged = tmp_path / "ScanSort.stage-2.0.0"
     staged.mkdir()
     (staged / "ScanSort.exe").write_bytes(b"new")
     with (

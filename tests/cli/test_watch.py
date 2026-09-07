@@ -166,3 +166,38 @@ def test_cli_watch_pipeline_os_error(tmp_path: Path, capsys):
     ):
         assert main_cli(["watch"]) == 1
         assert "Error preparing application directories" in capsys.readouterr().err
+
+
+def test_cli_watch_initializes_system_tray(tmp_path: Path):
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.DropFolderWatcher"),
+        patch("scansort.cli.watch.ScanSortPipeline"),
+        patch("scansort.cli.watch.SystemTrayApp") as mock_tray_cls,
+    ):
+        mock_tray = mock_tray_cls.return_value
+        exit_code = main_cli(["watch"])
+        assert exit_code == 0
+        mock_tray_cls.assert_called_once()
+        mock_tray.start.assert_called_once()
+        mock_tray.stop.assert_called_once()
+
+
+def test_cli_watch_handles_tray_stop_error(tmp_path: Path):
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.DropFolderWatcher") as mock_watcher_cls,
+        patch("scansort.cli.watch.ScanSortPipeline"),
+        patch("scansort.cli.watch.SystemTrayApp") as mock_tray_cls,
+    ):
+        mock_tray = mock_tray_cls.return_value
+        mock_tray.stop.side_effect = RuntimeError("Tray shutdown failure")
+        mock_watcher = mock_watcher_cls.return_value
+
+        exit_code = main_cli(["watch"])
+        assert exit_code == 0
+        mock_watcher.stop.assert_called_once()

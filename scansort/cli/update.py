@@ -16,6 +16,7 @@ from scansort.updater import (
     UpdateError,
     applied_version,
     available_update,
+    check_for_updates,
     clear_applied_notification,
     download_and_stage,
     fetch_latest_release,
@@ -126,67 +127,63 @@ def handle_check_update(parsed: argparse.Namespace) -> int:
     if not is_json:
         print(f"Checking for updates (current version: {__version__})...")
     app_dir = get_default_app_dir()
-    state_path = app_dir / UPDATE_STATE_FILENAME
-    try:
-        payload = fetch_latest_release()
-        release = available_update(
-            payload,
-            installed_version(),
-            applied_version(state_path),
-        )
-        if release is None:
-            if is_json:
-                print(
-                    json.dumps(
-                        {
-                            "update_available": False,
-                            "current_version": __version__,
-                            "latest_version": __version__,
-                        },
-                        indent=2,
-                    )
-                )
-                return 0
-            print(
-                f"ScanSort is up to date (version {__version__}). No new updates available."
-            )
-        else:
-            if is_json:
-                print(
-                    json.dumps(
-                        {
-                            "update_available": True,
-                            "current_version": __version__,
-                            "latest_version": release.version,
-                            "asset_name": release.asset_name,
-                            "download_url": release.download_url,
-                            "size_bytes": release.size_bytes,
-                            "published_at": release.published_at,
-                        },
-                        indent=2,
-                    )
-                )
-                return 0
-            print(
-                f"Update available: version {release.version} (current: {__version__})"
-            )
-            print(f"Release asset:  {release.asset_name}")
-            print(f"Download URL:   {release.download_url}")
-            if release.size_bytes:
-                print(f"Asset size:     {release.size_bytes:,} bytes")
-        return 0
-    except UpdateError as e:
+    release, error = check_for_updates(
+        app_dir,
+        fetch_fn=fetch_latest_release,
+        available_fn=available_update,
+    )
+    if error is not None:
         if is_json:
             print(
                 json.dumps(
                     {
                         "update_available": False,
                         "current_version": __version__,
-                        "error": str(e),
+                        "error": error,
                     },
                     indent=2,
                 )
             )
             return 1
-        print(f"Update check failed: {e}", file=sys.stderr)
+        print(f"Update check failed: {error}", file=sys.stderr)
         return 1
+
+    if release is None:
+        if is_json:
+            print(
+                json.dumps(
+                    {
+                        "update_available": False,
+                        "current_version": __version__,
+                        "latest_version": __version__,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        print(
+            f"ScanSort is up to date (version {__version__}). No new updates available."
+        )
+    else:
+        if is_json:
+            print(
+                json.dumps(
+                    {
+                        "update_available": True,
+                        "current_version": __version__,
+                        "latest_version": release.version,
+                        "asset_name": release.asset_name,
+                        "download_url": release.download_url,
+                        "size_bytes": release.size_bytes,
+                        "published_at": release.published_at,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        print(f"Update available: version {release.version} (current: {__version__})")
+        print(f"Release asset:  {release.asset_name}")
+        print(f"Download URL:   {release.download_url}")
+        if release.size_bytes:
+            print(f"Asset size:     {release.size_bytes:,} bytes")
+    return 0

@@ -383,3 +383,81 @@ def test_undo_skips_non_dict_and_blank_lines(tmp_path: Path):
 
 def test_dispatcher_re_exports_undo_last_move():
     assert dispatcher.undo_last_move is undo_last_move
+
+
+def test_run_undo_success(tmp_path: Path):
+    from scansort.core.config import AppConfig
+    from scansort.pipeline.undo import run_undo
+
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    moved_file = docs / "260901_Bill.pdf"
+    moved_file.write_bytes(b"content")
+
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir()
+    jsonl_path = app_dir / "history.jsonl"
+    entry = _create_undo_entry(inbox / "scan001.pdf", moved_file)
+    jsonl_path.write_text(f"{json.dumps(entry)}\n", encoding="utf-8")
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    with (
+        patch("scansort.pipeline.undo.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.undo.load_config", return_value=cfg),
+    ):
+        success, msg, restored = run_undo(cfg)
+        assert success is True
+        assert restored == inbox / "_undone_scan001.pdf"
+        assert "Successfully reversed move" in msg
+        assert restored.exists()
+
+
+def test_run_undo_no_action(tmp_path: Path):
+    from scansort.core.config import AppConfig
+    from scansort.pipeline.undo import run_undo
+
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir()
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    with patch("scansort.pipeline.undo.get_default_app_dir", return_value=app_dir):
+        success, msg, restored = run_undo(cfg)
+        assert success is False
+        assert restored is None
+        assert "No reversible document filing action found" in msg
+
+
+def test_run_undo_os_error(tmp_path: Path):
+    from scansort.core.config import AppConfig
+    from scansort.pipeline.undo import run_undo
+
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir()
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    with (
+        patch("scansort.pipeline.undo.get_default_app_dir", return_value=app_dir),
+        patch(
+            "scansort.pipeline.undo.undo_last_move", side_effect=OSError("Disk failed")
+        ),
+    ):
+        success, msg, restored = run_undo(cfg)
+        assert success is False
+        assert restored is None
+        assert "Error reversing last move" in msg
+
+
+def test_run_undo_cfg_none_config_error():
+    from scansort.pipeline.undo import run_undo
+
+    with patch(
+        "scansort.pipeline.undo.load_config", side_effect=ValueError("corrupt config")
+    ):
+        success, msg, restored = run_undo(None)
+        assert success is False
+        assert "Configuration error: corrupt config" in msg
+        assert restored is None

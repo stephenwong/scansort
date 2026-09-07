@@ -2,7 +2,11 @@
 
 import argparse
 
-from scansort.classification.taxonomy import FolderMapper
+from scansort.classification.taxonomy import (
+    FolderMapper,
+    render_taxonomy_tree,
+    run_rescan,
+)
 from scansort.cli.config import _load_config_or_exit
 
 
@@ -11,12 +15,8 @@ def handle_rescan(parsed: argparse.Namespace) -> int:
     cfg = _load_config_or_exit()
     if cfg is None:
         return 1
-    mapper = FolderMapper(
-        docs_root=cfg.documents_root,
-        max_depth=cfg.max_folder_depth,
-        fallback_folder=cfg.fallback_folder,
-    )
-    taxonomy = mapper.refresh()
+    taxonomy = run_rescan(cfg, mapper_cls=FolderMapper)
+
     if getattr(parsed, "json", False):
         import json
 
@@ -24,6 +24,6 @@ def handle_rescan(parsed: argparse.Namespace) -> int:
         return 0
 
     print(f"Discovered {len(taxonomy)} destination folders in {cfg.documents_root}:")
-    for f in taxonomy:
-        print(f"  - {f}")
+    for line in render_taxonomy_tree(taxonomy):
+        print(f"  {line}")
     return 0

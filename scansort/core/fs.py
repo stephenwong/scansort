@@ -158,3 +158,31 @@ def resolve_collision(dest_folder: Path, filename: str) -> Path:
             )
             return collision_candidate
         counter += 1
+
+
+def open_in_file_manager(path: Path) -> bool:
+    """Open a file or directory in the system file manager (Explorer, xdg-open, Finder).
+
+    Returns:
+        True if successfully launched, False otherwise.
+    """
+    if not path.exists():
+        logger.warning("Cannot open nonexistent path in file manager: %s", path)
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+            return True
+        elif sys.platform == "darwin":
+            import subprocess
+
+            subprocess.Popen(["open", str(path)])
+            return True
+        else:
+            import subprocess
+
+            subprocess.Popen(["xdg-open", str(path)])
+            return True
+    except OSError as e:
+        logger.warning("Failed to open %s in file manager: %s", path, e)
+        return False

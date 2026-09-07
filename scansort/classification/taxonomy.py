@@ -19,13 +19,16 @@ from scansort.core.fs import atomic_write, normalize_relative_folder
 
 logger = logging.getLogger(__name__)
 
-# Re-export for backward compatibility with external callers
 __all__ = [
     "DEFAULT_IGNORED_FOLDERS",
     "FolderMapper",
+    "build_taxonomy_tree",
     "format_taxonomy_for_prompt",
+    "render_taxonomy_tree",
+    "run_rescan",
     "scan_documents_folders",
 ]
+
 
 TAXONOMY_CACHE_MAX_AGE_SECONDS: float = 3600.0
 
@@ -118,6 +121,37 @@ def scan_documents_folders(
     return sorted(discovered)
 
 
+def build_taxonomy_tree(folders: list[str]) -> dict[str, dict]:
+    """Build a nested dictionary tree from a list of POSIX folder paths."""
+    tree: dict[str, dict] = {}
+    for folder in sorted(folders):
+        parts = [p for p in folder.split("/") if p]
+        curr = tree
+        for part in parts:
+            if part not in curr:
+                curr[part] = {}
+            curr = curr[part]
+    return tree
+
+
+def render_taxonomy_tree(folders: list[str]) -> list[str]:
+    """Render a list of folder paths as an indented visual box-drawing tree."""
+    tree = build_taxonomy_tree(folders)
+    lines: list[str] = []
+
+    def _render(node: dict[str, dict], prefix: str = "") -> None:
+        keys = list(node.keys())
+        for idx, key in enumerate(keys):
+            is_last = idx == len(keys) - 1
+            connector = "└── " if is_last else "├── "
+            lines.append(f"{prefix}{connector}{key}")
+            child_prefix = f"{prefix}{'    ' if is_last else '│   '}"
+            _render(node[key], child_prefix)
+
+    _render(tree)
+    return lines
+
+
 def format_taxonomy_for_prompt(
     folders: list[str], hints: dict[str, list[str]] | None = None
 ) -> str:
@@ -137,15 +171,28 @@ def format_taxonomy_for_prompt(
         normalize_folder_key(k).lower(): v for k, v in (hints or {}).items()
     }
     lines = ["AVAILABLE DESTINATION FOLDERS:"]
-    for folder in folders:
+    for folder in sorted(folders):
         folder_hints = active_hints.get(folder.lower())
-        if folder_hints:
-            hints_str = ", ".join(folder_hints)
-            lines.append(f"- {folder} (Hints: {hints_str})")
+        hints_suffix = f" (Hints: {', '.join(folder_hints)})" if folder_hints else ""
+        depth = folder.count("/")
+        if depth == 0:
+            lines.append(f"- {folder}{hints_suffix}")
         else:
-            lines.append(f"- {folder}")
+            indent = "  " * depth
+            lines.append(f"{indent}└── {folder}{hints_suffix}")
 
     return "\n".join(lines)
+
+
+def run_rescan(cfg, mapper_cls=None) -> list[str]:
+    """Discover and refresh folder taxonomy for configured documents root."""
+    cls = mapper_cls if mapper_cls is not None else FolderMapper
+    mapper = cls(
+        docs_root=cfg.documents_root,
+        max_depth=cfg.max_folder_depth,
+        fallback_folder=cfg.fallback_folder,
+    )
+    return mapper.refresh()
 
 
 class FolderMapper:

@@ -1,6 +1,7 @@
 """Unit tests for scansort.core.fs module."""
 
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -159,3 +160,47 @@ def test_interprocess_file_lock_posix_branch(tmp_path):
     # Lock must be released: a second acquisition succeeds immediately.
     with interprocess_file_lock(lock_path):
         pass
+
+
+def test_open_in_file_manager_nonexistent(tmp_path: Path):
+    from scansort.core.fs import open_in_file_manager
+
+    missing = tmp_path / "does_not_exist"
+    assert open_in_file_manager(missing) is False
+
+
+def test_open_in_file_manager_windows(tmp_path: Path, monkeypatch):
+    from scansort.core.fs import open_in_file_manager
+
+    monkeypatch.setattr("sys.platform", "win32")
+    folder = tmp_path / "Folder"
+    folder.mkdir()
+
+    mock_startfile = MagicMock()
+    monkeypatch.setattr("os.startfile", mock_startfile, raising=False)
+
+    assert open_in_file_manager(folder) is True
+    mock_startfile.assert_called_once_with(str(folder))
+
+
+def test_open_in_file_manager_linux(tmp_path: Path, monkeypatch):
+    from scansort.core.fs import open_in_file_manager
+
+    monkeypatch.setattr("sys.platform", "linux")
+    folder = tmp_path / "Folder"
+    folder.mkdir()
+
+    with patch("subprocess.Popen") as mock_popen:
+        assert open_in_file_manager(folder) is True
+        mock_popen.assert_called_once_with(["xdg-open", str(folder)])
+
+
+def test_open_in_file_manager_os_error(tmp_path: Path, monkeypatch):
+    from scansort.core.fs import open_in_file_manager
+
+    monkeypatch.setattr("sys.platform", "linux")
+    folder = tmp_path / "Folder"
+    folder.mkdir()
+
+    with patch("subprocess.Popen", side_effect=OSError("spawn failed")):
+        assert open_in_file_manager(folder) is False

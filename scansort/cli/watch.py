@@ -16,6 +16,7 @@ from scansort.core.constants import INSTANCE_LOCK_FILENAME
 from scansort.pipeline.coordinator import ScanSortPipeline
 from scansort.pipeline.watcher import DropFolderWatcher
 from scansort.platform.instance_guard import instance_guard
+from scansort.ui import SystemTrayApp
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ _announce_applied_update = announce_applied_update
 _maybe_apply_auto_update = maybe_apply_auto_update
 
 
-def _run_monitor(cfg: AppConfig) -> int:
+def _run_monitor(cfg: AppConfig, start_tray: bool = True) -> int:
     """Run the drop folder watcher and its pipeline worker until stopped."""
     file_queue: queue.Queue = queue.Queue()
     stop_event = threading.Event()
@@ -41,11 +42,31 @@ def _run_monitor(cfg: AppConfig) -> int:
     )
     worker_thread.start()
 
+    tray_app: SystemTrayApp | None = None
+    if start_tray:
+        try:
+            tray_app = SystemTrayApp(
+                config=cfg,
+                watcher=watcher,
+                pipeline=pipeline,
+                stop_event=stop_event,
+            )
+            tray_app.start()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not initialize system tray: %s", e)
+
     try:
         watcher.start()
     except KeyboardInterrupt:
         pass
     finally:
+        if tray_app is not None:
+            try:
+                tray_app.stop()
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Error stopping system tray; continuing shutdown.", exc_info=True
+                )
         watcher.stop()
         stop_event.set()
         worker_thread.join(timeout=20.0)

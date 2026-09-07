@@ -60,11 +60,33 @@ class DropFolderWatcher:
         self._restart_event = threading.Event()
         self._cycle_stop_event: threading.Event | None = None
         self._running = False
+        self._paused = False
         self._lock = threading.Lock()
 
     def is_running(self) -> bool:
         """Check if watcher is currently active."""
         return self._running
+
+    def is_paused(self) -> bool:
+        """Check if watcher ingestion is currently paused."""
+        with self._lock:
+            return self._paused
+
+    def pause(self) -> None:
+        """Pause watcher ingestion: new scan events are ignored until resumed."""
+        with self._lock:
+            self._paused = True
+            logger.info("DropFolderWatcher paused.")
+
+    def resume(self) -> None:
+        """Resume watcher ingestion and sweep any files dropped during the pause."""
+        with self._lock:
+            if not self._paused:
+                return
+            self._paused = False
+            logger.info("DropFolderWatcher resumed.")
+            current_folder = self.watch_folder
+        self._sweep_preexisting_files(current_folder)
 
     def _interrupt_cycle(self) -> None:
         """Interrupt the current watchfiles cycle."""
@@ -87,6 +109,11 @@ class DropFolderWatcher:
 
     def _handle_changes(self, changes) -> None:
         """Process a batch of debounced change events from watchfiles."""
+        with self._lock:
+            if self._paused:
+                logger.debug("Watcher is paused; ignoring incoming changes.")
+                return
+
         seen_paths: set[Path] = set()
         for change_type, path_str in changes:
             if change_type in {Change.added, Change.modified}:
@@ -105,7 +132,10 @@ class DropFolderWatcher:
             self.debounce_ms,
         )
 
-        self._sweep_preexisting_files(folder)
+        with self._lock:
+            is_paused = self._paused
+        if not is_paused:
+            self._sweep_preexisting_files(folder)
 
         for changes in watch(
             folder,
