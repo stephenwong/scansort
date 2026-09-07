@@ -132,13 +132,16 @@ def make_install_tree():
 @pytest.fixture
 def sample_release_info():
     """Factory fixture to create a valid ReleaseInfo object."""
+    from scansort import __version__
     from scansort.updater.feed import ReleaseInfo
 
+    tag = f"v{__version__}"
+    asset = f"ScanSort-{tag}-windows-x64.zip"
     return ReleaseInfo(
-        version="0.2.0",
-        tag_name="v0.2.0",
-        asset_name="ScanSort-v0.2.0-windows-x64.zip",
-        download_url="https://example.com/ScanSort-v0.2.0-windows-x64.zip",
+        version=__version__,
+        tag_name=tag,
+        asset_name=asset,
+        download_url=f"https://example.com/{asset}",
         size_bytes=1024,
         sha256="a" * 64,
         published_at=None,
