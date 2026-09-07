@@ -145,6 +145,7 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Only the exact `_Review_Needed` literal may bypass the taxonomy membership gate — never a `_Review_Needed*` prefix — so model-invented subfolders are never auto-created.
 - Semantically invalid `config.json` settings cause fail-fast `ValueError`s naming the offending fields; never silently reset a parseable config to defaults or persist a fallback model.
 - Taxonomy discovery must skip symlinks/junctions (escape- or cycle-prone) and, on Windows, hidden-attribute folders; the folder cache is revalidated on a TTL so deleted folders are never advertised/re-created.
+- The Gemini classification system instruction explicitly instructs recognition of event and trip folders (e.g., conferences, marathons, vacations) and cross-references document dates (billing date, stay check-in/out, travel dates) and locations against event timing to route travel, lodging, and logistics receipts with high confidence ($\ge 0.70$).
 
 ### H. Intermediate File Isolation
 - Never write intermediate PDFs or temporary conversion files into the monitored drop folder. Always store working files in the application temp directory (`app_dir / "tmp"`).

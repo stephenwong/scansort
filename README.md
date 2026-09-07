@@ -264,6 +264,11 @@ If you have specific taxonomy folders whose purpose may not be obvious from the 
 
 ScanSort automatically injects these keyword hints into the Gemini classification prompt to ensure 100% filing accuracy. Both standard UTF-8 and Windows Notepad UTF-8 with BOM (`utf-8-sig`) are supported for both `config.json` and `folder_hints.json`.
 
+### Event & Trip Folders with Date Cross-Referencing
+For one-off event, trip, or conference folders (e.g. `2026 Sydney Marathon`, `Tokyo Trip 2025`, `DEFCON 34`), manual entries in `folder_hints.json` are not required. ScanSort's classification prompt instructs Gemini to:
+1. **Recognize Event Folders:** Understand that folders representing events, competitions, vacations, or conferences collect all related documentation—including hotel/lodging invoices, airline tickets, car rentals, registration fees, and incidental travel receipts.
+2. **Cross-Reference Dates & Locations:** Extract document dates (statement/billing date, hotel stay check-in/out, flight dates) and location/city, cross-referencing them against the event's date/year and known schedule. When dates and location align with the event timeframe, Gemini routes the file into that event folder with high confidence ($\ge 0.70$) instead of defaulting to `_Review_Needed`.
+
 ---
 
 ## File Naming & Collision Resolution

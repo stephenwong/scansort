@@ -71,6 +71,8 @@ class GeminiClassifier:
             "1. Target Folder: Choose the DEEPEST specific matching leaf folder from the list above.\n"
             f"   - If no pre-existing folder fits or confidence is below {MIN_CONFIDENCE_THRESHOLD:.2f}, choose '{REVIEW_NEEDED_DIR}'.\n"
             "   - DO NOT invent new folder names outside the provided list.\n"
+            "   - Event & Trip Folders: Destination folders often represent specific events, trips, tournaments, conferences, vacations, or projects (e.g. '2026 Sydney Marathon', 'Tokyo Trip 2025', 'DEFCON 34'). These folders are intended to collect ALL related logistics and expenses: lodging/hotel invoices, flights/trains, car rentals, registration fees, tickets, and travel receipts.\n"
+            "   - Date & Context Cross-Referencing: When evaluating event folders, cross-reference the document's dates (issuance date, hotel stay check-in/out, flight dates) and location/city against the year, date range, or known schedule and location of the event. If the dates and location align with the event timeframe, assign the document to that event folder with high confidence (>= 0.70) instead of defaulting to '_Review_Needed'.\n"
             "2. Document Date: Identify the official issuance / billing date. Output in YYMMDD format.\n"
             "   - If no explicit date exists, output today's date in YYMMDD.\n"
             "3. Description: Write a clear, concise title in English using Title_Case_With_Underscores.\n"
@@ -79,7 +81,7 @@ class GeminiClassifier:
             "4. Orientation: Check if the text is upside-down or sideways. Output orientation_correction in clockwise degrees (0, 90, 180, or 270).\n"
             "5. Blank Detection: If the document is an empty white sheet or blank scan, set document_type to 'Blank'.\n"
             "6. Summary: Provide a crisp 1-sentence summary of the document contents.\n"
-            "7. Folder Reasoning: Briefly explain why the chosen target folder is the best match for this document (e.g. 'Origin Energy electricity bill matches Utilities/Electricity')."
+            "7. Folder Reasoning: Briefly explain why the chosen target folder is the best match for this document, explicitly citing any date or event cross-referencing used (e.g. 'Good Life Suites hotel invoice dates match 2026 Sydney Marathon event timeframe')."
         )
 
     def _parse_and_route_response(

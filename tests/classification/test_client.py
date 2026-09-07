@@ -572,3 +572,53 @@ def test_classify_document_config_disables_automatic_function_calling(
     assert config is not None
     assert config.automatic_function_calling is not None
     assert config.automatic_function_calling.disable is True
+
+
+def test_build_system_instruction_event_recognition_and_date_cross_referencing():
+    """Verify system instruction contains event recognition and date cross-referencing directives."""
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    instruction = classifier._build_system_instruction(
+        taxonomy=["2026 Sydney Marathon", "Utilities/Electricity"]
+    )
+
+    assert "Event & Trip Folders:" in instruction
+    assert "Date & Context Cross-Referencing:" in instruction
+    assert "cross-reference the document's dates" in instruction
+    assert "2026 Sydney Marathon" in instruction
+    assert "hotel" in instruction.lower() or "lodging" in instruction.lower()
+    assert "high confidence" in instruction.lower()
+
+
+def test_classify_document_event_date_cross_reference_response(minimal_pdf: Path):
+    """Verify document classified with event and date cross-referencing routes correctly."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260829",
+            "description": "Good_Life_Suites_Tax_Invoice",
+            "target_folder": "2026 Sydney Marathon",
+            "confidence": 0.92,
+            "orientation_correction": 0,
+            "document_type": "Invoice",
+            "summary": "Hotel invoice for Sydney stay during the 2026 Sydney Marathon.",
+            "folder_reasoning": "Stay dates (260829) in Sydney match 2026 Sydney Marathon event timeframe.",
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+
+    taxonomy = ["2026 Sydney Marathon", "Utilities/Electricity"]
+    res = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
+
+    assert res.target_folder == "2026 Sydney Marathon"
+    assert res.confidence == 0.92
+    assert res.document_date == "260829"
+    assert res.description == "Good_Life_Suites_Tax_Invoice"
+    assert "2026 Sydney Marathon" in res.folder_reasoning
+    assert (
+        "Matched discovered taxonomy folder '2026 Sydney Marathon'"
+        in res.routing_rationale
+    )
