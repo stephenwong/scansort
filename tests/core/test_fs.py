@@ -1,5 +1,6 @@
 """Unit tests for scansort.core.fs module."""
 
+import sys
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -157,6 +158,7 @@ def test_interprocess_file_lock_windows_branch(tmp_path, monkeypatch):
     assert mock_msvcrt.locking.call_args_list[1][0][1] == mock_msvcrt.LK_UNLCK
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl is POSIX-only")
 def test_interprocess_file_lock_posix_branch(tmp_path):
     import fcntl
 

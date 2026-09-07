@@ -7,18 +7,16 @@ from scansort.cli.root import main_cli
 
 
 def test_cli_undo(capsys):
+    target = Path("/inbox/doc.pdf")
     with patch(
         "scansort.cli.undo.undo_last_move",
-        return_value=Path("/inbox/doc.pdf"),
+        return_value=target,
     ) as mock_undo:
         exit_code = main_cli(["undo"])
         assert exit_code == 0
         mock_undo.assert_called_once()
         captured = capsys.readouterr()
-        assert (
-            "Successfully reversed move. File restored to: /inbox/doc.pdf"
-            in captured.out
-        )
+        assert f"Successfully reversed move. File restored to: {target}" in captured.out
 
 
 def test_cli_undo_nothing_to_undo(capsys):
