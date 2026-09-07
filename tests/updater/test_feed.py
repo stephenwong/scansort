@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import scansort.updater as updater
+from scansort import __version__
 from scansort.updater.feed import (
     REQUEST_TIMEOUT,
     WINDOWS_ASSET_PREFIX,
@@ -18,7 +19,12 @@ from scansort.updater.feed import (
 )
 from scansort.updater.installer import UpdateError
 
-WINDOWS_ZIP = f"{WINDOWS_ASSET_PREFIX}v0.2.0{WINDOWS_ASSET_SUFFIX}"
+WINDOWS_ZIP = f"{WINDOWS_ASSET_PREFIX}v{__version__}{WINDOWS_ASSET_SUFFIX}"
+
+_current_v = parse_version(__version__) or (1, 0, 0)
+NEXT_VERSION = f"{_current_v[0] + 1}.0.0"
+NEXT_TAG = f"v{NEXT_VERSION}"
+NEXT_ZIP = f"{WINDOWS_ASSET_PREFIX}{NEXT_TAG}{WINDOWS_ASSET_SUFFIX}"
 
 
 class _BytesResponse(io.BytesIO):
@@ -38,11 +44,11 @@ def _fake_urlopen(payload: bytes):
 
 
 def _payload(
-    tag: str = "v0.2.0",
+    tag: str = f"v{__version__}",
     *,
     asset_name: str | None = None,
     digest: object = None,
-    url: str = f"https://example.com/{WINDOWS_ASSET_PREFIX}v0.2.0{WINDOWS_ASSET_SUFFIX}",
+    url: str = f"https://example.com/{WINDOWS_ASSET_PREFIX}v{__version__}{WINDOWS_ASSET_SUFFIX}",
     size: int | None = 123,
 ) -> dict:
     return {
@@ -67,9 +73,10 @@ def _payload(
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
+        (__version__, parse_version(__version__)),
+        (f"v{__version__}", parse_version(__version__)),
         ("0.1.0", (0, 1, 0)),
         ("v1.2.3", (1, 2, 3)),
-        ("V2.0.0", (2, 0, 0)),
         (" 3.4.5 ", (3, 4, 5)),
     ],
 )
@@ -137,10 +144,10 @@ def test_fetch_latest_release_failures_raise_update_error():
 
 
 def test_available_update_returns_newer_release():
-    info = available_update(_payload(digest="sha256:abcdef"), (0, 1, 0))
+    info = available_update(_payload(digest="sha256:abcdef"), (0, 0, 1))
     assert info is not None
-    assert info.version == "0.2.0"
-    assert info.tag_name == "v0.2.0"
+    assert info.version == __version__
+    assert info.tag_name == f"v{__version__}"
     assert info.asset_name == WINDOWS_ZIP
     assert info.sha256 == "abcdef"
     assert info.size_bytes == 123
@@ -149,7 +156,7 @@ def test_available_update_returns_newer_release():
 def test_available_update_list_digest_form():
     digest = [{"algorithm": "sha256", "value": "deadbeef"}]
     payload = _payload(digest=digest)
-    info = available_update(payload, (0, 1, 0))
+    info = available_update(payload, (0, 0, 1))
     assert info is not None
     assert info.sha256 == "deadbeef"
 
@@ -162,9 +169,9 @@ def test_available_update_returns_none_for_equal_or_older():
 
 
 def test_available_update_respects_previously_applied_version():
-    payload = _payload(tag="v0.2.0")
-    assert available_update(payload, (0, 1, 0), applied_version="0.2.0") is None
-    assert available_update(payload, (0, 1, 0), applied_version="0.1.0") is not None
+    payload = _payload()
+    assert available_update(payload, (0, 0, 1), applied_version=__version__) is None
+    assert available_update(payload, (0, 0, 1), applied_version="0.0.1") is not None
 
 
 @pytest.mark.parametrize(
@@ -173,30 +180,30 @@ def test_available_update_respects_previously_applied_version():
         None,
         {},
         {"tag_name": "not-a-version"},
-        {"tag_name": "v0.2.0", "assets": []},
-        {"tag_name": "v0.2.0", "assets": [{"name": "wrong-name.zip"}]},
-        {"tag_name": "v0.2.0", "assets": "nope"},
+        {"tag_name": f"v{__version__}", "assets": []},
+        {"tag_name": f"v{__version__}", "assets": [{"name": "wrong-name.zip"}]},
+        {"tag_name": f"v{__version__}", "assets": "nope"},
     ],
 )
 def test_available_update_returns_none_for_unusable_payloads(payload):
-    assert available_update(payload, (0, 1, 0)) is None
+    assert available_update(payload, (0, 0, 1)) is None
 
 
 def test_available_update_returns_none_without_download_url():
     payload = _payload(url="")
-    assert available_update(payload, (0, 1, 0)) is None
+    assert available_update(payload, (0, 0, 1)) is None
 
 
 def test_available_update_drops_non_numeric_asset_size():
     payload = _payload(size="large")
-    info = available_update(payload, (0, 1, 0))
+    info = available_update(payload, (0, 0, 1))
     assert info is not None
     assert info.size_bytes is None
 
 
 def test_available_update_ignores_non_sha256_digest():
     payload = _payload(digest="md5:abcdef")
-    info = available_update(payload, (0, 1, 0))
+    info = available_update(payload, (0, 0, 1))
     assert info is not None
     assert info.sha256 is None
 
@@ -204,23 +211,23 @@ def test_available_update_ignores_non_sha256_digest():
 def test_updater_emits_lifecycle_logs(caplog):
     caplog.set_level("INFO")
     payload = {
-        "tag_name": "v9.9.9",
+        "tag_name": NEXT_TAG,
         "assets": [
             {
-                "name": "ScanSort-v9.9.9-windows-x64.zip",
+                "name": NEXT_ZIP,
                 "browser_download_url": "https://example.com/dl.zip",
                 "size": 100,
             }
         ],
     }
     # Available update log
-    rel = available_update(payload, current_version=(1, 0, 0))
+    rel = available_update(payload, current_version=installed_version())
     assert rel is not None
-    assert "Update available: v9.9.9" in caplog.text
+    assert f"Update available: {NEXT_TAG}" in caplog.text
 
     # Up to date log
     caplog.clear()
-    up_to_date = available_update(payload, current_version=(9, 9, 9))
+    up_to_date = available_update(payload, current_version=parse_version(NEXT_VERSION))
     assert up_to_date is None
     assert "ScanSort is up to date" in caplog.text
 
@@ -251,9 +258,9 @@ def test_check_for_updates_available(tmp_path: Path):
     from scansort.updater.feed import ReleaseInfo, check_for_updates
 
     fake_release = ReleaseInfo(
-        version="1.0.0",
-        tag_name="v1.0.0",
-        asset_name="ScanSort-v1.0.0-windows-x64.zip",
+        version=NEXT_VERSION,
+        tag_name=NEXT_TAG,
+        asset_name=NEXT_ZIP,
         download_url="https://example.com/dl.zip",
         size_bytes=100,
         sha256="abc",

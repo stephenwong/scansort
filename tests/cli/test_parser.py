@@ -1,5 +1,6 @@
 """Unit tests for scansort.cli.parser module."""
 
+from scansort import __version__
 from scansort.cli.parser import build_parser
 
 
@@ -20,9 +21,9 @@ def test_build_parser_self_update_argument_suppressed():
     assert "--self-update" not in help_text
 
     args = parser.parse_args(
-        ["--self-update", "1234", "staged_dir", "install_dir", "1.2.3"]
+        ["--self-update", "1234", "staged_dir", "install_dir", __version__]
     )
-    assert args.self_update == ["1234", "staged_dir", "install_dir", "1.2.3"]
+    assert args.self_update == ["1234", "staged_dir", "install_dir", __version__]
 
 
 def test_build_parser_new_subcommands():

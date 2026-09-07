@@ -4,6 +4,7 @@ from collections import namedtuple
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from scansort import __version__
 from scansort.platform import toasts
 
 
@@ -44,14 +45,16 @@ def test_show_toast_noop_off_windows(monkeypatch):
 def test_show_toast_builds_backend_and_displays(monkeypatch):
     for fake_lib, fake_toaster, fake_toast in _install_fake_windows_toasts(monkeypatch):
         assert (
-            toasts.show_toast("ScanSort update available", "Version 1.2.3 found.")
+            toasts.show_toast(
+                "ScanSort update available", f"Version {__version__} found."
+            )
             is True
         )
         fake_lib.InteractableWindowsToaster.assert_called_once_with("ScanSort")
         fake_lib.Toast.assert_called_once()
         assert fake_toast.text_fields == [
             "ScanSort update available",
-            "Version 1.2.3 found.",
+            f"Version {__version__} found.",
         ]
         fake_toaster.show_toast.assert_called_once_with(fake_toast)
 

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from scansort import __version__
 from scansort.updater.state import (
     applied_version,
     clear_applied_notification,
@@ -58,17 +59,17 @@ def test_update_is_due_zero_or_negative_always_true(tmp_path: Path):
 def test_record_applied_update_and_notification_cycle(tmp_path: Path):
     state_path = tmp_path / "update_state.json"
     when = datetime.now(UTC)
-    record_applied_update(state_path, "0.2.0", when=when)
+    record_applied_update(state_path, __version__, when=when)
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state["applied_version"] == "0.2.0"
+    assert state["applied_version"] == __version__
     assert state["just_installed"] is True
     assert state["applied_at"] == when.isoformat()
-    assert applied_version(state_path) == "0.2.0"
+    assert applied_version(state_path) == __version__
 
     clear_applied_notification(state_path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state.get("just_installed") is False
-    assert applied_version(state_path) == "0.2.0"
+    assert applied_version(state_path) == __version__
 
 
 def test_applied_version_missing_returns_none(tmp_path: Path):
@@ -83,5 +84,5 @@ def test_state_writes_tolerate_os_errors(tmp_path: Path, monkeypatch):
         MagicMock(side_effect=OSError("disk full")),
     )
     record_update_check(state_path)
-    record_applied_update(state_path, "0.2.0")
+    record_applied_update(state_path, __version__)
     clear_applied_notification(state_path)

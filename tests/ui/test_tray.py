@@ -4,8 +4,20 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from scansort import __version__
 from scansort.core.config import AppConfig
 from scansort.ui.tray import SystemTrayApp
+from scansort.updater.feed import (
+    WINDOWS_ASSET_PREFIX,
+    WINDOWS_ASSET_SUFFIX,
+    ReleaseInfo,
+    parse_version,
+)
+
+_current_v = parse_version(__version__) or (1, 0, 0)
+NEXT_VERSION = f"{_current_v[0] + 1}.0.0"
+NEXT_TAG = f"v{NEXT_VERSION}"
+NEXT_ZIP = f"{WINDOWS_ASSET_PREFIX}{NEXT_TAG}{WINDOWS_ASSET_SUFFIX}"
 
 
 def _create_app(tmp_path: Path):
@@ -106,12 +118,11 @@ def test_tray_app_open_folders(tmp_path: Path):
 
 def test_tray_app_check_updates(tmp_path: Path):
     app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
-    from scansort.updater.feed import ReleaseInfo
 
     fake_release = ReleaseInfo(
-        version="2.0.0",
-        tag_name="v2.0.0",
-        asset_name="ScanSort-v2.0.0-windows-x64.zip",
+        version=NEXT_VERSION,
+        tag_name=NEXT_TAG,
+        asset_name=NEXT_ZIP,
         download_url="https://example.com",
         size_bytes=1000,
         sha256=None,
@@ -125,7 +136,7 @@ def test_tray_app_check_updates(tmp_path: Path):
         app.check_updates(async_task=False)
         mock_toast.assert_called_with(
             "ScanSort Update Available",
-            "Version 2.0.0 is available to download.",
+            f"Version {NEXT_VERSION} is available to download.",
         )
 
 

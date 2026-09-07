@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import scansort.updater.installer as installer
+from scansort import __version__
 from scansort.updater.installer import (
     UpdateError,
     cleanup_stale_updates,
@@ -35,7 +36,7 @@ def _make_tree(root: Path, name: str, marker: str) -> Path:
 
 def test_cleanup_stale_updates_removes_old_stages_and_backups(tmp_path: Path):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    keep_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    keep_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     stale_dir = _make_tree(tmp_path, "ScanSort.stage-0.1.0", "old")
     stale_old = _make_tree(tmp_path, "ScanSort.old-123", "old")
     (tmp_path / "ScanSort.stage-0.1.0-corrupt").write_text("junk", encoding="utf-8")
@@ -67,7 +68,7 @@ def test_cleanup_stale_updates_tolerates_removal_errors(tmp_path: Path, monkeypa
 
 def test_replace_install_dir_swaps_trees_and_removes_backup(tmp_path: Path):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
 
     replace_install_dir(install_dir, staged_dir)
 
@@ -80,7 +81,7 @@ def test_replace_install_dir_retries_and_recovers_from_transient_lock(
     tmp_path: Path, monkeypatch
 ):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     original_rename = Path.rename
     attempts = [0]
 
@@ -104,7 +105,7 @@ def test_replace_install_dir_retries_and_recovers_from_transient_lock(
 
 def test_replace_install_dir_handles_backup_dir_collision(tmp_path: Path):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
 
     now_ts = int(time.time())
     colliding = tmp_path / f"ScanSort.old-{now_ts}"
@@ -120,7 +121,7 @@ def test_replace_install_dir_handles_backup_dir_collision(tmp_path: Path):
 
 def test_replace_install_dir_rolls_back_when_swap_fails(tmp_path: Path, monkeypatch):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     original_rename = Path.rename
 
     def failing_rename(self, target):
@@ -140,7 +141,7 @@ def test_replace_install_dir_reports_unrecoverable_rollback(
     tmp_path: Path, monkeypatch
 ):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     original_rename = Path.rename
 
     def failing_rename(self, target):
@@ -158,7 +159,7 @@ def test_replace_install_dir_tolerates_backup_removal_failure(
     tmp_path: Path, monkeypatch
 ):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
 
     def locked_rmtree(path, ignore_errors=False):
         raise OSError(32, "file in use")
@@ -172,14 +173,14 @@ def test_replace_install_dir_tolerates_backup_removal_failure(
 
 def test_replace_install_dir_validates_both_trees(tmp_path: Path):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    empty_staged = tmp_path / "ScanSort.stage-0.2.0"
+    empty_staged = tmp_path / f"ScanSort.stage-{__version__}-empty"
     empty_staged.mkdir()
     with pytest.raises(UpdateError, match="ScanSort.exe"):
         replace_install_dir(install_dir, empty_staged)
 
     broken_install = tmp_path / "Broken"
     broken_install.mkdir()
-    good_staged = _make_tree(tmp_path, "ScanSort.stage-0.3.0", "new")
+    good_staged = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     with pytest.raises(UpdateError, match="ScanSort.exe"):
         replace_install_dir(broken_install, good_staged)
 
@@ -188,7 +189,7 @@ def test_replace_install_dir_reports_when_install_cannot_be_moved_aside(
     tmp_path: Path, monkeypatch
 ):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
-    staged_dir = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "new")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     original_rename = Path.rename
 
     def denied_rename(self, target):

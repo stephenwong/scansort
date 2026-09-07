@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import scansort.updater as updater
+from scansort import __version__
 from scansort.cli.root import main_cli
 from scansort.cli.update import (
     _announce_applied_update,
@@ -14,13 +15,21 @@ from scansort.cli.update import (
 )
 from scansort.core.config import AppConfig
 from scansort.updater import ReleaseInfo, UpdateError
+from scansort.updater.feed import parse_version
+
+_current_v = parse_version(__version__) or (1, 0, 0)
+NEXT_VERSION = f"{_current_v[0] + 1}.0.0"
+NEXT_TAG = f"v{NEXT_VERSION}"
+NEXT_ZIP = f"ScanSort-{NEXT_TAG}-windows-x64.zip"
 
 
 def test_cli_self_update_dispatches_to_updater():
     with patch("scansort.cli.update.perform_self_update", return_value=0) as mock_fn:
-        exit_code = main_cli(["--self-update", "42", "/x/install", "/x/stage", "0.2.0"])
+        exit_code = main_cli(
+            ["--self-update", "42", "/x/install", "/x/stage", __version__]
+        )
         assert exit_code == 0
-    mock_fn.assert_called_once_with(42, "/x/install", "/x/stage", "0.2.0")
+    mock_fn.assert_called_once_with(42, "/x/install", "/x/stage", __version__)
 
 
 def test_maybe_apply_auto_update_inert_in_development(tmp_path: Path):
@@ -74,16 +83,16 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     app_dir = tmp_path / "appdata"
     payload = {
-        "tag_name": "v2.0.0",
+        "tag_name": NEXT_TAG,
         "assets": [
             {
-                "name": "ScanSort-v2.0.0-windows-x64.zip",
+                "name": NEXT_ZIP,
                 "browser_download_url": "https://example.com/a.zip",
                 "size": 1,
             }
         ],
     }
-    staged = tmp_path / "ScanSort.stage-2.0.0"
+    staged = tmp_path / f"ScanSort.stage-{NEXT_VERSION}"
     staged.mkdir()
     (staged / "ScanSort.exe").write_bytes(b"new")
     with (
@@ -97,7 +106,7 @@ def test_maybe_apply_auto_update_installs_when_release_found(
     mock_spawn.assert_called_once()
     args = mock_spawn.call_args[0]
     assert args[1] == staged
-    assert args[2] == "2.0.0"
+    assert args[2] == NEXT_VERSION
     assert args[3] == os.getpid()
     mock_toast.assert_called_once()
     assert "update available" in mock_toast.call_args[0][0].lower()
@@ -117,16 +126,16 @@ def test_maybe_apply_auto_update_tolerates_chdir_failure(tmp_path: Path, monkeyp
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     app_dir = tmp_path / "appdata"
     payload = {
-        "tag_name": "v2.0.0",
+        "tag_name": NEXT_TAG,
         "assets": [
             {
-                "name": "ScanSort-v2.0.0-windows-x64.zip",
+                "name": NEXT_ZIP,
                 "browser_download_url": "https://example.com/a.zip",
                 "size": 1,
             }
         ],
     }
-    staged = tmp_path / "ScanSort.stage-2.0.0"
+    staged = tmp_path / f"ScanSort.stage-{NEXT_VERSION}"
     staged.mkdir()
     (staged / "ScanSort.exe").write_bytes(b"new")
     with (
@@ -146,7 +155,7 @@ def test_maybe_apply_auto_update_no_release_records_check(tmp_path: Path, monkey
     app_dir = tmp_path / "appdata"
     with patch(
         "scansort.cli.update.fetch_latest_release",
-        return_value={"tag_name": "v0.1.0"},
+        return_value={"tag_name": f"v{__version__}"},
     ):
         assert _maybe_apply_auto_update(cfg, app_dir) is False
     assert (app_dir / "update_state.json").exists()
@@ -179,15 +188,15 @@ def test_maybe_apply_auto_update_recovers_from_spawn_failure(
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     app_dir = tmp_path / "appdata"
     payload = {
-        "tag_name": "v0.2.0",
+        "tag_name": NEXT_TAG,
         "assets": [
             {
-                "name": "ScanSort-v0.2.0-windows-x64.zip",
+                "name": NEXT_ZIP,
                 "browser_download_url": "https://example.com/a.zip",
             }
         ],
     }
-    staged = tmp_path / "ScanSort.stage-0.2.0"
+    staged = tmp_path / f"ScanSort.stage-{NEXT_VERSION}"
     staged.mkdir()
     (staged / "ScanSort.exe").write_bytes(b"new")
     with (
@@ -206,13 +215,13 @@ def test_announce_applied_update_shows_once_then_clears(tmp_path: Path, monkeypa
 
     app_dir = tmp_path / "appdata"
     app_dir.mkdir()
-    updater.record_applied_update(app_dir / "update_state.json", "0.2.0")
+    updater.record_applied_update(app_dir / "update_state.json", __version__)
     with patch("scansort.cli.update.show_toast") as mock_toast:
         _announce_applied_update(app_dir)
     mock_toast.assert_called_once()
     title, body = mock_toast.call_args[0]
     assert title == "ScanSort updated"
-    assert "0.2.0" in body
+    assert __version__ in body
     state = json.loads((app_dir / "update_state.json").read_text(encoding="utf-8"))
     assert state["just_installed"] is False
 
@@ -228,7 +237,7 @@ def test_announce_applied_update_noop_without_marker(tmp_path: Path):
 def test_main_cli_check_update_up_to_date(capsys, monkeypatch):
     monkeypatch.setattr(
         "scansort.cli.update.fetch_latest_release",
-        lambda: {"tag_name": "v0.1.0"},
+        lambda: {"tag_name": f"v{__version__}"},
     )
     monkeypatch.setattr(
         "scansort.cli.update.available_update",
@@ -238,14 +247,17 @@ def test_main_cli_check_update_up_to_date(capsys, monkeypatch):
     assert code == 0
     captured = capsys.readouterr()
     assert "Checking for updates" in captured.out
-    assert "up to date" in captured.out
+    assert (
+        f"ScanSort is up to date (version {__version__}). No new updates available."
+        in captured.out
+    )
 
 
 def test_main_cli_check_update_available(capsys, monkeypatch):
     fake_info = ReleaseInfo(
-        version="2.0.0",
-        tag_name="v2.0.0",
-        asset_name="ScanSort-v2.0.0-windows-x64.zip",
+        version=NEXT_VERSION,
+        tag_name=NEXT_TAG,
+        asset_name=NEXT_ZIP,
         download_url="https://example.com/download.zip",
         size_bytes=1024000,
         sha256=None,
@@ -253,7 +265,7 @@ def test_main_cli_check_update_available(capsys, monkeypatch):
     )
     monkeypatch.setattr(
         "scansort.cli.update.fetch_latest_release",
-        lambda: {"tag_name": "v2.0.0"},
+        lambda: {"tag_name": NEXT_TAG},
     )
     monkeypatch.setattr(
         "scansort.cli.update.available_update",
@@ -262,8 +274,8 @@ def test_main_cli_check_update_available(capsys, monkeypatch):
     code = main_cli(["check-update"])
     assert code == 0
     captured = capsys.readouterr()
-    assert "Update available: version 2.0.0" in captured.out
-    assert "ScanSort-v2.0.0-windows-x64.zip" in captured.out
+    assert f"Update available: version {NEXT_VERSION}" in captured.out
+    assert NEXT_ZIP in captured.out
     assert "https://example.com/download.zip" in captured.out
 
 
@@ -283,7 +295,7 @@ def test_main_cli_check_update_failure(capsys, monkeypatch):
 def test_main_cli_check_update_json_up_to_date(capsys, monkeypatch):
     monkeypatch.setattr(
         "scansort.cli.update.fetch_latest_release",
-        lambda: {"tag_name": "v1.0.0"},
+        lambda: {"tag_name": f"v{__version__}"},
     )
     monkeypatch.setattr(
         "scansort.cli.update.available_update",
@@ -294,14 +306,15 @@ def test_main_cli_check_update_json_up_to_date(capsys, monkeypatch):
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert data["update_available"] is False
-    assert "current_version" in data
+    assert data["current_version"] == __version__
+    assert data["latest_version"] == __version__
 
 
 def test_main_cli_check_update_json_available(capsys, monkeypatch):
     fake_info = ReleaseInfo(
-        version="2.0.0",
-        tag_name="v2.0.0",
-        asset_name="ScanSort-v2.0.0-windows-x64.zip",
+        version=NEXT_VERSION,
+        tag_name=NEXT_TAG,
+        asset_name=NEXT_ZIP,
         download_url="https://example.com/download.zip",
         size_bytes=1024000,
         sha256=None,
@@ -309,7 +322,7 @@ def test_main_cli_check_update_json_available(capsys, monkeypatch):
     )
     monkeypatch.setattr(
         "scansort.cli.update.fetch_latest_release",
-        lambda: {"tag_name": "v2.0.0"},
+        lambda: {"tag_name": NEXT_TAG},
     )
     monkeypatch.setattr(
         "scansort.cli.update.available_update",
@@ -320,8 +333,8 @@ def test_main_cli_check_update_json_available(capsys, monkeypatch):
     captured = capsys.readouterr()
     data = json.loads(captured.out)
     assert data["update_available"] is True
-    assert data["latest_version"] == "2.0.0"
-    assert data["asset_name"] == "ScanSort-v2.0.0-windows-x64.zip"
+    assert data["latest_version"] == NEXT_VERSION
+    assert data["asset_name"] == NEXT_ZIP
 
 
 def test_main_cli_check_update_json_failure(capsys, monkeypatch):

@@ -1,5 +1,8 @@
 """Shared domain constants used across ScanSort modules."""
 
+from scansort import __version__
+
+VERSION: str = __version__
 REVIEW_NEEDED_DIR: str = "_Review_Needed"
 DUPLICATES_DIR: str = "Duplicates"
 UNDONE_PREFIX: str = "_undone_"

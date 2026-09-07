@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scansort import __version__
 from scansort.updater.downloader import (
     download_and_stage,
     download_release,
@@ -19,7 +20,7 @@ from scansort.updater.feed import (
 )
 from scansort.updater.installer import UpdateError
 
-WINDOWS_ZIP = f"{WINDOWS_ASSET_PREFIX}v0.2.0{WINDOWS_ASSET_SUFFIX}"
+WINDOWS_ZIP = f"{WINDOWS_ASSET_PREFIX}v{__version__}{WINDOWS_ASSET_SUFFIX}"
 
 
 class _BytesResponse(io.BytesIO):
@@ -59,8 +60,8 @@ def _make_tree(root: Path, name: str, marker: str) -> Path:
 def _stage_info(tmp_path: Path, marker: bytes = b"new-exe") -> ReleaseInfo:
     data = _release_zip_bytes(marker)
     return ReleaseInfo(
-        version="0.2.0",
-        tag_name="v0.2.0",
+        version=__version__,
+        tag_name=f"v{__version__}",
         asset_name=WINDOWS_ZIP,
         download_url=f"https://example.com/{WINDOWS_ZIP}",
         size_bytes=len(data),
@@ -72,8 +73,8 @@ def _stage_info(tmp_path: Path, marker: bytes = b"new-exe") -> ReleaseInfo:
 def test_download_release_streams_bytes_and_verifies_size(tmp_path: Path):
     data = _release_zip_bytes()
     info = ReleaseInfo(
-        version="0.2.0",
-        tag_name="v0.2.0",
+        version=__version__,
+        tag_name=f"v{__version__}",
         asset_name=WINDOWS_ZIP,
         download_url="https://example.com/a.zip",
         size_bytes=len(data),
@@ -87,8 +88,8 @@ def test_download_release_streams_bytes_and_verifies_size(tmp_path: Path):
 
 def test_download_release_rejects_size_mismatch(tmp_path: Path):
     info = ReleaseInfo(
-        version="0.2.0",
-        tag_name="v0.2.0",
+        version=__version__,
+        tag_name=f"v{__version__}",
         asset_name=WINDOWS_ZIP,
         download_url="https://example.com/a.zip",
         size_bytes=9999,
@@ -103,8 +104,8 @@ def test_download_release_rejects_size_mismatch(tmp_path: Path):
 
 def test_download_release_rejects_checksum_mismatch(tmp_path: Path):
     info = ReleaseInfo(
-        version="0.2.0",
-        tag_name="v0.2.0",
+        version=__version__,
+        tag_name=f"v{__version__}",
         asset_name=WINDOWS_ZIP,
         download_url="https://example.com/a.zip",
         size_bytes=None,
@@ -119,8 +120,8 @@ def test_download_release_rejects_checksum_mismatch(tmp_path: Path):
 
 def test_download_release_cleans_up_on_transport_error(tmp_path: Path):
     info = ReleaseInfo(
-        version="0.2.0",
-        tag_name="v0.2.0",
+        version=__version__,
+        tag_name=f"v{__version__}",
         asset_name=WINDOWS_ZIP,
         download_url="https://example.com/a.zip",
         size_bytes=None,
@@ -228,7 +229,7 @@ def test_download_and_stage_prunes_old_archives_and_resets_stage(tmp_path: Path)
     (tmp_dir / f"{WINDOWS_ASSET_PREFIX}v0.1.0{WINDOWS_ASSET_SUFFIX}").write_bytes(
         b"old archive"
     )
-    leftover = _make_tree(tmp_path, "ScanSort.stage-0.2.0", "partial")
+    leftover = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "partial")
     (leftover / "junk").write_bytes(b"partial")
 
     def opener(request, timeout=None):
@@ -250,7 +251,7 @@ def test_download_and_stage_cleans_partial_stage_on_corrupt_zip(tmp_path: Path):
         download_and_stage(
             info, install_dir, tmp_dir, opener=_fake_urlopen(b"not a zip")
         )
-    assert not (tmp_path / "ScanSort.stage-0.2.0").exists()
+    assert not (tmp_path / f"ScanSort.stage-{__version__}").exists()
 
 
 def test_download_and_stage_tolerates_old_archive_removal_failure(
