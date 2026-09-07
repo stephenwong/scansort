@@ -53,7 +53,7 @@ graph TB
 | Package | Purpose & Key Modules |
 | :--- | :--- |
 | `scansort.classification` | Gemini multimodal classification (`client.py`), prompt hints (`hints.py`), Pydantic models & sanitizers (`models.py`), taxonomy scanner (`taxonomy.py`). |
-| `scansort.cli` | Modular CLI router (`root.py`), subcommands (`watch.py`, `config.py`, `rescan.py`, `undo.py`, `update.py`), argument parser (`parser.py`). |
+| `scansort.cli` | Modular CLI router (`root.py`), subcommands (`watch.py`, `config.py`, `logs.py`, `history.py`, `stats.py`, `rescan.py`, `undo.py`, `update.py`, `help.py`, `completion.py`), argument parser (`parser.py`). |
 | `scansort.core` | Core configuration loader (`config.py`), domain constants (`constants.py`), filesystem & atomic lock utilities (`fs.py`), timezone helpers (`timeutil.py`). |
 | `scansort.document` | Lossless image wrapping & normalization (`converter.py`), XMP metadata embedding & auto-rotation (`metadata.py`). |
 | `scansort.logging` | Structured audit logging (`audit.py`), Gemini token accounting & pricing (`cost.py`), model event diagnostics (`gemini_logger.py`), rotating file setup (`setup.py`). |
@@ -247,6 +247,118 @@ uv run scansort --version
 uv run scansort -V
 ```
 *The version is also displayed at the top of `scansort config --show`.*
+
+### 12. View, Filter, and Tail Execution Logs
+Inspect or stream application logs directly from `%APPDATA%\ScanSort\scansort.log`:
+```bash
+# View the last 50 log lines (default)
+uv run scansort logs
+
+# View custom number of lines
+uv run scansort logs -n 20
+
+# Filter by minimum severity level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+uv run scansort logs --level ERROR
+
+# Stream / follow logs in real-time (Ctrl+C to exit)
+uv run scansort logs -f
+
+# Clear / truncate the log file
+uv run scansort logs --clear
+```
+
+### 13. Query Filing History & Audit Trail
+Search and inspect past document filing records from `history.jsonl`:
+```bash
+# Display the 20 most recent filings (default: newest first)
+uv run scansort history
+
+# Search filings by query (matches filename, folder, or summary)
+uv run scansort history -q "electricity"
+
+# Filter by filing status (SUCCESS, DUPLICATE, FAILED, UNDONE, COLLISION_RENAMED)
+uv run scansort history --status FAILED
+
+# Limit output or reverse chronological order (oldest first)
+uv run scansort history -n 10 --reverse
+
+# Output filtered history as structured JSON
+uv run scansort history --json
+```
+
+### 14. Performance Metrics, Token Usage & Cost Analytics
+Summarize document filing totals, Gemini API token consumption, and estimated USD costs:
+```bash
+# Display formatted statistics table
+uv run scansort stats
+
+# Export metrics as JSON for dashboards and scripts
+uv run scansort stats --json
+```
+
+### 15. Extended Configuration & Scripting
+Manage any configuration property directly via CLI:
+```bash
+# Print absolute path to config.json
+uv run scansort config --path
+
+# Inspect a single setting (API keys are automatically masked)
+uv run scansort config --get gemini_model
+uv run scansort config --get gemini_key
+
+# Set any configuration value
+uv run scansort config --set gemini_model gemini-3.5-flash-lite
+uv run scansort config --set max_folder_depth 4
+uv run scansort config --set dry_run true
+
+# Configure remaining settings directly via flags
+uv run scansort config --gemini-model gemini-3.5-flash-lite
+uv run scansort config --fallback-folder "_Manual_Review"
+uv run scansort config --max-depth 4
+uv run scansort config --mirror-csv enable
+uv run scansort config --auto-update enable
+uv run scansort config --update-check-interval 14
+uv run scansort config --dry-run enable
+
+# Output entire configuration as JSON
+uv run scansort config --show --json
+```
+
+### 16. Contextual Help
+Access root help or dedicated help for any subcommand:
+```bash
+uv run scansort help
+uv run scansort help watch
+uv run scansort help config
+uv run scansort help history
+```
+
+### 17. Shell Autocompletion
+Generate tab-completion scripts for your active shell:
+```bash
+# Bash
+eval "$(scansort completion bash)"
+
+# Zsh
+eval "$(scansort completion zsh)"
+
+# Fish
+scansort completion fish | source
+
+# PowerShell
+Invoke-Expression (& scansort completion powershell | Out-String)
+```
+
+### 18. Structured JSON Output Across Commands
+Commands support machine-readable JSON output for scriptability and automation:
+```bash
+uv run scansort rescan --json
+uv run scansort check-update --json
+uv run scansort history --json
+uv run scansort stats --json
+uv run scansort config --show --json
+```
+
 
 ---
 

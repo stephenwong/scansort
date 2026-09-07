@@ -137,3 +137,18 @@ def test_main_cli_verbose_sets_debug_logging(monkeypatch):
     # Default without verbose flag is INFO
     main_cli(["undo"])
     assert captured_level[-1] == logging.INFO
+
+
+def test_main_cli_routes_all_subcommands():
+    subcommand_handlers = [
+        ("logs", "scansort.cli.root.handle_logs"),
+        ("history", "scansort.cli.root.handle_history"),
+        ("stats", "scansort.cli.root.handle_stats"),
+        ("help", "scansort.cli.root.handle_help"),
+        ("completion", "scansort.cli.root.handle_completion"),
+    ]
+    for subcmd, handler_path in subcommand_handlers:
+        with patch(handler_path, return_value=0) as mock_handler:
+            extra_args = ["bash"] if subcmd == "completion" else []
+            assert main_cli([subcmd, *extra_args]) == 0
+            assert mock_handler.called

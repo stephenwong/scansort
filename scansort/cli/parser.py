@@ -78,17 +78,128 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # rescan command
-    subparsers.add_parser(
+    rescan_p = subparsers.add_parser(
         "rescan",
         parents=[verbose_parser],
         help="Rescan and display Documents folder taxonomy",
     )
+    rescan_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output discovered taxonomy as a JSON array",
+    )
 
     # check-update command
-    subparsers.add_parser(
+    check_p = subparsers.add_parser(
         "check-update",
         parents=[verbose_parser],
         help="Check GitHub Releases for newer ScanSort versions",
+    )
+    check_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output update availability information as JSON",
+    )
+
+    # logs command
+    logs_p = subparsers.add_parser(
+        "logs",
+        parents=[verbose_parser],
+        help="View, filter, or tail application execution logs",
+    )
+    logs_p.add_argument(
+        "-n",
+        "--lines",
+        type=int,
+        default=50,
+        help="Number of log lines to show (default: 50)",
+    )
+    logs_p.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Follow log output in real-time",
+    )
+    logs_p.add_argument(
+        "--level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Minimum log severity level filter",
+    )
+    logs_p.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear / truncate the application log file",
+    )
+
+    # history command
+    hist_p = subparsers.add_parser(
+        "history",
+        parents=[verbose_parser],
+        help="View and search document filing history and audit trail",
+    )
+    hist_p.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum records to display (0 for all, default: 20)",
+    )
+    hist_p.add_argument(
+        "--status",
+        choices=["SUCCESS", "DUPLICATE", "FAILED", "UNDONE", "COLLISION_RENAMED"],
+        help="Filter records by filing status",
+    )
+    hist_p.add_argument(
+        "-q",
+        "--search",
+        type=str,
+        help="Search query matching filename, folder, or summary",
+    )
+    hist_p.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Display records in chronological order (oldest first)",
+    )
+    hist_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output history records as JSON array",
+    )
+
+    # stats command
+    stats_p = subparsers.add_parser(
+        "stats",
+        parents=[verbose_parser],
+        help="Display aggregate filing statistics, token consumption, and estimated cost",
+    )
+    stats_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output statistics as JSON",
+    )
+
+    # help command
+    help_p = subparsers.add_parser(
+        "help",
+        parents=[verbose_parser],
+        help="Show help for ScanSort or a specific command",
+    )
+    help_p.add_argument(
+        "command_name",
+        nargs="?",
+        help="Subcommand name to display detailed help for",
+    )
+
+    # completion command
+    comp_p = subparsers.add_parser(
+        "completion",
+        parents=[verbose_parser],
+        help="Generate shell completion scripts (bash, zsh, fish, powershell)",
+    )
+    comp_p.add_argument(
+        "shell",
+        choices=["bash", "zsh", "fish", "powershell"],
+        help="Target shell for autocomplete script",
     )
 
     # config command
@@ -101,6 +212,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--show", action="store_true", help="Display current configuration"
     )
     cfg_p.add_argument(
+        "--json", action="store_true", help="Output configuration as JSON"
+    )
+    cfg_p.add_argument(
+        "--path", action="store_true", help="Print path to configuration file and exit"
+    )
+    cfg_p.add_argument(
+        "--get",
+        type=str,
+        metavar="KEY",
+        help="Inspect a specific configuration property",
+    )
+    cfg_p.add_argument(
+        "--set",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        help="Set a specific configuration property",
+    )
+    cfg_p.add_argument(
         "--set-key", type=str, help="Store Gemini API key securely in credential vault"
     )
     cfg_p.add_argument(
@@ -108,6 +237,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cfg_p.add_argument(
         "--documents-folder", type=Path, help="Set default documents destination folder"
+    )
+    cfg_p.add_argument(
+        "--gemini-model",
+        choices=["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
+        help="Set default Gemini classification model",
+    )
+    cfg_p.add_argument(
+        "--fallback-folder", type=str, help="Set fallback review folder name"
+    )
+    cfg_p.add_argument(
+        "--max-depth", type=int, help="Set maximum folder scanning depth (1-10)"
+    )
+    cfg_p.add_argument(
+        "--mirror-csv",
+        choices=["enable", "disable"],
+        help="Toggle mirroring audit history CSV to Documents folder",
+    )
+    cfg_p.add_argument(
+        "--auto-update",
+        choices=["enable", "disable"],
+        help="Toggle automated self-updates",
+    )
+    cfg_p.add_argument(
+        "--update-check-interval",
+        type=int,
+        help="Set update check frequency in days (0-60)",
+    )
+    cfg_p.add_argument(
+        "--dry-run", choices=["enable", "disable"], help="Toggle dry-run mode"
     )
     cfg_p.add_argument(
         "--autostart", choices=["enable", "disable"], help="Toggle auto-start on boot"

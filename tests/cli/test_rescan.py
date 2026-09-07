@@ -38,3 +38,20 @@ def test_cli_rescan_config_error(capsys):
     with patch("scansort.cli.config.load_config", side_effect=ValueError("bad config")):
         assert main_cli(["rescan"]) == 1
         assert "Configuration error" in capsys.readouterr().err
+
+
+def test_cli_rescan_json(capsys, tmp_path: Path):
+    import json
+
+    cfg = AppConfig(documents_root=tmp_path)
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.rescan.FolderMapper") as mock_mapper_cls,
+    ):
+        mock_mapper = mock_mapper_cls.return_value
+        mock_mapper.refresh.return_value = ["Finance/Invoices", "Taxes"]
+        exit_code = main_cli(["rescan", "--json"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data == ["Finance/Invoices", "Taxes"]

@@ -6,12 +6,14 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import scansort.updater as updater
 from scansort.cli.root import main_cli
 from scansort.cli.update import (
     _announce_applied_update,
     _maybe_apply_auto_update,
 )
 from scansort.core.config import AppConfig
+from scansort.updater import ReleaseInfo, UpdateError
 
 
 def test_cli_self_update_dispatches_to_updater():
@@ -43,8 +45,6 @@ def test_maybe_apply_auto_update_disabled_by_config(tmp_path: Path, monkeypatch)
 
 
 def test_maybe_apply_auto_update_skips_within_interval(tmp_path: Path, monkeypatch):
-    import scansort.updater as updater
-
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
@@ -155,8 +155,6 @@ def test_maybe_apply_auto_update_no_release_records_check(tmp_path: Path, monkey
 def test_maybe_apply_auto_update_recovers_from_check_errors(
     tmp_path: Path, monkeypatch
 ):
-    from scansort.updater import UpdateError
-
     monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", "/fake/ScanSort/ScanSort.exe", raising=False)
@@ -244,8 +242,6 @@ def test_main_cli_check_update_up_to_date(capsys, monkeypatch):
 
 
 def test_main_cli_check_update_available(capsys, monkeypatch):
-    from scansort.updater import ReleaseInfo
-
     fake_info = ReleaseInfo(
         version="2.0.0",
         tag_name="v2.0.0",
@@ -282,3 +278,60 @@ def test_main_cli_check_update_failure(capsys, monkeypatch):
     assert code == 1
     captured = capsys.readouterr()
     assert "Update check failed: Network error 503" in captured.err
+
+
+def test_main_cli_check_update_json_up_to_date(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "scansort.cli.update.fetch_latest_release",
+        lambda: {"tag_name": "v1.0.0"},
+    )
+    monkeypatch.setattr(
+        "scansort.cli.update.available_update",
+        lambda *args, **kwargs: None,
+    )
+    code = main_cli(["check-update", "--json"])
+    assert code == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["update_available"] is False
+    assert "current_version" in data
+
+
+def test_main_cli_check_update_json_available(capsys, monkeypatch):
+    fake_info = ReleaseInfo(
+        version="2.0.0",
+        tag_name="v2.0.0",
+        asset_name="ScanSort-v2.0.0-windows-x64.zip",
+        download_url="https://example.com/download.zip",
+        size_bytes=1024000,
+        sha256=None,
+        published_at="2026-09-06",
+    )
+    monkeypatch.setattr(
+        "scansort.cli.update.fetch_latest_release",
+        lambda: {"tag_name": "v2.0.0"},
+    )
+    monkeypatch.setattr(
+        "scansort.cli.update.available_update",
+        lambda *args, **kwargs: fake_info,
+    )
+    code = main_cli(["check-update", "--json"])
+    assert code == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["update_available"] is True
+    assert data["latest_version"] == "2.0.0"
+    assert data["asset_name"] == "ScanSort-v2.0.0-windows-x64.zip"
+
+
+def test_main_cli_check_update_json_failure(capsys, monkeypatch):
+    def fail():
+        raise UpdateError("Network unreachable")
+
+    monkeypatch.setattr("scansort.cli.update.fetch_latest_release", fail)
+    code = main_cli(["check-update", "--json"])
+    assert code == 1
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    assert data["update_available"] is False
+    assert "Network unreachable" in data["error"]

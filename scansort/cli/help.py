@@ -1,0 +1,48 @@
+"""Help command handler for general and subcommand-specific CLI guidance."""
+
+import argparse
+import sys
+
+
+def _find_subparser(
+    parser: argparse.ArgumentParser, command_name: str
+) -> argparse.ArgumentParser | None:
+    """Find the specific subparser associated with command_name."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices.get(command_name)
+    return None
+
+
+def _get_subcommand_names(parser: argparse.ArgumentParser) -> list[str]:
+    """Return all registered subcommand names."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return sorted(action.choices.keys())
+    return []
+
+
+def handle_help(
+    parsed: argparse.Namespace, parser: argparse.ArgumentParser | None = None
+) -> int:
+    """Handle 'help' command to display root or subcommand-specific help."""
+    if parser is None:
+        from scansort.cli.parser import build_parser
+
+        parser = build_parser()
+
+    cmd_name = getattr(parsed, "command_name", None)
+    if not cmd_name:
+        parser.print_help()
+        return 0
+
+    subparser = _find_subparser(parser, cmd_name)
+    if subparser is not None:
+        subparser.print_help()
+        return 0
+
+    available = _get_subcommand_names(parser)
+    print(f"Unknown command '{cmd_name}'.", file=sys.stderr)
+    if available:
+        print(f"Available commands: {', '.join(available)}", file=sys.stderr)
+    return 1

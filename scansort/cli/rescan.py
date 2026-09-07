@@ -17,6 +17,12 @@ def handle_rescan(parsed: argparse.Namespace) -> int:
         fallback_folder=cfg.fallback_folder,
     )
     taxonomy = mapper.refresh()
+    if getattr(parsed, "json", False):
+        import json
+
+        print(json.dumps(taxonomy, indent=2))
+        return 0
+
     print(f"Discovered {len(taxonomy)} destination folders in {cfg.documents_root}:")
     for f in taxonomy:
         print(f"  - {f}")

@@ -34,10 +34,15 @@ scansort/
 │   │   └── taxonomy.py         # Recursive taxonomy scanner with noise filtering & caching
 │   ├── cli/                    # Modular CLI subcommands and entrypoint router
 │   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── completion.py       # Shell completion generator handler (bash, zsh, fish, powershell)
 │   │   ├── config.py           # Configuration viewing and editing handler
+│   │   ├── help.py             # Contextual subcommand and program help handler
+│   │   ├── history.py          # Filing history and audit trail inspection handler
+│   │   ├── logs.py             # Log viewing, filtering, tailing, and maintenance handler
 │   │   ├── parser.py           # Unified argument parser builder
 │   │   ├── rescan.py           # Taxonomy discovery and display handler
 │   │   ├── root.py             # Main CLI execution router and console attachment
+│   │   ├── stats.py            # Aggregate metrics, token usage, and cost analytics handler
 │   │   ├── undo.py             # Reversal command handler
 │   │   ├── update.py           # Check-update and self-update handlers
 │   │   └── watch.py            # Watch and background monitor handler

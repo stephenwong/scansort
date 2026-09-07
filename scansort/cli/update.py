@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 import sys
@@ -121,7 +122,9 @@ def handle_self_update(values: list[str]) -> int:
 
 def handle_check_update(parsed: argparse.Namespace) -> int:
     """Check GitHub Releases for newer ScanSort versions and display findings."""
-    print(f"Checking for updates (current version: {__version__})...")
+    is_json = getattr(parsed, "json", False)
+    if not is_json:
+        print(f"Checking for updates (current version: {__version__})...")
     app_dir = get_default_app_dir()
     state_path = app_dir / UPDATE_STATE_FILENAME
     try:
@@ -132,10 +135,38 @@ def handle_check_update(parsed: argparse.Namespace) -> int:
             applied_version(state_path),
         )
         if release is None:
+            if is_json:
+                print(
+                    json.dumps(
+                        {
+                            "update_available": False,
+                            "current_version": __version__,
+                            "latest_version": __version__,
+                        },
+                        indent=2,
+                    )
+                )
+                return 0
             print(
                 f"ScanSort is up to date (version {__version__}). No new updates available."
             )
         else:
+            if is_json:
+                print(
+                    json.dumps(
+                        {
+                            "update_available": True,
+                            "current_version": __version__,
+                            "latest_version": release.version,
+                            "asset_name": release.asset_name,
+                            "download_url": release.download_url,
+                            "size_bytes": release.size_bytes,
+                            "published_at": release.published_at,
+                        },
+                        indent=2,
+                    )
+                )
+                return 0
             print(
                 f"Update available: version {release.version} (current: {__version__})"
             )
@@ -145,5 +176,17 @@ def handle_check_update(parsed: argparse.Namespace) -> int:
                 print(f"Asset size:     {release.size_bytes:,} bytes")
         return 0
     except UpdateError as e:
+        if is_json:
+            print(
+                json.dumps(
+                    {
+                        "update_available": False,
+                        "current_version": __version__,
+                        "error": str(e),
+                    },
+                    indent=2,
+                )
+            )
+            return 1
         print(f"Update check failed: {e}", file=sys.stderr)
         return 1

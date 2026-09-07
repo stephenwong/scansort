@@ -2,9 +2,14 @@
 
 import logging
 
+from scansort.cli.completion import handle_completion
 from scansort.cli.config import handle_config
+from scansort.cli.help import handle_help
+from scansort.cli.history import handle_history
+from scansort.cli.logs import handle_logs
 from scansort.cli.parser import build_parser
 from scansort.cli.rescan import handle_rescan
+from scansort.cli.stats import handle_stats
 from scansort.cli.undo import handle_undo
 from scansort.cli.update import handle_check_update, handle_self_update
 from scansort.cli.watch import handle_watch
@@ -27,12 +32,19 @@ def main_cli(args: list[str] | None = None) -> int:
         return handle_self_update(parsed.self_update)
 
     command = parsed.command or "watch"
+    if command == "help":
+        return handle_help(parsed, parser=parser)
+
     handlers = {
         "watch": handle_watch,
         "config": handle_config,
         "undo": handle_undo,
         "rescan": handle_rescan,
         "check-update": handle_check_update,
+        "logs": handle_logs,
+        "history": handle_history,
+        "stats": handle_stats,
+        "completion": handle_completion,
     }
     handler = handlers.get(command, handle_watch)
     return handler(parsed)

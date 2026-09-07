@@ -238,3 +238,156 @@ def test_cli_config_nested_watch_folder_rejected(tmp_path: Path, capsys):
         assert not mock_save.called
         captured = capsys.readouterr()
         assert "Configuration error" in captured.err
+
+
+def test_cli_config_path(capsys, tmp_path: Path):
+    expected_path = tmp_path / "config.json"
+    with patch(
+        "scansort.cli.config.get_default_config_path", return_value=expected_path
+    ):
+        exit_code = main_cli(["config", "--path"])
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert str(expected_path) in captured.out
+
+
+def test_cli_config_get(capsys):
+    cfg = AppConfig(gemini_model="gemini-3.5-flash-lite", max_folder_depth=4)
+    with patch("scansort.cli.config.load_config", return_value=cfg):
+        assert main_cli(["config", "--get", "gemini_model"]) == 0
+        assert "gemini-3.5-flash-lite" in capsys.readouterr().out
+
+        assert main_cli(["config", "--get", "max_folder_depth"]) == 0
+        assert "4" in capsys.readouterr().out
+
+
+def test_cli_config_get_api_key(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.get_api_key", return_value="AIzaSyTest1234567890"),
+    ):
+        assert main_cli(["config", "--get", "gemini_key"]) == 0
+        out = capsys.readouterr().out
+        assert "AIza" in out
+        assert "••••••••" in out
+        assert "1234567890" not in out
+
+
+def test_cli_config_get_unknown_key(capsys):
+    with patch("scansort.cli.config.load_config", return_value=AppConfig()):
+        assert main_cli(["config", "--get", "unknown_field"]) == 1
+        assert "Unknown configuration field" in capsys.readouterr().err
+
+
+def test_cli_config_set_generic(capsys):
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert (
+            main_cli(["config", "--set", "gemini_model", "gemini-3.5-flash-lite"]) == 0
+        )
+        assert mock_save.called
+        saved_cfg = mock_save.call_args[0][0]
+        assert saved_cfg.gemini_model == "gemini-3.5-flash-lite"
+
+
+def test_cli_config_set_unknown_key(capsys):
+    with patch("scansort.cli.config.load_config", return_value=AppConfig()):
+        assert main_cli(["config", "--set", "not_a_field", "value"]) == 1
+        assert "Unknown configuration field" in capsys.readouterr().err
+
+
+def test_cli_config_direct_flags(tmp_path: Path, capsys):
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        exit_code = main_cli(
+            [
+                "config",
+                "--gemini-model",
+                "gemini-3.5-flash-lite",
+                "--fallback-folder",
+                "_Custom_Review",
+                "--max-depth",
+                "5",
+                "--mirror-csv",
+                "enable",
+                "--auto-update",
+                "disable",
+                "--update-check-interval",
+                "7",
+                "--dry-run",
+                "enable",
+            ]
+        )
+        assert exit_code == 0
+        assert mock_save.called
+        saved = mock_save.call_args[0][0]
+        assert saved.gemini_model == "gemini-3.5-flash-lite"
+        assert saved.fallback_folder == "_Custom_Review"
+        assert saved.max_folder_depth == 5
+        assert saved.mirror_log_to_documents is True
+        assert saved.auto_update is False
+        assert saved.update_check_interval_days == 7
+        assert saved.dry_run is True
+
+
+def test_cli_config_show_json(capsys):
+    import json
+
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.get_api_key", return_value="AIzaSySecretKey0000"),
+        patch("scansort.cli.config.is_autorun_enabled", return_value=True),
+    ):
+        assert main_cli(["config", "--show", "--json"]) == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["gemini_model"] == "gemini-3.1-flash-lite"
+        assert data["start_on_boot"] is True
+        assert "AIza" in data["gemini_api_key"]
+        assert "SecretKey" not in data["gemini_api_key"]
+
+
+def test_cli_config_set_type_variants(tmp_path: Path, capsys):
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        # Boolean
+        assert main_cli(["config", "--set", "dry_run", "true"]) == 0
+        assert mock_save.call_args[0][0].dry_run is True
+
+        # Int
+        assert main_cli(["config", "--set", "max_folder_depth", "5"]) == 0
+        assert mock_save.call_args[0][0].max_folder_depth == 5
+
+        # Path
+        target_dir = tmp_path / "Target"
+        assert main_cli(["config", "--set", "watch_folder", str(target_dir)]) == 0
+        assert mock_save.call_args[0][0].watch_folder == target_dir.resolve()
+
+        # Invalid int
+        assert main_cli(["config", "--set", "max_folder_depth", "not_an_int"]) == 1
+        assert "Invalid integer value" in capsys.readouterr().err
+
+        # Validation error
+        assert main_cli(["config", "--set", "gemini_model", "invalid_model"]) == 1
+        assert "Configuration error" in capsys.readouterr().err
+
+
+def test_cli_config_set_save_failure(capsys):
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.config.save_config", side_effect=OSError("Disk full")),
+    ):
+        assert (
+            main_cli(["config", "--set", "gemini_model", "gemini-3.5-flash-lite"]) == 1
+        )
+        assert "Error saving configuration" in capsys.readouterr().err
