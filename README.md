@@ -1,385 +1,189 @@
 # ScanSort
 
-> **Intelligent, Automated Desktop Document Organizer Powered by Google Gemini**
+[![CI](https://github.com/stephenwong/scansort/actions/workflows/ci.yml/badge.svg)](https://github.com/stephenwong/scansort/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/stephenwong/scansort)](https://github.com/stephenwong/scansort/releases/latest)
+[![Python](https://img.shields.io/badge/python-≥3.14-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/stephenwong/scansort/releases/latest)
+[![Powered by Gemini](https://img.shields.io/badge/powered%20by-Google%20Gemini-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
 
-ScanSort is a zero-touch Windows desktop utility designed for automated, local document management. It monitors a scanner drop folder, waits for physical scanner writes to complete, indexes your pre-existing `Documents` directory hierarchy, classifies incoming scans via Google Gemini, automatically rights upside-down or sideways pages, embeds searchable metadata for native Windows Search indexing, standardizes filenames to `YYMMDD_<Description>.pdf`, and dispatches documents directly into the deepest matching subfolder.
+> **Scan it. Drop it. Done.**
+
+ScanSort is a set-and-forget Windows desktop app that watches your scanner's output folder, automatically classifies each document using Google Gemini AI, and files it into the right place in your existing Documents folder — correctly named, right-side up, and searchable.
 
 ---
 
-## Architecture & System Design
-
-ScanSort is built with modular, loosely coupled components designed around safety, speed, and privacy.
-
-### System Component Architecture
+## How It Works
 
 ```mermaid
-graph TB
-    subgraph Input ["Scanner Input & Ingestion (scansort.pipeline.watcher)"]
-        Scanner["Physical Scanner / ADF"] -->|Writes PDF/JPG/PNG| DropFolder["Scanner Drop Folder\n(%USERPROFILE%\\Scans\\Inbox)"]
-        DropFolder -->|Rust Inotify Event| Watcher["Watcher Engine\n(watchfiles debounce: 1500ms)"]
-        Watcher -->|Thread-safe Push| Queue["Worker Queue\n(FIFO Producer-Consumer)"]
-    end
-
-    subgraph Processing ["Processing Pipeline (scansort.pipeline / document / classification)"]
-        Queue -->|Pop Item| Stabilizer["File Stabilizer\n(scansort.pipeline.stabilizer)"]
-        Stabilizer --> Hasher["SHA-256 Hasher\n(scansort.pipeline.hasher)"]
-        Hasher -->|New Scan| Converter["Image Normalizer\n(scansort.document.converter)"]
-        Hasher -->|Duplicate Detected| DupReview["Documents\\_Review_Needed\\Duplicates"]
-        
-        Converter --> Mapper["Taxonomy Scanner\n(scansort.classification.taxonomy)"]
-        Mapper --> Gemini["Gemini Client\n(scansort.classification.client)"]
-        
-        Gemini --> MetadataEngine["PDF Metadata & Orientation\n(scansort.document.metadata)"]
-        MetadataEngine --> Dispatcher["Dispatcher\n(scansort.pipeline.dispatcher)"]
-    end
-
-    subgraph Storage ["Destination & Audit"]
-        Dispatcher --> DestDocs["Target Leaf Folder\n(Documents\\Utilities\\Electricity\\...)"]
-        Dispatcher --> FallbackReview["Documents\\_Review_Needed"]
-        Dispatcher --> Audit["Audit Logger\n(scansort.logging.audit)"]
-    end
-
-    subgraph Security ["Platform & Configuration (scansort.platform / scansort.core)"]
-        Vault["Windows Credential Vault\n(scansort.platform.secrets)"] -.->|Supplies API Key| Gemini
-        Config["Configuration Manager\n(scansort.core.config)"] -.-> Processing
-        Autorun["Windows Registry\n(scansort.platform.autorun)"] -.->|Boot Auto-Start| Watcher
-    end
+flowchart LR
+    A["📄 Scan a document"] --> B["📂 Appears in Drop Folder"]
+    B --> C["🤖 AI reads & classifies"]
+    C --> D["✏️ Renamed & tagged"]
+    D --> E["🗂️ Filed to correct folder"]
 ```
 
----
-
-### Package & Module Map
-
-| Package | Purpose & Key Modules |
-| :--- | :--- |
-| `scansort.classification` | Gemini multimodal classification (`client.py`), prompt hints (`hints.py`), Pydantic models & sanitizers (`models.py`), taxonomy scanner (`taxonomy.py`). |
-| `scansort.cli` | Modular CLI router (`root.py`), subcommands (`watch.py`, `config.py`, `logs.py`, `history.py`, `stats.py`, `rescan.py`, `undo.py`, `update.py`, `help.py`, `completion.py`), argument parser (`parser.py`). |
-| `scansort.core` | Core configuration loader (`config.py`), domain constants (`constants.py`), filesystem & atomic lock utilities (`fs.py`), timezone helpers (`timeutil.py`). |
-| `scansort.document` | Lossless image wrapping & normalization (`converter.py`), XMP metadata embedding & auto-rotation (`metadata.py`). |
-| `scansort.logging` | Structured audit logging (`audit.py`), Gemini token accounting & pricing (`cost.py`), model event diagnostics (`gemini_logger.py`), rotating file setup (`setup.py`). |
-| `scansort.pipeline` | End-to-end coordinator (`coordinator.py`), worker queue (`worker.py`), drop folder watcher (`watcher.py`), file stabilizer (`stabilizer.py`), SHA-256 hasher (`hasher.py`), atomic dispatcher (`dispatcher.py`), move reversal (`undo.py`). |
-| `scansort.platform` | System boot autostart (`autorun.py`), Windows console attachment (`console.py`), single-instance locking (`instance_guard.py`), filing notifications (`notifications.py`), credential vault & secret masking (`secrets.py`), Windows native toasts (`toasts.py`). |
-| `scansort.ui` | Desktop system tray integration (`tray.py`), procedural high-DPI icon generator (`icon.py`), Tkinter settings dialog with taxonomy explorer & hot-reloading (`settings.py`). |
-| `scansort.updater` | GitHub Releases self-update engine: feed checker (`feed.py`), streaming downloader (`downloader.py`), atomic installer (`installer.py`), process supervisor (`process.py`), update state tracking (`state.py`). |
+You scan a document. ScanSort picks it up, waits for the scanner to finish writing, sends it to Gemini AI for classification, renames it with a clean date-stamped title, embeds searchable metadata, fixes the page orientation if needed, and moves it to the deepest matching subfolder in your Documents directory. If it can't confidently classify something, it places it in `_Review_Needed` for you to handle — it never invents folders or loses files.
 
 ---
 
-### Ingestion & Processing Lifecycle
+## Features
+
+### 🤖 Smart AI Classification
+
+- **Reads your documents** — Gemini AI examines the full content of each scan (text, logos, layouts) and picks the best folder from your existing directory structure.
+- **Uses your folder structure** — ScanSort discovers your real Documents hierarchy and matches scans to the deepest, most specific subfolder. No setup or folder configuration required.
+- **Event & trip awareness** — Folders like `2026 Sydney Marathon` or `Tokyo Trip 2025` are recognised automatically. ScanSort cross-references document dates and locations against event timing to route related receipts, tickets, and invoices correctly.
+- **Keyword hints** — Optionally provide a `folder_hints.json` file to help the AI with ambiguous folder names (see [Folder Hints](#folder-hints) below).
+- **Confidence gating** — Documents below 70% classification confidence go to `_Review_Needed` instead of being misfiled.
+
+---
+
+### 🖥️ Desktop Integration
+
+- **System tray app** — Runs quietly in your notification area. Pause/resume monitoring, undo moves, browse your folder taxonomy, open settings, and check for updates — all from the tray icon.
+- **Settings dialog** — A visual settings window to configure folders, pick your Gemini model, manage your API key securely, toggle auto-start, and explore your folder tree with a built-in folder picker. Changes apply instantly to the running watcher.
+- **Windows notifications** — Native toast notifications tell you when a document is filed (click to open the folder), when something fails (with a "View Logs" button), or when an update is available.
+- **Auto-start on login** — Optionally launches at boot via Windows Registry so your scans are always filed, even if you forget to open the app.
+
+<p align="center">
+  <img src="docs/images/tray-menu.png" alt="System tray menu">
+</p>
+
+---
+
+### 🔒 Safety & Reliability
+
+- **Never loses files** — All moves are atomic with automatic collision resolution. If `260901_Electricity_Bill.pdf` already exists, ScanSort creates `260901_Electricity_Bill_1.pdf`.
+- **Duplicate detection** — SHA-256 hashing catches re-scans before they hit the AI, saving API quota and avoiding duplicates.
+- **Undo support** — Misplaced a document? Undo from the tray menu or command line. Run it multiple times to roll back successive filings.
+- **Scan stability** — Waits for your scanner to finish writing before processing, so multi-page and slow scans are never partially filed.
+- **Catches up on startup** — Files that arrived while the app was closed are automatically processed when monitoring starts.
+- **Secure API key storage** — Your Gemini key is stored in the OS credential vault (Windows Credential Manager), never in a config file.
+
+---
+
+### 🔍 Search & Organisation
+
+- **Standardised filenames** — Every document becomes `YYMMDD_Description.pdf` (e.g. `260901_Origin_Energy_Electricity_Bill.pdf`).
+- **Windows Search indexing** — Embeds title, summary, and keywords as PDF metadata so documents appear in Windows Start Menu and Explorer searches.
+- **Auto page orientation** — Corrects sideways and upside-down pages automatically.
+- **Image support** — JPEGs, PNGs, and multi-page TIFFs are converted to searchable PDFs before filing.
+
+---
+
+## What Happens Under the Hood
 
 ```mermaid
 flowchart TD
-    A["Incoming File in Drop Folder"] --> B{"Is File Extension Supported?\n(.pdf, .jpg, .jpeg, .png, .tiff)"}
-    B -- No --> C["Ignore Temporary / System Swap File"]
-    B -- Yes --> D["Wait for File Stability\n(Exclusive Lock & Size Growth Check)"]
-    
-    D --> E{"Did File Stabilize?"}
-    E -- Timeout --> F["Log Warning & Skip File"]
-    E -- Ready --> G["Compute Streaming SHA-256 Hash"]
-    
-    G --> H{"Hash Exists in history.jsonl?"}
-    H -- Yes (Duplicate) --> I["Route to Documents/_Review_Needed/Duplicates\nLog status: DUPLICATE"]
-    H -- No (Fresh Scan) --> J{"Is File Image?\n(.jpg, .png, .tiff)"}
-    
-    J -- Yes --> K["Wrap Losslessly into PDF via img2pdf / Pillow"]
-    J -- No (Already PDF) --> L["Pass Through Original PDF"]
-    
-    K --> M["Load Discovered Taxonomy & folder_hints.json"]
-    L --> M
-    
-    M --> N["Call Google Gemini\n(Multimodal OCR & Classification Schema)"]
-    
-    N --> O["Sanitize Metadata & English Title\n(Format: Title_Case_With_Underscores, max 60 chars)"]
-    O --> P{"Orientation Correction Needed?\n(90 deg, 180 deg, 270 deg)"}
-    P -- Yes --> Q["Rotate Pages Clockwise via pypdf"]
-    P -- No --> R["Retain Current Rotation"]
-    
-    Q --> S["Embed XMP Metadata\n(Title, Subject, Keywords for Windows Search)"]
-    R --> S
-    
-    S --> T{"Dry-Run Mode Active?"}
-    T -- Yes --> U["Log Simulated Destination Path\nLeave Source File Untouched"]
-    T -- No --> V["Resolve Filename Collisions\n(e.g., YYMMDD_Desc_1.pdf)"]
-    
-    V --> W["Atomic File Move to Deepest Matching Subfolder"]
-    W --> X["Append Record to history.jsonl & history.csv"]
-    X --> Y["Show Windows Notification Toast"]
+    A["New file in Drop Folder"] --> B{"Supported format?"}
+    B -- No --> C["Ignored"]
+    B -- Yes --> D["Wait for write stability"]
+    D --> E["Compute SHA-256 hash"]
+    E --> F{"Duplicate?"}
+    F -- Yes --> G["Route to _Review_Needed/Duplicates"]
+    F -- No --> H{"Image file?"}
+    H -- Yes --> I["Convert to PDF"]
+    H -- No --> J["Use original PDF"]
+    I --> K["Send to Gemini AI"]
+    J --> K
+    K --> L["Fix orientation · Embed metadata"]
+    L --> M["Move to destination folder"]
+    M --> N["Log to audit history · Notify"]
 ```
 
 ---
 
-## Core Features
-
-- **Desktop System Tray & Controls:** Runs quietly in your system notification tray with high-DPI procedural status icons. Easily pause and resume monitoring on demand (automatically sweeping pre-existing files upon resumption), trigger manual rescans, undo file moves, check for updates, or browse your destination folder taxonomy directly from the tray.
-- **Unified Settings Modal Dialog:** Configure monitored directories, select Gemini AI models, toggle auto-start, securely manage API keys in the Windows Credential Vault (never saved to plaintext config files), and explore folder taxonomies with an interactive `ttk.Treeview` folder picker — featuring instant hot-reloading into the running background watcher.
-- **Hierarchical Taxonomy Exploration & AI Prompting:** Folder structures are represented as rich visual hierarchies in Gemini system prompts, formatted as ASCII trees in `scansort rescan`, nested in system tray submenus (`Browse Destination Folders >`), and displayed in the Settings folder explorer.
-- **Zero-Leak Secret Vault:** Your Gemini API key is never written to plaintext config files. It is stored directly in the OS-encrypted credential vault (Windows Credential Manager / DPAPI via `keyring`).
-- **Rust-Powered Filesystem Watcher:** Built on `watchfiles` (wrapping Rust's `notify` crate) with native debouncing to handle scanner buffers and multi-page ADF batch scans. Files already present when monitoring starts (e.g. scans that arrived while the app was off) are swept and filed automatically.
-- **Deepest Subfolder Matching:** Scans your real `Documents` directory hierarchy and classifies scans into the most specific leaf folder. If no existing folder fits or confidence is below 70%, files route safely to `Documents/_Review_Needed/` (never inventing rogue folders). The taxonomy cache is refreshed hourly and on every `rescan`, so new folders are picked up and deleted folders are never re-created; symlinked/junction and Windows-hidden folders are excluded.
-- **Multi-Page TIFF & Image Support:** Automatically normalizes single and multi-page TIFFs, JPEGs, and PNGs into standard searchable PDFs without dropping pages (including 16-bit grayscale scans, which are scaled rather than clipped).
-- **Auto Page-Orientation:** Automatically corrects skewed, sideways, or upside-down scans (0°, 90°, 180°, 270°) using `pypdf`.
-- **Native Windows Search Indexing:** Embeds document title, summary, and category keywords into standard PDF DocInfo and XMP metadata streams (XMP generated on every output PDF, pre-existing XMP preserved), enabling instant Windows Start Menu and Explorer search.
-- **SHA-256 Duplicate Interception:** Computes cryptographic SHA-256 hashes for all scans. Re-scans are identified before filing and routed to `_Review_Needed/Duplicates/`, saving Gemini API quota.
-- **Sequential Undo Support:** Provides single-command undo (`scansort undo`) that can be executed repeatedly to roll back successive moves, restoring files safely with collision handling and resetting duplicate status. Failed restores are reported to the CLI instead of being silently skipped.
-- **Resilient Background Worker:** Robust queue worker designed to handle transient API rate limits (429/503) and network drops by falling back to review folders without terminating the daemon. Items still queued at shutdown are drained before exit.
-- **Dual Crash-Safe Audit Logs:** Maintains append-only `history.jsonl` (machine-readable structured log) and `history.csv` (Excel-compatible spreadsheet) in `%APPDATA%\ScanSort\`. CSV cells are neutralized against spreadsheet-formula injection, and the CSV mirror never diverges from the JSONL under concurrent processes.
-- **Model Evaluation, Token Counts & Cost Estimation:** Multimodal Gemini calls log exact token metrics (`prompt_tokens`, `candidates_tokens`, `total_tokens`), latency in milliseconds, and estimated USD cost calculated from official Gemini Flash Lite pricing tiers (`gemini-3.1-flash-lite` and `gemini-3.5-flash-lite`). Every audit record in `history.jsonl` preserves these metrics for model cost comparison and evaluation.
-- **Filing Rationale & Explainability:** Full visibility into why documents are filed into specific folders: logs Gemini's natural language `folder_reasoning` and ScanSort's deterministic taxonomy match `routing_rationale` for complete routing transparency.
-- **Persistent Modular Diagnostic Logging:** Modular diagnostics package (`scansort.logging`) attaches a rotating `%APPDATA%\ScanSort\scansort.log` (INFO and above, or DEBUG with `--verbose`, 1 MB × 3 backups) so full, secret-redacted diagnostic details survive background tray operation where no console exists. WARNING+ messages also flow to the terminal when attached.
-- **Dry-Run Mode:** Test and preview classification logic on your documents without moving or modifying files (`--dry-run`).
-- **System Boot Auto-Start:** Automatically launches on user login via Windows Registry (`HKCU\Run`) or Linux XDG desktop autostart (written atomically).
-- **Single-Instance Guard:** The watcher holds a non-blocking `instance.lock`, so a manual launch while auto-start is running (or a self-update relaunch) never spawns a second watcher that would double-file the same scans.
-- **Windows Self-Update:** Frozen Windows builds check GitHub Releases on every `watch` launch (default interval 0 days) and auto-install newer releases with native toast notifications — download, integrity verification, rollback-safe directory swap, and automatic restart, all without admin rights. Users can also manually check anytime via `scansort check-update`. Runs only in standalone builds; the Python source tree never updates itself.
-- **Filing Notifications & Folder Navigation:** Native Windows toasts (titled **ScanSort**) announce when a document is filed, when a scan fails and is routed to `_Review_Needed` (with a sanitized, truncated reason), and when a scan is stranded and needs manual attention. Clicking any notification automatically opens the target folder (destination directory, review folder, or drop folder) in File Explorer. On errors, notifications include a **View Logs** action button that opens `scansort.log` directly in your default text editor. Toasts are best-effort and never interrupt filing.
-- **Australia/Sydney Time:** All user-facing dates and times (filename date stamps and the audit CSV "Local Time" column) use Australia/Sydney wall-clock time regardless of the machine's timezone.
-
----
-
-## Prerequisites & Installation
+## Getting Started
 
 ### Prerequisites
-- Python 3.14 or newer
-- [Astral `uv`](https://docs.astral.sh/uv/) (recommended for fast package management)
-- A Google Gemini API key ([Google AI Studio](https://aistudio.google.com/))
 
-### Installation via `uv`
+- A Google Gemini API key — get one free at [Google AI Studio](https://aistudio.google.com/)
+
+For the standalone Windows build (`ScanSort.exe`), that's all you need — no Python required.
+
+For running from source:
+- Python 3.14+
+- [Astral `uv`](https://docs.astral.sh/uv/)
+
+### Install from Source
 
 ```bash
-# Clone repository
 git clone https://github.com/stephenwong/scansort.git
 cd scansort
-
-# Install dependencies into virtual environment
 uv sync
 ```
 
----
+### First Run
 
-## Usage & CLI Reference
-
-ScanSort provides an intuitive command-line interface:
-
-> **Packaged `ScanSort.exe`:** the release build is windowed (`console=False`) so it runs quietly in the system tray at boot. When launched from an interactive cmd/PowerShell window, it attaches its standard streams to that window's console, so CLI output such as `config --show`, `undo`, and `rescan` prints where you can read it. Launched by double-click or auto-start there is no console to attach to, and it stays silent as before.
-
-### 1. Store Your Gemini API Key Securely
-Store your API key in the Windows Credential Manager:
+**Option A — GUI (recommended):**
 ```bash
-uv run python -m scansort config --set-key AIzaSyYourActualKeyHere
-```
-*The key is encrypted via DPAPI and never saved to any file on disk.*
-
-### 2. View Current Configuration
-Check active settings, folders, and verify your key is stored:
-```bash
-uv run python -m scansort config --show
-```
-*Output safely masks the API key (e.g. `AIza••••••••1234`).*
-
-### 3. Customize Monitored Folders
-```bash
-# Set custom scanner drop folder
-uv run scansort config --watch-folder "C:\Scans\Inbox"
-
-# Set custom documents destination directory
-uv run scansort config --documents-folder "D:\My Documents"
-```
-*Validation guarantees:* ScanSort prevents configuring regular files (or paths under one) as directory endpoints, rejects identical `watch_folder`/`documents_folder` paths **and containment in either direction** (a drop folder nested inside the documents root would create a filing feedback loop), and blocks path traversal or Windows drive letters in `fallback_folder`. If an existing `config.json` contains semantically invalid settings, every command fails fast with a message naming the offending field instead of silently resetting to defaults.
-
-### 4. Configure Auto-Start on Boot (Windows & Linux)
-```bash
-# Enable run-on-startup (sets HKCU registry key on Windows, XDG autostart on Linux)
-uv run scansort config --autostart enable
-
-# Disable run-on-startup
-uv run scansort config --autostart disable
-```
-
-### 5. Preview Scans in Dry-Run Mode
-Simulate categorization without moving files or modifying PDFs:
-```bash
-# Via subcommand or root flag
-uv run scansort watch --dry-run
-uv run scansort --dry-run
-```
-
-### 6. Start Live Background Monitoring & System Tray
-```bash
-# Standard interactive monitor with System Tray icon
 uv run scansort watch
-
-# Run silently / minimized without banner output (supported via root or subparser)
-uv run scansort watch --minimized
-uv run scansort --minimized watch
-
-# Optional: Override drop folder or documents root for a single session
-uv run scansort watch --watch-folder "C:\Scans\Inbox" --documents-root "D:\Documents"
 ```
-When running `scansort watch`, ScanSort initializes a system tray icon with full background controls:
-- **Status Indicator:** Displays current state (`Status: Monitoring Active` or `Status: Monitoring Paused`).
-- **Pause / Resume Monitoring:** Temporarily halts watcher event ingestion without stopping the daemon. Resuming immediately sweeps any documents that arrived in the drop folder while paused.
-- **Undo Last Move:** Instantly reverses the most recent filing using the shared move-reversal engine.
-- **Rescan Taxonomies:** Refreshes and caches discovered directory paths immediately.
-- **Open Folders:** Fast one-click shortcuts to open Drop Folder, Documents Root, Application Log (`scansort.log`), and Audit History (`history.csv`) in File Explorer.
-- **Browse Destination Folders:** Dynamically generated nested submenus mirroring your destination taxonomy for quick navigation.
-- **Settings...:** Launches the unified Tkinter Settings modal dialog to configure folders, models, autorun, and API key with live hot-reloading into the running watcher.
-- **Check for Updates:** Manually checks GitHub Releases for new versions.
-- **Exit:** Drains the queue worker, flushes logs, terminates the watcher, and closes the tray.
+This starts ScanSort with the system tray icon. Right-click it and choose **Settings...** to set your folders and API key.
 
-### 7. Reverse Document Moves (Undo)
-Misplaced a document or want to re-scan? Reverse the last move instantly. You can run `undo` successively to roll back multiple previous filings:
+**Option B — Command line:**
 ```bash
-uv run scansort undo
+# Store your API key securely
+uv run scansort config --set-key AIzaSyYourActualKeyHere
+
+# Set your scanner drop folder and documents root
+uv run scansort config --watch-folder "C:\Scans\Inbox"
+uv run scansort config --documents-folder "D:\My Documents"
+
+# Start monitoring
+uv run scansort watch
 ```
-*Restores the file to its original location in your drop folder prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`) with automatic numerical collision resolution so existing files are never overwritten. The active watcher strictly ignores the `_undone_` prefix to prevent automated re-filing loops, while `history.jsonl`, `history.csv`, and the optional mirrored CSV in your Documents folder are atomically updated with `UNDONE` status.*
-
-### 8. Inspect Discovered Taxonomy Hierarchy
-Verify the folder tree ScanSort will use for classification (respecting `max_folder_depth` between 1 and 10, and `fallback_folder` exclusions):
-```bash
-uv run scansort rescan
-```
-*Renders a clean ASCII hierarchy tree representing your document taxonomies.*
-
-### 9. Check for Updates Manually
-Query GitHub Releases immediately for newer versions:
-```bash
-uv run scansort check-update
-```
-*In packaged standalone builds, this checks against the published releases on GitHub. In development mode, it verifies the latest published release and reports your local development version.*
-
-### 10. Verbose / Debug Logging
-Enable detailed `DEBUG` level logging on console and to `%APPDATA%\ScanSort\scansort.log`:
-```bash
-uv run scansort --verbose watch
-# or
-uv run scansort -v watch
-```
-*Outputs raw Gemini API request/response payloads, folder discovery metrics, and detailed pipeline diagnostics.*
-
-### 11. Check Application Version
-Display the current ScanSort version:
-```bash
-uv run scansort --version
-# or
-uv run scansort -V
-```
-*The version is also displayed at the top of `scansort config --show`.*
-
-### 12. View, Filter, and Tail Execution Logs
-Inspect or stream application logs directly from `%APPDATA%\ScanSort\scansort.log`:
-```bash
-# View the last 50 log lines (default)
-uv run scansort logs
-
-# View custom number of lines
-uv run scansort logs -n 20
-
-# Filter by minimum severity level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-uv run scansort logs --level ERROR
-
-# Stream / follow logs in real-time (Ctrl+C to exit)
-uv run scansort logs -f
-
-# Clear / truncate the log file
-uv run scansort logs --clear
-```
-
-### 13. Query Filing History & Audit Trail
-Search and inspect past document filing records from `history.jsonl`:
-```bash
-# Display the 20 most recent filings (default: newest first)
-uv run scansort history
-
-# Search filings by query (matches filename, folder, or summary)
-uv run scansort history -q "electricity"
-
-# Filter by filing status (SUCCESS, DUPLICATE, FAILED, UNDONE, COLLISION_RENAMED)
-uv run scansort history --status FAILED
-
-# Limit output or reverse chronological order (oldest first)
-uv run scansort history -n 10 --reverse
-
-# Output filtered history as structured JSON
-uv run scansort history --json
-```
-
-### 14. Performance Metrics, Token Usage & Cost Analytics
-Summarize document filing totals, Gemini API token consumption, and estimated USD costs:
-```bash
-# Display formatted statistics table
-uv run scansort stats
-
-# Export metrics as JSON for dashboards and scripts
-uv run scansort stats --json
-```
-
-### 15. Extended Configuration & Scripting
-Manage any configuration property directly via CLI:
-```bash
-# Print absolute path to config.json
-uv run scansort config --path
-
-# Inspect a single setting (API keys are automatically masked)
-uv run scansort config --get gemini_model
-uv run scansort config --get gemini_key
-
-# Set any configuration value
-uv run scansort config --set gemini_model gemini-3.5-flash-lite
-uv run scansort config --set max_folder_depth 4
-uv run scansort config --set dry_run true
-
-# Configure remaining settings directly via flags
-uv run scansort config --gemini-model gemini-3.5-flash-lite
-uv run scansort config --fallback-folder "_Manual_Review"
-uv run scansort config --max-depth 4
-uv run scansort config --mirror-csv enable
-uv run scansort config --auto-update enable
-uv run scansort config --update-check-interval 14
-uv run scansort config --dry-run enable
-
-# Output entire configuration as JSON
-uv run scansort config --show --json
-```
-
-### 16. Contextual Help
-Access root help or dedicated help for any subcommand:
-```bash
-uv run scansort help
-uv run scansort help watch
-uv run scansort help config
-uv run scansort help history
-```
-
-### 17. Shell Autocompletion
-Generate tab-completion scripts for your active shell:
-```bash
-# Bash
-eval "$(scansort completion bash)"
-
-# Zsh
-eval "$(scansort completion zsh)"
-
-# Fish
-scansort completion fish | source
-
-# PowerShell
-Invoke-Expression (& scansort completion powershell | Out-String)
-```
-
-### 18. Structured JSON Output Across Commands
-Commands support machine-readable JSON output for scriptability and automation:
-```bash
-uv run scansort rescan --json
-uv run scansort check-update --json
-uv run scansort history --json
-uv run scansort stats --json
-uv run scansort config --show --json
-```
-
 
 ---
 
-## Folder Hints & Aliases (`folder_hints.json`)
+## Configuration
 
-If you have specific taxonomy folders whose purpose may not be obvious from the folder name alone, create a `folder_hints.json` file in `%APPDATA%\ScanSort\` (or `~/.config/scansort/` on Linux):
+All settings can be changed via the **Settings dialog** (tray → Settings...) or via the CLI. Configuration is stored in `%APPDATA%\ScanSort\config.json`.
+
+| Setting | CLI Flag | Description | Default |
+| :--- | :--- | :--- | :--- |
+| Watch folder | `--watch-folder` | Scanner output directory to monitor | `%USERPROFILE%\Scans\Inbox` |
+| Documents folder | `--documents-folder` | Root of your filing destination | `%USERPROFILE%\Documents` |
+| Gemini model | `--gemini-model` | AI model for classification | `gemini-3.1-flash-lite` |
+| API key | `--set-key` | Stored in OS credential vault | — |
+| Auto-start | `--autostart enable/disable` | Launch on login | Disabled |
+| Dry-run | `--dry-run enable/disable` | Preview without moving files | Disabled |
+| Auto-update | `--auto-update enable/disable` | Check for updates on launch | Enabled |
+| Max folder depth | `--max-depth` | How deep to scan taxonomy (1–10) | 10 |
+| Fallback folder | `--fallback-folder` | Where unclassified docs go | `_Review_Needed` |
+| Mirror CSV | `--mirror-csv enable/disable` | Copy audit CSV to Documents | Disabled |
+
+View current settings: `uv run scansort config --show`
+
+---
+
+## CLI Quick Reference
+
+| Command | What it does |
+| :--- | :--- |
+| `scansort watch` | Start monitoring with system tray |
+| `scansort watch --dry-run` | Preview classifications without moving files |
+| `scansort watch --minimized` | Start without banner output |
+| `scansort config --show` | View current configuration |
+| `scansort config --set-key <KEY>` | Store API key securely |
+| `scansort undo` | Reverse the last filing (repeatable) |
+| `scansort rescan` | Refresh & display folder taxonomy |
+| `scansort history` | View recent filing history |
+| `scansort history -q "electricity"` | Search filing history |
+| `scansort stats` | View filing totals & API cost summary |
+| `scansort logs` | View recent log entries |
+| `scansort logs -f` | Stream logs in real-time |
+| `scansort check-update` | Check for new versions |
+| `scansort help <command>` | Help for any subcommand |
+| `scansort --verbose watch` | Enable debug-level logging |
+
+> **Tip:** The packaged `ScanSort.exe` works the same way — just replace `scansort` with `ScanSort.exe` in the commands above. When launched from a terminal, CLI output appears there; when launched by double-click or auto-start, it runs silently in the tray.
+
+---
+
+## Folder Hints
+
+If some of your folder names are ambiguous, you can help the AI with a `folder_hints.json` file in `%APPDATA%\ScanSort\` (or `~/.config/scansort/` on Linux):
 
 ```json
 {
@@ -389,84 +193,92 @@ If you have specific taxonomy folders whose purpose may not be obvious from the 
 }
 ```
 
-ScanSort automatically injects these keyword hints into the Gemini classification prompt to ensure 100% filing accuracy. Both standard UTF-8 and Windows Notepad UTF-8 with BOM (`utf-8-sig`) are supported for both `config.json` and `folder_hints.json`.
-
-### Event & Trip Folders with Date Cross-Referencing
-For one-off event, trip, or conference folders (e.g. `2026 Sydney Marathon`, `Tokyo Trip 2025`, `DEFCON 34`), manual entries in `folder_hints.json` are not required. ScanSort's classification prompt instructs Gemini to:
-1. **Recognize Event Folders:** Understand that folders representing events, competitions, vacations, or conferences collect all related documentation—including hotel/lodging invoices, airline tickets, car rentals, registration fees, and incidental travel receipts.
-2. **Cross-Reference Dates & Locations:** Extract document dates (statement/billing date, hotel stay check-in/out, flight dates) and location/city, cross-referencing them against the event's date/year and known schedule. When dates and location align with the event timeframe, Gemini routes the file into that event folder with high confidence ($\ge 0.70$) instead of defaulting to `_Review_Needed`.
+These keywords are injected into the AI classification prompt to improve accuracy. Event and trip folders (conferences, vacations, marathons) generally don't need hints — ScanSort recognises them automatically from dates and context.
 
 ---
 
-## File Naming & Collision Resolution
+## File Naming
 
-Documents are standardized following this format:
+All documents are renamed to a clean, consistent format:
+
 ```
-YYMMDD_<Description>.pdf
+YYMMDD_Description.pdf
 ```
-- **Date (`YYMMDD`):** Extracted issuance/statement date from document text. Defaults to today's date if absent.
-- **Description:** English summary in `Title_Case_With_Underscores` (max 60 characters). Invalid Windows characters (`< > : " / \ | ? *`) and extra punctuation are stripped.
-- **Collisions:** If a file with the target name already exists in that destination folder, ScanSort appends an incrementing counter:
-  - `260901_Origin_Energy_Electricity_Bill.pdf`
-  - `260901_Origin_Energy_Electricity_Bill_1.pdf`
-  - `260901_Origin_Energy_Electricity_Bill_2.pdf`
+
+- **Date** — extracted from the document content (statement date, invoice date, etc.). Falls back to today's date if none is found.
+- **Description** — English summary in `Title_Case_With_Underscores`, max 60 characters.
+- **Collisions** — if the name already exists, a counter is appended: `_1`, `_2`, etc.
+
+Example: `260901_Origin_Energy_Electricity_Bill.pdf`
 
 ---
 
-## Reliability & Safety Notes
+## Automatic Updates
 
-- **Write-stability gate:** Incoming files must hold a constant size for ~1 s before processing; the source is re-verified immediately before dispatch. A writer that resumes mid-processing causes the item to be deferred, never partially filed.
-- **Cross-process atomicity:** File moves (`watch` pipeline, duplicate routing, `undo`) are serialized via an advisory lock on `%APPDATA%\ScanSort\operations.lock`, so two processes can never race `resolve_collision` and silently overwrite each other's filed document.
-- **Failed items are never stranded:** Any file that fails hashing, duplicate routing, conversion, or metadata processing is moved to the fallback review folder with a `FAILED` audit record — the background worker never dies and the queue is drained on shutdown. The full (secret-redacted) reason text behind a failure is in `%APPDATA%\ScanSort\scansort.log` (`~/.config/scansort/scansort.log` on Linux); audit summaries store only a 100-character excerpt.
-- **Startup reconciliation:** Scans left in the drop folder when monitoring starts (app was off, or a crash) are queued automatically.
-- **Config is never silently reset:** A parseable but semantically invalid `config.json` aborts commands with an error naming the offending field; only missing/unreadable files fall back to defaults.
-- **Taxonomy freshness:** The cached folder list is re-scanned automatically when older than 1 hour and pruned of folders that no longer exist.
-- **Spreadsheet-safe audit CSVs:** Cells that could be interpreted as formulas (`=`, `+`, `-`, `@` prefixes) are neutralized, and un-encodable characters never crash the audit write.
-- **Timezone:** Date-stamped filenames and the audit "Local Time" column always reflect Australia/Sydney time (DST-aware via the bundled `tzdata`).
+Standalone Windows builds check for updates from GitHub Releases on each launch. When a new version is found, it downloads, verifies, and installs automatically with a rollback-safe swap — no admin rights needed. A toast notification lets you know when an update is applied.
+
+Disable with `scansort config --auto-update disable`, or check manually with `scansort check-update`.
 
 ---
 
-## Updating ScanSort
+## For Developers
 
-Standalone Windows builds self-update automatically from the project's public GitHub Releases:
+### Running Tests
 
-- **When:** Every `watch` launch (including auto-start at logon), a check runs when `auto_update` is enabled (default) and the interval `update_check_interval_days` (default `0`: checks on every launch) has elapsed since the last completed check. Progress is tracked in `%APPDATA%\ScanSort\update_state.json`; a malformed or missing file simply triggers a fresh check. You can also trigger an immediate check anytime using `scansort check-update`.
-- **What qualifies:** A release tagged `vX.Y.Z` whose asset is named exactly `ScanSort-<tag>-windows-x64.zip` (this is what the release pipeline publishes). The tag must be strictly newer than the running version **and** any previously applied release, so a forgotten version bump can never cause re-install loops.
-- **How:** The ZIP is downloaded over HTTPS, verified by byte count and GitHub's SHA-256 digest, and extracted (ZipSlip-safe) into a staging directory beside the install. Because Windows locks a running executable and its directory, the staged build is copied to an isolated helper directory (`ScanSort.helper-<version>`) and launched as a detached helper (`--self-update`). This leaves the staged directory unlocked so the helper can wait for the current process to exit, swap the staged tree into place with automatic rollback (the old install is renamed aside first and restored on any failure), record the applied version, and relaunch `watch --minimized`. Sibling helper directories are automatically cleaned up on future runs.
-- **Toasts:** A native Windows toast announces *"ScanSort update available"* before the restart and *"ScanSort updated"* once the new version is running. Toast support ships as the optional `windows` extra (`windows-toasts`); if it is unavailable, updates still install silently.
-- **Safety:** Updates never run from the Python source tree (development mode is inert), never require administrator rights (installs are per-user under `%LOCALAPPDATA%`), and never touch your configuration, history, or documents. Offline or rate-limited checks simply log and continue watching; a failed install leaves the previous version running and retries on the next launch.
-- **Controlling it:** Set `"auto_update": false` in `%APPDATA%\ScanSort\config.json` to disable automatic checks, or configure `update_check_interval_days` (0–60, where 0 checks on every launch). `scansort config --show` displays both.
-
----
-
-## Building Standalone Windows Executable
-
-ScanSort can be compiled into a standalone, portable Windows executable (`ScanSort.exe`) requiring zero runtime dependencies or Python installation on the client machine:
+ScanSort enforces ≥95% test coverage:
 
 ```bash
-# Build standalone binary using PyInstaller spec
-uv run pyinstaller scansort.spec
-```
-
-The output bundle is produced in `dist/ScanSort/ScanSort.exe`.
-
-The exe is a GUI-subsystem build (`console=False`) that never flashes a terminal when started by auto-start or double-click. At CLI startup it best-effort attaches to the launching terminal's console (see [Usage & CLI Reference](#usage--cli-reference)), so commands run from cmd/PowerShell still display their output.
-
-The build embeds Win32 version resources (`version_info.txt`), making `ProductVersion`, `FileVersion`, and application metadata visible in Windows Explorer (Right-Click `ScanSort.exe` $\rightarrow$ **Properties** $\rightarrow$ **Details**) and PowerShell (`(Get-Item .\ScanSort.exe).VersionInfo.ProductVersion`).
-
----
-
-## Testing & Quality Gates
-
-ScanSort enforces strict quality and test-driven development standards:
-
-```bash
-# Gate 1: Code quality & linting
+# Lint
 uv run ruff check .
 
-# Gate 2: Code formatting check
+# Format check
 uv run ruff format --check .
 
-# Gate 3: Test suite & strict >=95% coverage enforcement
+# Test suite with coverage
 uv run pytest
 ```
+
+### Project Structure
+
+```
+scansort/
+├── scansort/              # Core Python package
+│   ├── classification/    # Gemini AI client, taxonomy scanner, prompt hints
+│   ├── cli/               # CLI subcommands and argument parser
+│   ├── core/              # Configuration, constants, filesystem utilities
+│   ├── document/          # PDF conversion, metadata embedding, orientation
+│   ├── logging/           # Audit logs, cost tracking, diagnostics
+│   ├── pipeline/          # Watcher, stabiliser, hasher, dispatcher, worker
+│   ├── platform/          # OS integrations (autorun, credentials, toasts)
+│   ├── ui/                # System tray, settings dialog, icon generator
+│   └── updater/           # GitHub Releases self-update engine
+├── tests/                 # Pytest test suite (mirrors package structure)
+├── working-docs/          # PRD and working documentation
+├── pyproject.toml         # Project config (uv, ruff, pytest-cov)
+└── scansort.spec          # PyInstaller build spec
+```
+
+### Tech Stack
+
+| Library | Role |
+| :--- | :--- |
+| [google-genai](https://pypi.org/project/google-genai/) | Multimodal Gemini AI client for document classification |
+| [watchfiles](https://pypi.org/project/watchfiles/) | Rust-powered filesystem watcher (wraps `notify` crate) |
+| [pypdf](https://pypi.org/project/pypdf/) | PDF page rotation and metadata embedding |
+| [img2pdf](https://pypi.org/project/img2pdf/) / [Pillow](https://pypi.org/project/pillow/) | Lossless image-to-PDF conversion |
+| [pystray](https://pypi.org/project/pystray/) | Cross-platform system tray integration |
+| [pydantic](https://pypi.org/project/pydantic/) | Configuration validation and structured AI response models |
+| [keyring](https://pypi.org/project/keyring/) | OS credential vault for API key storage |
+| [windows-toasts](https://pypi.org/project/windows-toasts/) | Native Windows toast notifications (optional) |
+
+### Key Conventions
+
+- **Test-first** — write failing tests before production code. Every test must validate real behaviour, not inflate coverage.
+- **≥95% coverage enforced** — `pytest` fails the build below this threshold.
+- **Ruff** for linting and formatting — `ruff check .` and `ruff format --check .` must pass.
+- **Secrets never in plaintext** — API keys go through `keyring`, are masked in output (`mask_api_key()`), and redacted from logs (`redact_secrets_from_text()`).
+- **Atomic file operations** — all moves use advisory locks and collision resolution. No partial writes to the drop folder.
+
+See [AGENTS.md](AGENTS.md) for detailed architectural invariants, development rules, and contribution guidelines.
+
+
