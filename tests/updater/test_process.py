@@ -128,11 +128,17 @@ def test_spawn_update_helper_windows_uses_detached_flags_and_cwd(
     monkeypatch.setattr("sys.platform", "win32")
     staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    helper_dir = tmp_path / f"ScanSort.helper-{__version__}"
+
     with patch("scansort.updater.process.subprocess.Popen") as mock_popen:
         spawn_update_helper(install_dir, staged_dir, __version__, parent_pid=4321)
+
+    assert helper_dir.is_dir()
+    assert (helper_dir / "ScanSort.exe").read_bytes() == b"new"
+
     argv, kwargs = mock_popen.call_args
     assert argv[0] == [
-        str(staged_dir / "ScanSort.exe"),
+        str(helper_dir / "ScanSort.exe"),
         "--self-update",
         "4321",
         str(install_dir),
@@ -148,9 +154,14 @@ def test_spawn_update_helper_posix_no_creationflags(tmp_path: Path, monkeypatch)
     monkeypatch.setattr("sys.platform", "linux")
     staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    helper_dir = tmp_path / f"ScanSort.helper-{__version__}"
+
     with patch("scansort.updater.process.subprocess.Popen") as mock_popen:
         spawn_update_helper(install_dir, staged_dir, __version__, parent_pid=1)
-    _, kwargs = mock_popen.call_args
+
+    assert helper_dir.is_dir()
+    argv, kwargs = mock_popen.call_args
+    assert argv[0][0] == str(helper_dir / "ScanSort.exe")
     assert "creationflags" not in kwargs
     assert kwargs["cwd"] == str(install_dir.parent)
 
@@ -159,8 +170,51 @@ def test_spawn_update_helper_missing_exe_raises(tmp_path: Path):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
     empty = tmp_path / f"ScanSort.stage-{__version__}"
     empty.mkdir()
-    with pytest.raises(UpdateError, match="ScanSort.exe"):
+    with pytest.raises(
+        UpdateError, match="Staged update does not contain ScanSort.exe"
+    ):
         spawn_update_helper(install_dir, empty, __version__, parent_pid=1)
+
+
+def test_spawn_update_helper_cleans_preexisting_helper_dir(tmp_path: Path):
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
+    install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    helper_dir = _make_tree(tmp_path, f"ScanSort.helper-{__version__}", "old_helper")
+
+    with patch("scansort.updater.process.subprocess.Popen"):
+        spawn_update_helper(install_dir, staged_dir, __version__, parent_pid=1)
+
+    assert (helper_dir / "ScanSort.exe").read_bytes() == b"new"
+
+
+def test_spawn_update_helper_missing_helper_exe_raises(tmp_path: Path, monkeypatch):
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
+    install_dir = _make_tree(tmp_path, "ScanSort", "old")
+
+    def bad_copytree(src, dst):
+        Path(dst).mkdir(parents=True, exist_ok=True)
+        # copy without ScanSort.exe
+
+    monkeypatch.setattr("scansort.updater.process.shutil.copytree", bad_copytree)
+    with pytest.raises(
+        UpdateError, match="Prepared helper directory does not contain ScanSort.exe"
+    ):
+        spawn_update_helper(install_dir, staged_dir, __version__, parent_pid=1)
+
+
+def test_spawn_update_helper_copytree_failure_raises(tmp_path: Path, monkeypatch):
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
+    install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    with (
+        patch(
+            "scansort.updater.process.shutil.copytree",
+            side_effect=OSError(13, "denied"),
+        ),
+        pytest.raises(
+            UpdateError, match="Could not prepare self-update helper directory"
+        ),
+    ):
+        spawn_update_helper(install_dir, staged_dir, __version__, parent_pid=1)
 
 
 def test_spawn_update_helper_popen_failure_raises(tmp_path: Path, monkeypatch):

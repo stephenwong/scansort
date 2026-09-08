@@ -38,6 +38,7 @@ def test_cleanup_stale_updates_removes_old_stages_and_backups(tmp_path: Path):
     install_dir = _make_tree(tmp_path, "ScanSort", "old")
     keep_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
     stale_dir = _make_tree(tmp_path, "ScanSort.stage-0.1.0", "old")
+    stale_helper = _make_tree(tmp_path, "ScanSort.helper-0.1.0", "old")
     stale_old = _make_tree(tmp_path, "ScanSort.old-123", "old")
     (tmp_path / "ScanSort.stage-0.1.0-corrupt").write_text("junk", encoding="utf-8")
 
@@ -45,6 +46,7 @@ def test_cleanup_stale_updates_removes_old_stages_and_backups(tmp_path: Path):
 
     assert keep_dir.exists()
     assert not stale_dir.exists()
+    assert not stale_helper.exists()
     assert not stale_old.exists()
     assert not (tmp_path / "ScanSort.stage-0.1.0-corrupt").exists()
     assert install_dir.exists()

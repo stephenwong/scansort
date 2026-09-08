@@ -30,6 +30,7 @@ def cleanup_stale_updates(install_dir: Path, keep: Path | None = None) -> None:
     install_dir = Path(install_dir)
     for pattern in (
         f"{install_dir.name}.stage-*",
+        f"{install_dir.name}.helper-*",
         f"{install_dir.name}.old-*",
     ):
         for entry in install_dir.parent.glob(pattern):

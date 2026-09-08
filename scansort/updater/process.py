@@ -4,6 +4,7 @@ import contextlib
 import ctypes
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -133,21 +134,42 @@ def spawn_update_helper(
 ) -> None:
     """Spawn the staged build as the detached ``--self-update`` helper.
 
+    To avoid Windows file locking (`WinError 5` / `WinError 32`) on the staged
+    directory during the atomic swap, the staged tree is copied to an isolated
+    helper directory (`<install_dir>.helper-<version>`). The helper runs from
+    this copy so ``staged_dir`` has no open file or DLL handles and can be
+    renamed cleanly into ``install_dir``.
+
     The old process must exit right after this returns so the helper can take
     over the instance lock and swap the install directory.
 
     Raises:
         UpdateError: If the staged executable is missing or cannot be launched.
     """
-    executable = Path(staged_dir) / EXECUTABLE_NAME
-    if not executable.is_file():
+    install_dir = Path(install_dir)
+    staged_dir = Path(staged_dir)
+    staged_exe = staged_dir / EXECUTABLE_NAME
+    if not staged_exe.is_file():
         raise UpdateError("Staged update does not contain ScanSort.exe.")
+
+    helper_dir = install_dir.parent / f"{install_dir.name}.helper-{version}"
+    if helper_dir.exists():
+        shutil.rmtree(helper_dir, ignore_errors=True)
+    try:
+        shutil.copytree(staged_dir, helper_dir)
+    except OSError as e:
+        raise UpdateError(f"Could not prepare self-update helper directory: {e}") from e
+
+    helper_exe = helper_dir / EXECUTABLE_NAME
+    if not helper_exe.is_file():
+        raise UpdateError("Prepared helper directory does not contain ScanSort.exe.")
+
     logger.info(
         "Spawning self-update helper (PID: %d, version: %s)...", parent_pid, version
     )
     _popen_detached(
         [
-            str(executable),
+            str(helper_exe),
             "--self-update",
             str(parent_pid),
             str(install_dir),
