@@ -12,7 +12,7 @@ ScanSort is a set-and-forget Windows desktop app that watches your scanner's out
 
 ---
 
-## How It Works
+## ⚡ How It Works
 
 ```mermaid
 flowchart LR
@@ -30,20 +30,20 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 
 ### 🤖 Smart AI Classification
 
-- **Reads your documents** — Gemini AI examines the full content of each scan (text, logos, layouts) and picks the best folder from your existing directory structure.
-- **Uses your folder structure** — ScanSort discovers your real Documents hierarchy and matches scans to the deepest, most specific subfolder. No setup or folder configuration required.
-- **Event & trip awareness** — Folders like `2026 Sydney Marathon` or `Tokyo Trip 2025` are recognised automatically. ScanSort cross-references document dates and locations against event timing to route related receipts, tickets, and invoices correctly.
-- **Keyword hints** — Optionally provide a `folder_hints.json` file to help the AI with ambiguous folder names (see [Folder Hints](#folder-hints) below).
-- **Confidence gating** — Documents below 70% classification confidence go to `_Review_Needed` instead of being misfiled.
+- 📖 **Reads your documents** — Gemini AI examines the full content of each scan (text, logos, layouts) and picks the best folder from your existing directory structure.
+- 🌳 **Uses your folder structure** — ScanSort discovers your real Documents hierarchy and matches scans to the deepest, most specific subfolder. No setup or folder configuration required.
+- ✈️ **Event & trip awareness** — Folders like `2026 Sydney Marathon` or `Tokyo Trip 2025` are recognised automatically. ScanSort cross-references document dates and locations against event timing to route related receipts, tickets, and invoices correctly.
+- 💡 **Keyword hints** — Optionally provide a `folder_hints.json` file to help the AI with ambiguous folder names (see [Folder Hints](#folder-hints) below).
+- 🎯 **Confidence gating** — Documents below 70% classification confidence go to `_Review_Needed` instead of being misfiled.
 
 ---
 
 ### 🖥️ Desktop Integration
 
-- **System tray app** — Runs quietly in your notification area. Pause/resume monitoring, undo moves, browse your folder taxonomy, open settings, and check for updates — all from the tray icon.
-- **Settings dialog** — A visual settings window to configure folders, pick your Gemini model, manage your API key securely, toggle auto-start, and explore your folder tree with a built-in folder picker. Changes apply instantly to the running watcher.
-- **Windows notifications** — Native toast notifications tell you when a document is filed (click to open the folder), when something fails (with a "View Logs" button), or when an update is available.
-- **Auto-start on login** — Optionally launches at boot via Windows Registry so your scans are always filed, even if you forget to open the app.
+- 🔲 **System tray app** — Runs quietly in your notification area. Pause/resume monitoring, undo moves, browse your folder taxonomy, open settings, and check for updates — all from the tray icon.
+- ⚙️ **Settings dialog** — A visual settings window to configure folders, pick your Gemini model, manage your API key securely, toggle auto-start, and explore your folder tree with a built-in folder picker. Changes apply instantly to the running watcher.
+- 🔔 **Windows notifications** — Native toast notifications tell you when a document is filed (click to open the folder), when something fails (with a "View Logs" button), or when an update is available.
+- 🚀 **Auto-start on login** — Optionally launches at boot via Windows Registry so your scans are always filed, even if you forget to open the app.
 
 <p align="center">
   <img src="docs/images/tray-menu.png" alt="System tray menu">
@@ -53,25 +53,25 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 
 ### 🔒 Safety & Reliability
 
-- **Never loses files** — All moves are atomic with automatic collision resolution. If `260901_Electricity_Bill.pdf` already exists, ScanSort creates `260901_Electricity_Bill_1.pdf`.
-- **Duplicate detection** — SHA-256 hashing catches re-scans before they hit the AI, saving API quota and avoiding duplicates.
-- **Undo support** — Misplaced a document? Undo from the tray menu or command line. Run it multiple times to roll back successive filings.
-- **Scan stability** — Waits for your scanner to finish writing before processing, so multi-page and slow scans are never partially filed.
-- **Catches up on startup** — Files that arrived while the app was closed are automatically processed when monitoring starts.
-- **Secure API key storage** — Your Gemini key is stored in the OS credential vault (Windows Credential Manager), never in a config file.
+- 🛡️ **Never loses files** — All moves are atomic with automatic collision resolution. If `260901_Electricity_Bill.pdf` already exists, ScanSort creates `260901_Electricity_Bill_1.pdf`.
+- 🔁 **Duplicate detection** — SHA-256 hashing catches re-scans before they hit the AI, saving API quota and avoiding duplicates.
+- ↩️ **Undo support** — Misplaced a document? Undo from the tray menu or command line. Run it multiple times to roll back successive filings.
+- ⏳ **Scan stability** — Waits for your scanner to finish writing before processing, so multi-page and slow scans are never partially filed.
+- 📥 **Catches up on startup** — Files that arrived while the app was closed are automatically processed when monitoring starts.
+- 🔐 **Secure API key storage** — Your Gemini key is stored in the OS credential vault (Windows Credential Manager), never in a config file.
 
 ---
 
 ### 🔍 Search & Organisation
 
-- **Standardised filenames** — Every document becomes `YYMMDD_Description.pdf` (e.g. `260901_Origin_Energy_Electricity_Bill.pdf`).
-- **Windows Search indexing** — Embeds title, summary, and keywords as PDF metadata so documents appear in Windows Start Menu and Explorer searches.
-- **Auto page orientation** — Corrects sideways and upside-down pages automatically.
-- **Image support** — JPEGs, PNGs, and multi-page TIFFs are converted to searchable PDFs before filing.
+- 📝 **Standardised filenames** — Every document becomes `YYMMDD_Description.pdf` (e.g. `260901_Origin_Energy_Electricity_Bill.pdf`).
+- 🔎 **Windows Search indexing** — Embeds title, summary, and keywords as PDF metadata so documents appear in Windows Start Menu and Explorer searches.
+- 🔄 **Auto page orientation** — Corrects sideways and upside-down pages automatically.
+- 🖼️ **Image support** — JPEGs, PNGs, and multi-page TIFFs are converted to searchable PDFs before filing.
 
 ---
 
-## What Happens Under the Hood
+## 🔧 What Happens Under the Hood
 
 ```mermaid
 flowchart TD
@@ -93,7 +93,7 @@ flowchart TD
 
 ---
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
 
@@ -136,7 +136,7 @@ uv run scansort watch
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 All settings can be changed via the **Settings dialog** (tray → Settings...) or via the CLI. Configuration is stored in `%APPDATA%\ScanSort\config.json`.
 
@@ -157,7 +157,7 @@ View current settings: `uv run scansort config --show`
 
 ---
 
-## CLI Quick Reference
+## 💻 CLI Quick Reference
 
 | Command | What it does |
 | :--- | :--- |
@@ -181,7 +181,7 @@ View current settings: `uv run scansort config --show`
 
 ---
 
-## Folder Hints
+## 💡 Folder Hints
 
 If some of your folder names are ambiguous, you can help the AI with a `folder_hints.json` file in `%APPDATA%\ScanSort\` (or `~/.config/scansort/` on Linux):
 
@@ -197,7 +197,7 @@ These keywords are injected into the AI classification prompt to improve accurac
 
 ---
 
-## File Naming
+## 📝 File Naming
 
 All documents are renamed to a clean, consistent format:
 
@@ -213,7 +213,7 @@ Example: `260901_Origin_Energy_Electricity_Bill.pdf`
 
 ---
 
-## Automatic Updates
+## 🔄 Automatic Updates
 
 Standalone Windows builds check for updates from GitHub Releases on each launch. When a new version is found, it downloads, verifies, and installs automatically with a rollback-safe swap — no admin rights needed. A toast notification lets you know when an update is applied.
 
@@ -221,7 +221,7 @@ Disable with `scansort config --auto-update disable`, or check manually with `sc
 
 ---
 
-## For Developers
+## 🛠️ For Developers
 
 ### Running Tests
 
