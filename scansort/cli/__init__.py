@@ -5,6 +5,7 @@ from scansort.cli.history import handle_history
 from scansort.cli.logs import handle_logs
 from scansort.cli.parser import build_parser
 from scansort.cli.rescan import handle_rescan
+from scansort.cli.review import handle_review
 from scansort.cli.root import _attach_parent_console, main_cli
 from scansort.cli.stats import handle_stats
 from scansort.cli.undo import handle_undo
@@ -17,6 +18,7 @@ __all__ = [
     "handle_watch",
     "handle_config",
     "handle_undo",
+    "handle_review",
     "handle_rescan",
     "handle_check_update",
     "handle_self_update",

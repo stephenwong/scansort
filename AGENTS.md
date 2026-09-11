@@ -41,6 +41,7 @@ scansort/
 │   │   ├── logs.py             # Log viewing, filtering, tailing, and maintenance handler
 │   │   ├── parser.py           # Unified argument parser builder
 │   │   ├── rescan.py           # Taxonomy discovery and display handler
+│   │   ├── review.py           # Interactive review session handler (--gui, --cli, --limit)
 │   │   ├── root.py             # Main CLI execution router and console attachment
 │   │   ├── stats.py            # Aggregate metrics, token usage, and cost analytics handler
 │   │   ├── undo.py             # Reversal command handler
@@ -67,6 +68,7 @@ scansort/
 │   │   ├── coordinator.py      # End-to-end ScanSortPipeline coordinator
 │   │   ├── dispatcher.py       # Destination safety resolution, collision handling, and atomic filing
 │   │   ├── hasher.py           # Streaming SHA-256 duplicate scan interception
+│   │   ├── review.py           # Review queue discovery, atomic filing, & dismissal under lock
 │   │   ├── stabilizer.py       # Exclusive file-lock polling and size growth tracker
 │   │   ├── undo.py             # Filing move reversal, drop folder restoration, & audit update
 │   │   ├── watcher.py          # Rust-powered watchfiles monitor with debouncing
@@ -82,6 +84,7 @@ scansort/
 │   ├── ui/                     # Desktop system tray and settings user interface
 │   │   ├── __init__.py         # Package interface re-exports
 │   │   ├── icon.py             # Procedural high-DPI Pillow icons (active & paused badge states)
+│   │   ├── review.py           # Tkinter review dialog with live suggestions & keyword hints
 │   │   ├── settings.py         # Tkinter settings modal dialog with treeview folder picker & hot-reload
 │   │   └── tray.py             # Pystray background system tray application & menu actions
 │   └── updater/                # Modular GitHub Releases self-update engine
@@ -97,9 +100,9 @@ scansort/
 │   ├── core/                   # Tests for config, constants, and fs utilities
 │   ├── document/               # Tests for converter and metadata engines
 │   ├── logging/                # Tests for audit, setup, cost, and gemini_logger
-│   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, stabilizer, undo, watcher, worker
+│   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, review, stabilizer, undo, watcher, worker
 │   ├── platform/               # Tests for autorun, console, instance_guard, notifications, secrets, toasts
-│   ├── ui/                     # Tests for tray application, procedural icon, and settings dialog
+│   ├── ui/                     # Tests for tray application, procedural icon, review dialog, and settings dialog
 │   ├── updater/                # Tests for downloader, feed, installer, process, and state
 │   └── conftest.py             # Global test isolation fixtures & hermetic mocks
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
@@ -227,6 +230,17 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
   - CLI rendering (`render_taxonomy_tree` ASCII trees).
   - Nested System Tray submenus (`Browse Destination Folders >`).
   - Interactive `ttk.Treeview` directory picker in Settings.
+
+### R. Interactive Review & Self-Learning Feedback Loop
+- **Review Queue Discovery:** `get_review_queue()` in `scansort.pipeline.review` scans the designated fallback directory (`Documents/_Review_Needed/`), excluding the `Duplicates/` folder, and cross-references audit history in `history.jsonl` to attach Gemini's suggested folder, document summary, classification type, and routing rationale to each `ReviewItem`.
+- **Atomic Manual Filing & Metadata Synchronization:** `file_reviewed_item()` files documents atomically to user-specified destinations adhering strictly to Invariant G (`target_dir.is_relative_to(docs_root)`). It updates PDF XMP metadata with the chosen title and folder keywords prior to moving, resolves filename collisions (`YYMMDD_<Description>_<N>.pdf`), writes a `REVIEWED` status entry to both `history.jsonl` and `history.csv`, and executes within the interprocess `operations.lock`.
+- **Self-Learning Hints Ingestion:** When filing reviewed items with an optional keyword hint, `add_folder_hint()` saves aliases into `folder_hints.json` with BOM protection (`utf-8-sig`) and dictionary sorting, closing the self-learning feedback loop so Gemini automatically classifies future scans to that destination.
+- **Unified Dual Presentation:** Both GUI (`ReviewDialog` in `scansort.ui.review`) and CLI (`scansort review` in `scansort.cli.review`) share the identical underlying pipeline engine (`scansort.pipeline.review`). GUI review dialog provides visual side-by-side diagnosis, date/description editing, folder auto-completion, keyword hint creation, and direct file launching via `open_in_file_manager`. The system tray dynamically reflects unreviewed counts (`Review Needed (N)...`).
+
+### S. Python Exception Handling Standard (Parenthesized Tuples — PEP 758)
+- **Always Parenthesize Multiple Exceptions:** When catching multiple exception types in an `except` or `except*` clause, you **MUST ALWAYS** enclose them in a parenthesized tuple: `except (TypeError, ValueError):` or `except (OSError, ValueError) as exc:`.
+- **Python 3.14 & PEP 758 Context:** Python 3.14 introduced PEP 758 ("Allow unparenthesized except and except* blocks"), which optionally permits dropping parentheses when no `as` alias is used (e.g. `except A, B:`). However, whenever an `as` alias is added (e.g. `except A, B as e:`), Python 3.14 raises `SyntaxError: multiple exception types must be parenthesized when using 'as'`.
+- **Review Noise & Compatibility:** Because Python 3.0 through 3.13 strictly rejected `except A, B:`, code review agents, linters, and external tools will continually flag unparenthesized exceptions as Python 2 artifacts or syntax errors. Parenthesizing multiple exceptions satisfies PEP 8, guarantees backward/forward compatibility, and prevents recurring review rejections. Never omit parentheses when catching multiple exception types.
 
 ---
 

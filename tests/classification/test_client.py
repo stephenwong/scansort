@@ -144,6 +144,7 @@ def test_path_traversal_target_folder_blocked(tmp_path: Path):
     cls._cached_key = "AIzaSyTest"
     res = cls.classify_document(dummy, taxonomy=["Utilities"])
     assert res.target_folder == "_Review_Needed"
+    assert res.suggested_folder == ""
 
 
 def test_gemini_api_error_handled(tmp_path: Path):
@@ -622,3 +623,29 @@ def test_classify_document_event_date_cross_reference_response(minimal_pdf: Path
         "Matched discovered taxonomy folder '2026 Sydney Marathon'"
         in res.routing_rationale
     )
+
+
+def test_classification_preserves_suggested_folder_on_fallback(minimal_pdf: Path):
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260815",
+            "description": "Drummoyne_Dental_Clinic",
+            "target_folder": "Health/Dental",
+            "confidence": 0.58,
+            "document_type": "Invoice",
+            "summary": "Dental consultation invoice",
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+
+    taxonomy = ["Health", "Utilities"]
+    res = classifier.classify_document(minimal_pdf, taxonomy=taxonomy)
+
+    assert res.target_folder == "_Review_Needed"
+    assert res.suggested_folder == "Health/Dental"
+    assert res.confidence == 0.58

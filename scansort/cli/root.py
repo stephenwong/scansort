@@ -9,6 +9,7 @@ from scansort.cli.history import handle_history
 from scansort.cli.logs import handle_logs
 from scansort.cli.parser import build_parser
 from scansort.cli.rescan import handle_rescan
+from scansort.cli.review import handle_review
 from scansort.cli.stats import handle_stats
 from scansort.cli.undo import handle_undo
 from scansort.cli.update import handle_check_update, handle_self_update
@@ -39,6 +40,7 @@ def main_cli(args: list[str] | None = None) -> int:
         "watch": handle_watch,
         "config": handle_config,
         "undo": handle_undo,
+        "review": handle_review,
         "rescan": handle_rescan,
         "check-update": handle_check_update,
         "logs": handle_logs,

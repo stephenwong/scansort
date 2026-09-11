@@ -38,6 +38,15 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 
 ---
 
+### 🗂️ Interactive Review & Self-Learning
+
+- 📋 **Triage unfiled scans** — Documents placed in `_Review_Needed` (low confidence or missing folder) can be reviewed and filed interactively through a visual desktop dialog or in your terminal (`scansort review`).
+- 💡 **AI routing suggestions** — ScanSort preserves what Gemini understood from the document (document type, summary, and suggested folder) so you can accept suggestions with a single click.
+- 🧠 **Self-learning feedback loop** — When you choose or refine a destination folder, you can optionally teach ScanSort a new keyword hint. It automatically updates `folder_hints.json`, ensuring future scans match that folder with high confidence.
+- 🖱️ **System tray counter** — The system tray menu dynamically indicates pending reviews (e.g. `Review Needed (3)...`), allowing 1-click access to triage scans.
+
+---
+
 ### 🖥️ Desktop Integration
 
 - 🔲 **System tray app** — Runs quietly in your notification area. Pause/resume monitoring, undo moves, browse your folder taxonomy, open settings, and check for updates — all from the tray icon.
@@ -166,6 +175,10 @@ View current settings: `uv run scansort config --show`
 | `scansort watch --minimized` | Start without banner output |
 | `scansort config --show` | View current configuration |
 | `scansort config --set-key <KEY>` | Store API key securely |
+| `scansort review` | Interactively review & file documents in `_Review_Needed` |
+| `scansort review --gui` | Open the graphical review dialog |
+| `scansort review --cli` | Review unfiled scans in the terminal |
+| `scansort review --limit 10` | Limit review session to first 10 documents |
 | `scansort undo` | Reverse the last filing (repeatable) |
 | `scansort rescan` | Refresh & display folder taxonomy |
 | `scansort history` | View recent filing history |
@@ -193,7 +206,9 @@ If some of your folder names are ambiguous, you can help the AI with a `folder_h
 }
 ```
 
-These keywords are injected into the AI classification prompt to improve accuracy. Event and trip folders (conferences, vacations, marathons) generally don't need hints — ScanSort recognises them automatically from dates and context.
+These keywords are injected into the AI classification prompt to improve accuracy. You can edit this file manually, or let ScanSort learn them automatically: whenever you file a document using the Review Dialog (`scansort review`), you can teach ScanSort a new keyword hint in one step.
+
+Event and trip folders (conferences, vacations, marathons) generally don't need hints — ScanSort recognises them automatically from dates and context.
 
 ---
 
@@ -248,9 +263,9 @@ scansort/
 │   ├── core/              # Configuration, constants, filesystem utilities
 │   ├── document/          # PDF conversion, metadata embedding, orientation
 │   ├── logging/           # Audit logs, cost tracking, diagnostics
-│   ├── pipeline/          # Watcher, stabiliser, hasher, dispatcher, worker
+│   ├── pipeline/          # Watcher, stabiliser, hasher, review queue, dispatcher, worker
 │   ├── platform/          # OS integrations (autorun, credentials, toasts)
-│   ├── ui/                # System tray, settings dialog, icon generator
+│   ├── ui/                # System tray, review dialog, settings dialog, icon generator
 │   └── updater/           # GitHub Releases self-update engine
 ├── tests/                 # Pytest test suite (mirrors package structure)
 ├── working-docs/          # PRD and working documentation

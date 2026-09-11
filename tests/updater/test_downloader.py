@@ -44,9 +44,13 @@ def _release_zip_bytes(marker: bytes = b"new-exe") -> bytes:
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("ScanSort.exe", marker)
-        archive.writestr("_internal/module.py", b"print('x')\n")
-        archive.writestr("emptydir/", b"")
+        for arcname, data in [
+            ("ScanSort.exe", marker),
+            ("_internal/module.py", b"print('x')\n"),
+            ("emptydir/", b""),
+        ]:
+            zinfo = zipfile.ZipInfo(arcname, date_time=(2026, 1, 1, 0, 0, 0))
+            archive.writestr(zinfo, data)
     return buffer.getvalue()
 
 

@@ -146,6 +146,10 @@ class DocumentClassification(GeminiClassificationResponse):
 
     model_config = ConfigDict(extra="allow")
 
+    suggested_folder: str = Field(
+        default="",
+        description="Original folder suggested by classifier before review gating",
+    )
     routing_rationale: str = Field(
         default="",
         description="Explanation of the destination folder routing decision",

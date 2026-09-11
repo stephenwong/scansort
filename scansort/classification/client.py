@@ -101,7 +101,7 @@ class GeminiClassifier:
         try:
             conf = float(data.get("confidence", 0.0) or 0.0)
             conf = conf if math.isfinite(conf) else 0.0
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             # Malformed confidence must route to _Review_Needed, not abort or
             # bypass the threshold (NaN/Infinity comparisons are unreliable).
             conf = 0.0
@@ -110,7 +110,7 @@ class GeminiClassifier:
         try:
             orient_val = int(data.get("orientation_correction", 0))
             orient = orient_val if orient_val in {0, 90, 180, 270} else 0
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             orient = 0
 
         summary = str(data.get("summary", "") or "").strip()
@@ -118,11 +118,13 @@ class GeminiClassifier:
 
         routing_rationale = ""
         clean_target = target.strip()
+        suggested_folder = ""
         if not relative_folder_is_safe(clean_target):
             target = REVIEW_NEEDED_DIR
             routing_rationale = f"Unsafe target folder '{clean_target}' rejected -> routed to {REVIEW_NEEDED_DIR}."
         else:
             target = normalize_relative_folder(clean_target)
+            suggested_folder = target
             if doc_type.lower() == "blank":
                 target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
                 routing_rationale = (
@@ -144,6 +146,7 @@ class GeminiClassifier:
             document_date=doc_date,
             description=desc,
             target_folder=target,
+            suggested_folder=suggested_folder,
             confidence=conf,
             orientation_correction=orient,
             document_type=doc_type,

@@ -61,3 +61,55 @@ def test_load_folder_hints_utf8_bom(tmp_path: Path):
     hints = load_folder_hints(hints_file)
     assert "Tax/2026" in hints
     assert hints["Tax/2026"] == ["ato", "return"]
+
+
+def test_save_folder_hints_writes_atomically_and_sorted(tmp_path: Path):
+    from scansort.classification.hints import save_folder_hints
+
+    hints_file = tmp_path / "folder_hints.json"
+    hints = {
+        "Utilities/Power": ["electricity", "origin"],
+        "Health/Dental": ["dentist", "teeth"],
+    }
+    save_folder_hints(hints, hints_path=hints_file)
+
+    assert hints_file.exists()
+    content = hints_file.read_text(encoding="utf-8-sig")
+    loaded = json.loads(content)
+    assert loaded == hints
+    # Ensure keys are sorted deterministically
+    keys = list(loaded.keys())
+    assert keys == ["Health/Dental", "Utilities/Power"]
+
+
+def test_add_folder_hint_creates_and_updates_mappings(tmp_path: Path):
+    from scansort.classification.hints import add_folder_hint
+
+    hints_file = tmp_path / "folder_hints.json"
+
+    # Add single keyword to new folder
+    res = add_folder_hint("Health\\Dental", "Dentist", hints_path=hints_file)
+    assert "Health/Dental" in res
+    assert res["Health/Dental"] == ["dentist"]
+
+    # Add multiple keywords including duplicates and uppercase
+    res = add_folder_hint(
+        "Health/Dental",
+        ["teeth", "DENTIST", "Bupa Dental", "  "],
+        hints_path=hints_file,
+    )
+    assert res["Health/Dental"] == ["dentist", "teeth", "bupa dental"]
+
+    # Re-adding identical keywords is a no-op (file mtime unchanged)
+    mtime_before = hints_file.stat().st_mtime_ns
+    res_noop = add_folder_hint(
+        "Health/Dental",
+        ["teeth", "dentist"],
+        hints_path=hints_file,
+    )
+    assert res_noop == res
+    assert hints_file.stat().st_mtime_ns == mtime_before
+
+    # Verify on-disk persistence
+    disk_hints = load_folder_hints(hints_file)
+    assert disk_hints == res

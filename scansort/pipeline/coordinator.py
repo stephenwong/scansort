@@ -133,6 +133,9 @@ class ScanSortPipeline:
             reason = getattr(classification, "folder_reasoning", None)
             if isinstance(reason, str) and reason.strip():
                 entry["folder_reasoning"] = reason.strip()
+            suggested = getattr(classification, "suggested_folder", None)
+            if isinstance(suggested, str) and suggested.strip():
+                entry["suggested_folder"] = suggested.strip()
             rationale = getattr(classification, "routing_rationale", None)
             if isinstance(rationale, str) and rationale.strip():
                 entry["routing_rationale"] = rationale.strip()

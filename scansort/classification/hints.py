@@ -6,7 +6,7 @@ from pathlib import Path
 
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HINTS_FILENAME
-from scansort.core.fs import normalize_relative_folder
+from scansort.core.fs import atomic_write, normalize_relative_folder
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +60,56 @@ def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
     except (json.JSONDecodeError, OSError, ValueError) as e:
         logger.warning("Failed to load folder hints from %s: %s", path, e)
         return {}
+
+
+def save_folder_hints(
+    hints: dict[str, list[str]], hints_path: Path | None = None
+) -> None:
+    """Atomically write user keyword hints to folder_hints.json.
+
+    Args:
+        hints: Dictionary mapping normalized relative folder paths to keyword strings.
+        hints_path: Optional custom path to folder_hints.json.
+    """
+    path = hints_path or get_default_hints_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(hints, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    atomic_write(path, serialized)
+    logger.debug("Saved %d folder hint mappings to %s", len(hints), path)
+
+
+def add_folder_hint(
+    folder: str,
+    keywords: list[str] | str,
+    hints_path: Path | None = None,
+) -> dict[str, list[str]]:
+    """Add one or more keyword hints for a target folder and persist to disk.
+
+    Args:
+        folder: Target destination folder path.
+        keywords: Keyword string or list of keyword strings to associate.
+        hints_path: Optional custom path to folder_hints.json.
+
+    Returns:
+        Updated dictionary of all folder hint mappings.
+    """
+    path = hints_path or get_default_hints_path()
+    current = load_folder_hints(path)
+    norm_folder = normalize_folder_key(folder)
+    if not norm_folder:
+        return current
+
+    kw_list = [keywords] if isinstance(keywords, str) else list(keywords)
+    existing_kws = current.get(norm_folder, [])
+    updated_kws = list(existing_kws)
+    for kw in kw_list:
+        if isinstance(kw, str):
+            clean_kw = kw.strip().lower()
+            if clean_kw and clean_kw not in updated_kws:
+                updated_kws.append(clean_kw)
+
+    if updated_kws != existing_kws:
+        current[norm_folder] = updated_kws
+        save_folder_hints(current, path)
+
+    return current

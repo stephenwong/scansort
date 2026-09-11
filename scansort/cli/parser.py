@@ -77,6 +77,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reverse the last filed document move",
     )
 
+    # review command
+    review_p = subparsers.add_parser(
+        "review",
+        parents=[verbose_parser],
+        help="Review and manually file ambiguous scans from _Review_Needed",
+    )
+    review_p.add_argument(
+        "--gui",
+        "-g",
+        action="store_true",
+        help="Launch the visual review dialog window",
+    )
+    review_p.add_argument(
+        "--cli",
+        "-c",
+        action="store_true",
+        help="Force interactive terminal review session",
+    )
+    review_p.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="Limit number of documents to review",
+    )
+
     # rescan command
     rescan_p = subparsers.add_parser(
         "rescan",

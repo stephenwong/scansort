@@ -17,9 +17,11 @@ from scansort.classification.taxonomy import (
 from scansort.core.config import AppConfig, get_default_app_dir
 from scansort.core.constants import HISTORY_CSV_NAME
 from scansort.core.fs import open_in_file_manager
+from scansort.pipeline.review import get_review_queue
 from scansort.pipeline.undo import run_undo
 from scansort.platform.toasts import show_toast
 from scansort.ui.icon import get_tray_icon
+from scansort.ui.review import open_review_dialog
 from scansort.ui.settings import open_settings_dialog
 from scansort.updater.feed import check_for_updates
 
@@ -107,10 +109,21 @@ class SystemTrayApp:
         )
         pause_action_text = "Resume Monitoring" if paused else "Pause Monitoring"
 
+        review_items = get_review_queue(
+            self.config.documents_root, self.config.fallback_folder
+        )
+        review_count = len(review_items)
+        review_text = (
+            f"Review Needed ({review_count})..."
+            if review_count > 0
+            else "Review Documents..."
+        )
+
         return pystray.Menu(
             pystray.MenuItem(status_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(pause_action_text, lambda icon, item: self.toggle_pause()),
+            pystray.MenuItem(review_text, lambda icon, item: self.open_review()),
             pystray.MenuItem("Undo Last Move", lambda icon, item: self.undo_last()),
             pystray.MenuItem(
                 "Rescan / Refresh Taxonomies", lambda icon, item: self.rescan_taxonomy()
@@ -230,6 +243,41 @@ class SystemTrayApp:
             ):
                 with contextlib.suppress(Exception):
                     dialog.mainloop()
+
+        if not async_task:
+            _task()
+            return None
+        t = threading.Thread(
+            target=_task,
+            daemon=True,
+        )
+        t.start()
+        return t
+
+    def open_review(self, async_task: bool = True) -> threading.Thread | None:
+        """Display the Tkinter review dialog with instant queue triage."""
+
+        def _task():
+            def _on_filed(_dest: Path) -> None:
+                with self._lock:
+                    if self.icon is not None:
+                        self.icon.menu = self._build_menu()
+
+            dialog = open_review_dialog(
+                config=self.config,
+                on_filed=_on_filed,
+            )
+            if (
+                dialog is not None
+                and getattr(dialog, "_owns_root", False)
+                and not getattr(dialog, "_mainloop_running", False)
+            ):
+                with contextlib.suppress(Exception):
+                    dialog.mainloop()
+
+            with self._lock:
+                if self.icon is not None:
+                    self.icon.menu = self._build_menu()
 
         if not async_task:
             _task()

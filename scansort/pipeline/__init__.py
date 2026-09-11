@@ -10,6 +10,12 @@ from scansort.pipeline.dispatcher import (
     resolve_duplicates_dir,
 )
 from scansort.pipeline.hasher import check_duplicate, compute_file_sha256
+from scansort.pipeline.review import (
+    ReviewItem,
+    dismiss_review_item,
+    file_reviewed_item,
+    get_review_queue,
+)
 from scansort.pipeline.stabilizer import is_file_locked, wait_for_file_stability
 from scansort.pipeline.undo import undo_last_move
 from scansort.pipeline.watcher import DropFolderWatcher, should_process_path
@@ -31,4 +37,8 @@ __all__ = [
     "undo_last_move",
     "DropFolderWatcher",
     "should_process_path",
+    "ReviewItem",
+    "get_review_queue",
+    "file_reviewed_item",
+    "dismiss_review_item",
 ]

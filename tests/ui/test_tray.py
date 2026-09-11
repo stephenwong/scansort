@@ -100,12 +100,15 @@ def test_tray_app_rescan_action(tmp_path: Path):
 
 
 def test_tray_app_open_folders(tmp_path: Path):
-    from scansort.core.config import get_default_app_dir
 
     app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
-    app_dir = get_default_app_dir()
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True, exist_ok=True)
 
-    with patch("scansort.ui.tray.open_in_file_manager") as mock_open:
+    with (
+        patch("scansort.ui.tray.get_default_app_dir", return_value=app_dir),
+        patch("scansort.ui.tray.open_in_file_manager") as mock_open,
+    ):
         app.open_drop_folder()
         mock_open.assert_called_once_with(cfg.watch_folder)
 
@@ -231,3 +234,33 @@ def test_tray_app_is_paused_none():
     cfg = AppConfig()
     app = SystemTrayApp(config=cfg, watcher=None)
     assert app.is_paused() is False
+
+
+def test_tray_app_open_review(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+
+    mock_dialog = MagicMock()
+    mock_dialog._owns_root = True
+    mock_dialog._mainloop_running = False
+
+    with patch(
+        "scansort.ui.tray.open_review_dialog", return_value=mock_dialog
+    ) as mock_open:
+        app.open_review(async_task=False)
+        mock_open.assert_called_once()
+        mock_dialog.mainloop.assert_called_once()
+
+
+def test_tray_app_menu_shows_review_count(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+
+    with patch(
+        "scansort.ui.tray.get_review_queue", return_value=[MagicMock(), MagicMock()]
+    ):
+        menu = app._build_menu()
+        review_item = [
+            item
+            for item in menu.items
+            if "Review Needed (2)" in getattr(item, "text", "")
+        ]
+        assert len(review_item) == 1
