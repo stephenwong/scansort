@@ -120,7 +120,7 @@ def get_review_queue(
                                 try:
                                     resolved = str(Path(dest_p).resolve())
                                     path_map[resolved] = rec
-                                except (OSError, ValueError):
+                                except OSError, ValueError:
                                     pass
                             new_fn = rec.get("new_filename")
                             if new_fn:
@@ -159,7 +159,7 @@ def get_review_queue(
         doc_type = str(rec.get("document_type", "Other") or "Other")
         try:
             confidence = float(rec.get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             confidence = 0.0
 
         suggested = str(rec.get("suggested_folder", "") or "").strip()

@@ -51,5 +51,5 @@ def attach_parent_console() -> None:
                 continue
             fd = msvcrt.open_osfhandle(handle, os.O_WRONLY)
             setattr(sys, name, os.fdopen(fd, "w", encoding=encoding, buffering=1))
-    except (AttributeError, ImportError, LookupError, OSError, ValueError):
+    except AttributeError, ImportError, LookupError, OSError, ValueError:
         return

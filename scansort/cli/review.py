@@ -74,7 +74,7 @@ def _run_cli_review(
             default_choice = "1" if item.suggested_folder else "2"
             try:
                 choice = input(f"Choice [{default_choice}]: ").strip() or default_choice
-            except (EOFError, KeyboardInterrupt):
+            except EOFError, KeyboardInterrupt:
                 print("\nReview session cancelled.")
                 return 0
 
@@ -94,7 +94,7 @@ def _run_cli_review(
             if choice == "5":
                 try:
                     confirm = input(f"Delete {item.filename}? [y/N]: ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
+                except EOFError, KeyboardInterrupt:
                     return 0
                 if confirm == "y":
                     dismiss_review_item(
@@ -117,17 +117,19 @@ def _run_cli_review(
                         target_folder = input(
                             "Target folder (e.g. Utilities/Electricity): "
                         ).strip()
-                    except (EOFError, KeyboardInterrupt):
+                    except EOFError, KeyboardInterrupt:
                         return 0
             elif choice == "2":
                 try:
                     target_folder = input(
                         "Target folder (e.g. Utilities/Electricity): "
                     ).strip()
-                except (EOFError, KeyboardInterrupt):
+                except EOFError, KeyboardInterrupt:
                     return 0
             else:
-                print(f"Error: Invalid choice '{choice}'. Please select a valid option.\n")
+                print(
+                    f"Error: Invalid choice '{choice}'. Please select a valid option.\n"
+                )
                 continue
 
             if not target_folder:
@@ -162,7 +164,7 @@ def _run_cli_review(
                 )
                 print(f"Successfully filed to {dest.name} in '{target_folder}'.\n")
                 break
-            except (EOFError, KeyboardInterrupt):
+            except EOFError, KeyboardInterrupt:
                 print("\nReview session cancelled.")
                 return 0
             except (OSError, ValueError) as e:

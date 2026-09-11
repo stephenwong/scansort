@@ -394,7 +394,9 @@ def test_handle_review_cli_invalid_choice_and_recovery(
     assert "Skipped item.pdf" in captured.out
 
 
-def test_handle_review_cli_secondary_prompt_interrupt(tmp_path: Path, monkeypatch, capsys):
+def test_handle_review_cli_secondary_prompt_interrupt(
+    tmp_path: Path, monkeypatch, capsys
+):
     docs = tmp_path / "Documents"
     review_dir = docs / "_Review_Needed"
     review_dir.mkdir(parents=True)
