@@ -6,6 +6,7 @@ transient Windows sharing violations and collision-free backup restoration.
 
 import logging
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -28,13 +29,19 @@ def cleanup_stale_updates(install_dir: Path, keep: Path | None = None) -> None:
     tolerated and deferred to the next update run.
     """
     install_dir = Path(install_dir)
+    current_exe_dir = Path(sys.executable).parent.resolve()
+    keep_resolved = keep.resolve() if keep is not None else None
+
     for pattern in (
         f"{install_dir.name}.stage-*",
         f"{install_dir.name}.helper-*",
         f"{install_dir.name}.old-*",
     ):
         for entry in install_dir.parent.glob(pattern):
-            if keep is not None and entry == keep:
+            resolved = entry.resolve()
+            if keep_resolved is not None and resolved == keep_resolved:
+                continue
+            if resolved == current_exe_dir:
                 continue
             try:
                 if entry.is_dir():

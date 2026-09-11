@@ -234,6 +234,27 @@ def test_announce_applied_update_noop_without_marker(tmp_path: Path):
     mock_toast.assert_not_called()
 
 
+def test_announce_applied_update_cleans_stale_update_dirs(tmp_path: Path, monkeypatch):
+    import scansort.updater as updater
+
+    app_dir = tmp_path / "appdata"
+    app_dir.mkdir()
+    updater.record_applied_update(app_dir / "update_state.json", __version__)
+
+    install_dir = tmp_path / "ScanSort"
+    install_dir.mkdir()
+    (install_dir / "ScanSort.exe").write_bytes(b"installed")
+    helper_dir = tmp_path / "ScanSort.helper-1.1.0"
+    helper_dir.mkdir()
+    (helper_dir / "ScanSort.exe").write_bytes(b"helper")
+
+    monkeypatch.setattr("sys.executable", str(install_dir / "ScanSort.exe"))
+    with patch("scansort.cli.update.show_toast"):
+        _announce_applied_update(app_dir, install_dir=install_dir)
+
+    assert not helper_dir.exists()
+
+
 def test_main_cli_check_update_up_to_date(capsys, monkeypatch):
     monkeypatch.setattr(
         "scansort.cli.update.fetch_latest_release",

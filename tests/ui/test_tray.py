@@ -264,3 +264,16 @@ def test_tray_app_menu_shows_review_count(tmp_path: Path):
             if "Review Needed (2)" in getattr(item, "text", "")
         ]
         assert len(review_item) == 1
+
+
+def test_tray_app_menu_shows_version_in_status_item(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+
+    menu = app._build_menu()
+    status_item = menu.items[0]
+    assert f"ScanSort {__version__}: Monitoring Active" == status_item.text
+
+    mock_watcher.is_paused.return_value = True
+    menu_paused = app._build_menu()
+    status_item_paused = menu_paused.items[0]
+    assert f"ScanSort {__version__}: Monitoring Paused" == status_item_paused.text

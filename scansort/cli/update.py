@@ -17,6 +17,7 @@ from scansort.updater import (
     applied_version,
     available_update,
     check_for_updates,
+    cleanup_stale_updates,
     clear_applied_notification,
     download_and_stage,
     fetch_latest_release,
@@ -31,12 +32,16 @@ from scansort.updater import (
 logger = logging.getLogger(__name__)
 
 
-def announce_applied_update(app_dir: Path) -> None:
+def announce_applied_update(app_dir: Path, install_dir: Path | None = None) -> None:
     """Toast once that a self-installed update is now running, then disarm."""
     state_path = app_dir / UPDATE_STATE_FILENAME
     state = load_state(state_path)
     if not state.get("just_installed"):
         return
+    active_install_dir = (
+        Path(install_dir) if install_dir is not None else Path(sys.executable).parent
+    )
+    cleanup_stale_updates(active_install_dir)
     version = state.get("applied_version")
     label = (
         f"Version {version}"

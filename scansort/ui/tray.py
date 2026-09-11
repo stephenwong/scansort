@@ -9,6 +9,7 @@ from typing import Any
 
 import pystray
 
+from scansort import __version__
 from scansort.classification.taxonomy import (
     build_taxonomy_tree,
     run_rescan,
@@ -105,7 +106,9 @@ class SystemTrayApp:
         """Construct the complete right-click context menu."""
         paused = self.is_paused()
         status_text = (
-            "ScanSort: Monitoring Paused" if paused else "ScanSort: Monitoring Active"
+            f"ScanSort {__version__}: Monitoring Paused"
+            if paused
+            else f"ScanSort {__version__}: Monitoring Active"
         )
         pause_action_text = "Resume Monitoring" if paused else "Pause Monitoring"
 

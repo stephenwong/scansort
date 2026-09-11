@@ -63,6 +63,18 @@ def test_cleanup_stale_updates_tolerates_removal_errors(tmp_path: Path, monkeypa
     assert (tmp_path / "ScanSort.stage-0.1.0").exists()
 
 
+def test_cleanup_stale_updates_skips_running_exe_dir(tmp_path: Path, monkeypatch):
+    install_dir = _make_tree(tmp_path, "ScanSort", "installed")
+    helper_dir = _make_tree(tmp_path, "ScanSort.helper-1.1.0", "running_helper")
+    old_dir = _make_tree(tmp_path, "ScanSort.old-999", "stale_backup")
+
+    monkeypatch.setattr("sys.executable", str(helper_dir / "ScanSort.exe"))
+    cleanup_stale_updates(install_dir)
+
+    assert helper_dir.exists()
+    assert not old_dir.exists()
+
+
 # ---------------------------------------------------------------------------
 # Swap / replace_install_dir & transient lock retries
 # ---------------------------------------------------------------------------
