@@ -338,3 +338,37 @@ def test_corrupt_encrypted_pdf_not_mislabeled_as_password(tmp_path: Path):
     # exercises the decrypt-result-code path without a page probe.
     out = process_pdf_metadata_and_rotation(pdf_path=src, title="T")
     assert out == src
+
+
+def test_existing_outline_and_catalog_preserved(tmp_path: Path):
+    """F64: reprocessing must not strip bookmarks/outlines from a PDF."""
+    src = tmp_path / "bookmarked.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_blank_page(width=72, height=72)
+    writer.add_outline_item("Chapter 1", 0)
+    writer.add_outline_item("Chapter 2", 1)
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    process_pdf_metadata_and_rotation(pdf_path=src, title="Preserved")
+
+    reader = PdfReader(io.BytesIO(src.read_bytes()))
+    assert reader.outline, "outline tree was stripped during reprocessing"
+    assert reader.metadata.get("/Title") == "Preserved"
+
+
+def test_existing_named_destinations_preserved(tmp_path: Path):
+    """F64: named destinations must survive reprocessing."""
+    src = tmp_path / "named_dests.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_named_destination("Dest1", 0)
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    process_pdf_metadata_and_rotation(pdf_path=src, title="Preserved")
+
+    reader = PdfReader(io.BytesIO(src.read_bytes()))
+    root = reader.trailer["/Root"]
+    assert "/Names" in root or "/Dests" in root

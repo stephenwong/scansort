@@ -119,3 +119,28 @@ def test_worker_drains_item_enqueued_during_final_timeout():
     t.join(timeout=2.0)
     assert not t.is_alive()
     assert processed == ["late"]
+
+
+def test_worker_drains_item_racing_terminal_empty_check(tmp_path: Path):
+    """F05: an item enqueued as the queue reports empty must still be drained."""
+    import time
+
+    file_queue = queue.Queue()
+    stop_event = threading.Event()
+    processed: list[Path] = []
+
+    def mock_process(item: Path):
+        processed.append(item)
+
+    def producer():
+        # The worker's first get() times out at ~0.5s; enqueue just after.
+        time.sleep(0.6)
+        file_queue.put(tmp_path / "late.pdf")
+
+    stop_event.set()
+    producer_thread = threading.Thread(target=producer)
+    producer_thread.start()
+    run_pipeline_worker(mock_process, file_queue, stop_event, rate_limit_delay=0.0)
+    producer_thread.join(timeout=2.0)
+
+    assert processed == [tmp_path / "late.pdf"]

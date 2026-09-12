@@ -71,3 +71,35 @@ def test_build_parser_new_subcommands():
     args_comp = parser.parse_args(["completion", "bash"])
     assert args_comp.command == "completion"
     assert args_comp.shell == "bash"
+
+
+def test_parser_history_status_accepts_reviewed():
+    """F21: the review pipeline writes REVIEWED; it must be a valid --status."""
+    args = build_parser().parse_args(["history", "--status", "REVIEWED"])
+    assert args.status == "REVIEWED"
+
+
+def test_parser_rejects_out_of_range_max_depth():
+    """F22: --max-depth must be range-checked at the parser level."""
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["config", "--max-depth", "99"])
+    assert exc.value.code == 2
+
+
+def test_parser_rejects_out_of_range_update_interval():
+    """F22: --update-check-interval must be range-checked at the parser level."""
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["config", "--update-check-interval", "61"])
+    assert exc.value.code == 2
+
+
+def test_parser_accepts_in_range_bounded_values():
+    args = build_parser().parse_args(
+        ["config", "--max-depth", "5", "--update-check-interval", "7"]
+    )
+    assert args.max_depth == 5
+    assert args.update_check_interval == 7

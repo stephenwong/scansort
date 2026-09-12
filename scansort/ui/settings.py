@@ -9,8 +9,14 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from scansort.classification.taxonomy import build_taxonomy_tree, scan_documents_folders
-from scansort.core.config import AppConfig, load_config, save_config
-from scansort.core.constants import SUPPORTED_GEMINI_MODELS
+from scansort.core.config import (
+    AppConfig,
+    get_default_app_dir,
+    load_config,
+    save_config,
+)
+from scansort.core.constants import OPERATIONS_LOCK_FILENAME, SUPPORTED_GEMINI_MODELS
+from scansort.core.fs import interprocess_file_lock
 from scansort.platform.autorun import (
     disable_autorun,
     enable_autorun,
@@ -333,7 +339,9 @@ class SettingsDialog(SingletonToplevel):
     ) -> bool:
         """Persist *new_cfg*, rolling back the saved credential on failure."""
         try:
-            save_config(new_cfg)
+            op_lock = get_default_app_dir() / OPERATIONS_LOCK_FILENAME
+            with interprocess_file_lock(op_lock):
+                save_config(new_cfg)
             return True
         except OSError as e:
             # Roll back the credential so the vault does not disagree with the
@@ -365,8 +373,13 @@ class SettingsDialog(SingletonToplevel):
             actual_autorun = is_autorun_enabled()
             if new_cfg.start_on_boot != actual_autorun:
                 new_cfg.start_on_boot = actual_autorun
-                with contextlib.suppress(OSError):
+                try:
                     save_config(new_cfg)
+                except OSError as e:
+                    # F32: never silently diverge config.json from OS state.
+                    logger.warning(
+                        "Could not persist reconciled start_on_boot setting: %s", e
+                    )
 
         try:
             if self.context_menu_var.get():

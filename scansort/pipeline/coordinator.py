@@ -95,11 +95,12 @@ class ScanSortPipeline:
 
         self.audit_logger.mirror_csv_path = new_config.mirror_csv_path
 
-    def _relative_posix_folder(self, path: Path) -> str:
+    def _relative_posix_folder(
+        self, path: Path, config: AppConfig | None = None
+    ) -> str:
         """Return *path* relative to the documents root as a POSIX-style string."""
-        return str(path.relative_to(self.config.documents_root.resolve())).replace(
-            "\\", "/"
-        )
+        cfg = config or self.config
+        return str(path.relative_to(cfg.documents_root.resolve())).replace("\\", "/")
 
     def _transfer_file(self, source: Path, dest: Path, preserve_source: bool) -> None:
         """Move (or copy) *source* to *dest*, discarding a partial destination on failure."""
@@ -109,7 +110,12 @@ class ScanSortPipeline:
             else:
                 shutil.move(str(source), str(dest))
         except OSError:
-            dest.unlink(missing_ok=True)
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError as cleanup_err:
+                logger.warning(
+                    "Could not remove partial destination %s: %s", dest, cleanup_err
+                )
             raise
 
     def _build_audit_entry(
@@ -162,21 +168,21 @@ class ScanSortPipeline:
         file_hash: str,
         existing_record: dict[str, Any],
         preserve_source: bool = False,
+        config: AppConfig | None = None,
     ) -> Path:
         """Route a detected duplicate scan to the duplicates review folder."""
+        cfg = config or self.config
         logger.info(
             "Duplicate scan detected for %s (hash: %s).",
             file_path.name,
             file_hash[:8],
         )
-        clean_fallback = self.config.fallback_folder.strip("/\\")
-        dup_dest_dir = resolve_duplicates_dir(
-            self.config.documents_root, clean_fallback
-        )
+        clean_fallback = cfg.fallback_folder.strip("/\\")
+        dup_dest_dir = resolve_duplicates_dir(cfg.documents_root, clean_fallback)
 
         desired_dup_name = file_path.name
 
-        if self.config.dry_run:
+        if cfg.dry_run:
             dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
             logger.info(
                 "[DRY RUN] Would route duplicate %s -> %s",
@@ -190,7 +196,7 @@ class ScanSortPipeline:
             dup_dest_dir.mkdir(parents=True, exist_ok=True)
             self._transfer_file(file_path, dup_dest, preserve_source)
 
-        folder_str = self._relative_posix_folder(dup_dest_dir)
+        folder_str = self._relative_posix_folder(dup_dest_dir, cfg)
         summary_str = (
             f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}"
         )
@@ -237,8 +243,10 @@ class ScanSortPipeline:
         classification: DocumentClassification,
         file_hash: str,
         preserve_source: bool = False,
+        config: AppConfig | None = None,
     ) -> Path:
         """Apply rotation, embed metadata, dispatch to destination, and write audit record."""
+        cfg = config or self.config
         keywords = [classification.document_type, classification.target_folder]
         process_pdf_metadata_and_rotation(
             pdf_path=staging_pdf,
@@ -251,22 +259,40 @@ class ScanSortPipeline:
         # Re-check for a duplicate inside the cross-process lock immediately
         # before dispatch: while this process was classifying (a Gemini call),
         # another process may have filed identical content, so dedup must be
-        # atomic with the move.
+        # atomic with the move. The SUCCESS audit record is committed inside the
+        # same critical section (F76) so the next process's dedup check observes
+        # it before the lock is released.
         with interprocess_file_lock(self.operations_lock):
             race_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
-            final_dest = (
-                None
-                if race_record is not None
-                else dispatch_file(
+            if race_record is not None:
+                final_dest = None
+            else:
+                final_dest = dispatch_file(
                     staging_pdf,
-                    self.config.documents_root,
+                    cfg.documents_root,
                     classification,
                     lock_path=None,
                 )
-            )
+                folder_str = self._relative_posix_folder(final_dest.parent, cfg)
+                self.audit_logger.log_scan(
+                    self._build_audit_entry(
+                        file_hash=file_hash,
+                        file_path=file_path,
+                        destination_path=final_dest,
+                        destination_folder=folder_str,
+                        summary=classification.summary,
+                        status=STATUS_SUCCESS,
+                        classification=classification,
+                    )
+                )
+
         if race_record is not None:
             return self._route_duplicate(
-                file_path, file_hash, race_record, preserve_source=preserve_source
+                file_path,
+                file_hash,
+                race_record,
+                preserve_source=preserve_source,
+                config=cfg,
             )
 
         # Remove original file from drop folder if not preserving source
@@ -283,22 +309,6 @@ class ScanSortPipeline:
                     file_path,
                     e,
                 )
-
-        # Derive destination folder relative to documents_root for accurate audit and notifications
-        folder_str = self._relative_posix_folder(final_dest.parent)
-
-        # Record audit log
-        self.audit_logger.log_scan(
-            self._build_audit_entry(
-                file_hash=file_hash,
-                file_path=file_path,
-                destination_path=final_dest,
-                destination_folder=folder_str,
-                summary=classification.summary,
-                status=STATUS_SUCCESS,
-                classification=classification,
-            )
-        )
 
         logger.info("Successfully filed scan: %s -> %s", file_path.name, final_dest)
         notify_file_filed(
@@ -323,6 +333,9 @@ class ScanSortPipeline:
         # 1. Wait for file write stabilization (Rule 3.C). The quiet window is
         # ~1s: advisory lock probes cannot detect plain write()-based writers
         # (scanner drivers, SMB), so size quiescence is the effective guard.
+        # Snapshot the config once: a hot-reload from the tray thread must not
+        # redirect or desync an in-flight filing (F02).
+        config = self.config
         snapshot = self._stabilize_and_snapshot(file_path)
         if snapshot is None:
             return None
@@ -344,15 +357,21 @@ class ScanSortPipeline:
             # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
             staging_pdf = self._stage_to_temp(file_path)
             if staging_pdf is None:
+                self._route_failed_to_review(
+                    file_path,
+                    reason="Failed to stage file to temporary PDF",
+                    preserve_source=preserve_source,
+                    config=config,
+                )
                 return None
 
             # 4. Multimodal analysis and classification via Gemini
             classification = self._classify_scan(staging_pdf)
 
             # 5. Dry-Run Verification before any file mutation or metadata writing
-            if self.config.dry_run:
+            if config.dry_run:
                 target_dir = resolve_destination_dir(
-                    self.config.documents_root, classification.target_folder
+                    config.documents_root, classification.target_folder
                 )
                 desired_name = classification.target_filename
                 simulated_dest = resolve_collision(target_dir, desired_name)
@@ -380,12 +399,16 @@ class ScanSortPipeline:
                 classification=classification,
                 file_hash=file_hash,
                 preserve_source=preserve_source,
+                config=config,
             )
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing
             logger.error("Failed to process scan %s: %s", file_path.name, e)
             self._route_failed_to_review(
-                file_path, reason=str(e), preserve_source=preserve_source
+                file_path,
+                reason=str(e),
+                preserve_source=preserve_source,
+                config=config,
             )
             return None
 
@@ -437,6 +460,7 @@ class ScanSortPipeline:
         file_path: Path,
         reason: str | None = None,
         preserve_source: bool = False,
+        config: AppConfig | None = None,
     ) -> None:
         """Best-effort relocation of an unprocessable inbox file to the review folder.
 
@@ -445,17 +469,18 @@ class ScanSortPipeline:
         degrades to the previous logged-stranded behavior. Users are notified via
         toast in both outcomes.
         """
+        cfg = config or self.config
         try:
-            if self.config.dry_run or not file_path.exists():
+            if cfg.dry_run or not file_path.exists():
                 return
             review_dir = resolve_destination_dir(
-                self.config.documents_root, self.config.fallback_folder
+                cfg.documents_root, cfg.fallback_folder
             )
             with interprocess_file_lock(self.operations_lock):
                 review_dir.mkdir(parents=True, exist_ok=True)
                 review_dest = resolve_collision(review_dir, file_path.name)
                 self._transfer_file(file_path, review_dest, preserve_source)
-            folder_str = self._relative_posix_folder(review_dir)
+            folder_str = self._relative_posix_folder(review_dir, cfg)
             self.audit_logger.log_scan(
                 self._build_audit_entry(
                     file_hash="UNKNOWN",
@@ -477,11 +502,11 @@ class ScanSortPipeline:
             logger.error(
                 "Could not route failed scan %s to review folder: %s", file_path, e
             )
-            display_folder = str(self.config.fallback_folder).replace("\\", "/")
+            display_folder = str(cfg.fallback_folder).replace("\\", "/")
             notify_scan_stranded(
                 file_path.name,
                 display_folder,
-                folder_path=self.config.watch_folder,
+                folder_path=cfg.watch_folder,
                 log_path=self.app_dir / LOG_FILENAME,
             )
 

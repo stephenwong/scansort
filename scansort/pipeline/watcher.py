@@ -67,6 +67,12 @@ class DropFolderWatcher:
         self._running = False
         self._paused = False
         self._lock = threading.Lock()
+        # Shared path -> mtime_ns dedup registry: the resume sweep, cycle
+        # sweeps, and live event batches must agree on what has been queued so a
+        # file is not enqueued twice (F03). Keying on mtime lets a file that is
+        # still growing be re-queued after a stabilization timeout (F07) while
+        # an unchanged file is skipped.
+        self._swept: dict[Path, int] = {}
 
     def is_running(self) -> bool:
         """Check if watcher is currently active."""
@@ -112,25 +118,39 @@ class DropFolderWatcher:
             self.watch_folder = new_folder
             self._interrupt_cycle()
 
-    def _handle_changes(self, changes, seen_paths: set[Path] | None = None) -> None:
+    def _handle_changes(
+        self, changes, seen_paths: dict[Path, int] | None = None
+    ) -> None:
         """Process a batch of debounced change events from watchfiles."""
-        with self._lock:
-            if self._paused:
-                logger.debug("Watcher is paused; ignoring incoming changes.")
-                return
-
-        seen_paths = seen_paths if seen_paths is not None else set()
+        seen = seen_paths if seen_paths is not None else self._swept
         for change_type, path_str in changes:
             if change_type in {Change.added, Change.modified}:
-                self._enqueue_candidate(
-                    Path(path_str), seen_paths, "Detected incoming scan"
-                )
+                self._enqueue_candidate(Path(path_str), seen, "Detected incoming scan")
 
-    def _enqueue_candidate(self, candidate: Path, seen: set[Path], reason: str) -> bool:
-        """Queue *candidate* once if it is a supported, not-yet-seen drop file."""
-        if candidate in seen or not should_process_path(candidate):
-            return False
-        seen.add(candidate)
+    def _enqueue_candidate(
+        self, candidate: Path, seen: dict[Path, int], reason: str
+    ) -> bool:
+        """Queue *candidate* once if it is a supported, not-yet-seen drop file.
+
+        Re-checks the paused flag under the lock so a batch that raced ``pause()``
+        cannot slip an item through (F04), and dedups on ``(path, mtime_ns)`` so a
+        file still being written is re-queued after a stabilization timeout (F07).
+        """
+        with self._lock:
+            if self._paused:
+                logger.debug(
+                    "Watcher is paused; ignoring candidate %s.", candidate.name
+                )
+                return False
+            if not should_process_path(candidate):
+                return False
+            try:
+                mtime_ns = candidate.stat().st_mtime_ns
+            except OSError:
+                return False
+            if seen.get(candidate) == mtime_ns:
+                return False
+            seen[candidate] = mtime_ns
         logger.info("%s: %s", reason, candidate.name)
         self.file_queue.put(candidate)
         return True
@@ -146,9 +166,8 @@ class DropFolderWatcher:
 
         with self._lock:
             is_paused = self._paused
-        swept_paths: set[Path] = set()
         if not is_paused:
-            self._sweep_preexisting_files(folder, swept_paths)
+            self._sweep_preexisting_files(folder)
 
         first_wake = True
         for changes in watch(
@@ -161,10 +180,11 @@ class DropFolderWatcher:
             if first_wake:
                 # watchfiles has registered its baseline by this first wake, so
                 # any file created between the initial sweep and registration is
-                # now visible; sweep again (deduped) to close the gap.
-                self._handle_changes(changes, swept_paths)
+                # now visible; sweep again (deduped by mtime) to close the gap
+                # and to retry any file that grew after a failed stabilization.
+                self._handle_changes(changes)
                 if not is_paused:
-                    self._sweep_preexisting_files(folder, swept_paths)
+                    self._sweep_preexisting_files(folder)
                 first_wake = False
             else:
                 self._handle_changes(changes)
@@ -172,21 +192,32 @@ class DropFolderWatcher:
                 break
 
     def _sweep_preexisting_files(
-        self, folder: Path, seen: set[Path] | None = None
+        self, folder: Path, seen: dict[Path, int] | None = None
     ) -> None:
         """Enqueue supported files already present when a watch cycle starts.
 
         watchfiles only reports changes after registration, so scans that arrived
         while the app was stopped (or were left queued at shutdown) would otherwise
-        never be filed. ``seen`` prevents re-enqueuing across the two sweeps that
-        bracket watcher registration.
+        never be filed. The shared ``(path, mtime_ns)`` registry prevents
+        re-enqueuing across resume/cycle sweeps while still retrying files that
+        changed since the last sweep.
         """
-        seen = seen if seen is not None else set()
+        persistent = seen is None
+        registry = self._swept if persistent else seen
+        present: set[Path] = set()
         try:
             for candidate in sorted(folder.iterdir()):
-                self._enqueue_candidate(candidate, seen, "Queuing pre-existing scan")
+                present.add(candidate)
+                self._enqueue_candidate(
+                    candidate, registry, "Queuing pre-existing scan"
+                )
         except OSError as e:
             logger.warning("Could not enumerate watch folder %s: %s", folder, e)
+        if persistent:
+            # Bound the registry to files still present in the drop folder.
+            for stale in list(registry):
+                if stale not in present:
+                    del registry[stale]
 
     def start(self) -> None:
         """Run the blocking watchfiles event loop until stop() is called."""

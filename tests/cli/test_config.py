@@ -468,3 +468,44 @@ def test_cli_config_set_key_empty_is_rejected(capsys):
         assert main_cli(["config", "--set-key", ""]) == 1
     assert mock_key.called
     assert "Error saving Gemini API key" in capsys.readouterr().err
+
+
+def test_cli_config_set_key_not_persisted_when_sibling_invalid():
+    """F18: an invalid sibling flag must not leave an API key in the vault."""
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.config.set_api_key") as mock_set,
+    ):
+        code = main_cli(
+            [
+                "config",
+                "--set-key",
+                "AIzaSyCombo123",
+                "--documents-folder",
+                str(cfg.watch_folder),
+            ]
+        )
+    assert code == 1
+    mock_set.assert_not_called()
+
+
+def test_cli_config_mutations_serialized_under_lock():
+    """F19: the load-modify-save span must hold the cross-process lock."""
+    import contextlib
+
+    entered: list[Path] = []
+
+    @contextlib.contextmanager
+    def _spy_lock(path):
+        entered.append(path)
+        yield
+
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.config.save_config"),
+        patch("scansort.cli.config.interprocess_file_lock", _spy_lock),
+    ):
+        assert main_cli(["config", "--gemini-model", "gemini-3.5-flash-lite"]) == 0
+    assert entered

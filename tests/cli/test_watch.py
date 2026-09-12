@@ -185,3 +185,20 @@ def test_cli_watch_handles_tray_stop_error(tmp_path: Path):
         exit_code = main_cli(["watch"])
         assert exit_code == 0
         mock_watcher.stop.assert_called_once()
+
+
+def test_cli_watch_downstream_oserror_not_mislabeled_as_lock(tmp_path: Path, capsys):
+    """F27: a runtime OSError must not be reported as an instance-lock failure."""
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    with (
+        patch("scansort.cli.config.load_config", return_value=cfg),
+        patch("scansort.cli.watch.instance_guard", _granted_guard),
+        patch("scansort.cli.watch.announce_applied_update"),
+        patch("scansort.cli.watch.maybe_apply_auto_update", return_value=False),
+        patch(
+            "scansort.cli.watch._run_monitor",
+            side_effect=OSError("console pipe broken"),
+        ),
+    ):
+        assert main_cli(["watch", "--minimized"]) == 1
+    assert "acquiring instance lock" not in capsys.readouterr().err

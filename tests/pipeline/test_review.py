@@ -1,11 +1,14 @@
 """Unit tests for scansort.pipeline.review module."""
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PyPdfError
 
 from scansort.core.config import AppConfig
 from scansort.core.constants import (
@@ -735,3 +738,307 @@ def test_dismiss_review_item_mirrors_to_documents_csv(tmp_path: Path):
             mirror_csv_path=mirror,
         )
     assert "DISMISSED" in mirror.read_text(encoding="utf-8")
+
+
+def test_file_reviewed_item_records_pre_rewrite_digest(tmp_path: Path):
+    """F10: the recorded digest must be of the original bytes, not the rewrite."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "failed.pdf")
+    original_digest = hashlib.sha256(source_pdf.read_bytes()).hexdigest()
+
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+        sha256="UNKNOWN",
+        summary="Failed classification",
+        document_type="Unknown",
+    )
+
+    dest = file_reviewed_item(
+        item=item,
+        target_folder="Health",
+        document_date="260901",
+        description="Recovered_Doc",
+        config=cfg,
+        history_jsonl=app_dir / HISTORY_JSONL_NAME,
+        history_csv=app_dir / HISTORY_CSV_NAME,
+        lock_path=app_dir / "operations.lock",
+    )
+    assert dest.exists()
+    # The in-place metadata rewrite changes the bytes; the digest must predate it.
+    assert hashlib.sha256(dest.read_bytes()).hexdigest() != original_digest
+    entry = json.loads(
+        (app_dir / HISTORY_JSONL_NAME).read_text(encoding="utf-8").strip()
+    )
+    assert entry["sha256"] == original_digest
+
+
+def test_file_reviewed_item_routes_duplicate_to_duplicates_folder(tmp_path: Path):
+    """F12: a duplicate declined by the user routes to Duplicates/ with DUPLICATE."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+    common_kwargs = {
+        "config": cfg,
+        "history_jsonl": app_dir / HISTORY_JSONL_NAME,
+        "history_csv": app_dir / HISTORY_CSV_NAME,
+        "lock_path": app_dir / "operations.lock",
+    }
+
+    first = _create_dummy_pdf(review_dir / "first.pdf")
+    original_bytes = first.read_bytes()
+    file_reviewed_item(
+        item=ReviewItem(
+            file_path=first,
+            filename=first.name,
+            file_size_bytes=first.stat().st_size,
+            modified_time=first.stat().st_mtime,
+            summary="Invoice",
+            document_type="Invoice",
+        ),
+        target_folder="Health",
+        document_date="260901",
+        description="First_Invoice",
+        **common_kwargs,
+    )
+
+    duplicate = review_dir / "duplicate.pdf"
+    duplicate.write_bytes(original_bytes)
+
+    dest = file_reviewed_item(
+        item=ReviewItem(
+            file_path=duplicate,
+            filename=duplicate.name,
+            file_size_bytes=duplicate.stat().st_size,
+            modified_time=duplicate.stat().st_mtime,
+            summary="Invoice",
+            document_type="Invoice",
+        ),
+        target_folder="Health",
+        document_date="260901",
+        description="Duplicate_Invoice",
+        on_duplicate=lambda _record: False,
+        **common_kwargs,
+    )
+
+    assert dest.parent == docs / "_Review_Needed" / "Duplicates"
+    entries = [
+        json.loads(line)
+        for line in (app_dir / HISTORY_JSONL_NAME)
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
+    assert entries[-1]["status"] == "DUPLICATE"
+
+
+def test_file_reviewed_item_files_duplicate_when_user_confirms(tmp_path: Path):
+    """F12: confirming the duplicate prompt files the document normally."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+    common_kwargs = {
+        "config": cfg,
+        "history_jsonl": app_dir / HISTORY_JSONL_NAME,
+        "history_csv": app_dir / HISTORY_CSV_NAME,
+        "lock_path": app_dir / "operations.lock",
+    }
+
+    first = _create_dummy_pdf(review_dir / "first.pdf")
+    original_bytes = first.read_bytes()
+    file_reviewed_item(
+        item=ReviewItem(
+            file_path=first,
+            filename=first.name,
+            file_size_bytes=first.stat().st_size,
+            modified_time=first.stat().st_mtime,
+            summary="Invoice",
+            document_type="Invoice",
+        ),
+        target_folder="Health",
+        document_date="260901",
+        description="First_Invoice",
+        **common_kwargs,
+    )
+    duplicate = review_dir / "duplicate.pdf"
+    duplicate.write_bytes(original_bytes)
+
+    dest = file_reviewed_item(
+        item=ReviewItem(
+            file_path=duplicate,
+            filename=duplicate.name,
+            file_size_bytes=duplicate.stat().st_size,
+            modified_time=duplicate.stat().st_mtime,
+            summary="Invoice",
+            document_type="Invoice",
+        ),
+        target_folder="Health",
+        document_date="260901",
+        description="Duplicate_Invoice",
+        on_duplicate=lambda _record: True,
+        **common_kwargs,
+    )
+
+    assert dest.parent == docs / "Health"
+    entries = [
+        json.loads(line)
+        for line in (app_dir / HISTORY_JSONL_NAME)
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
+    assert entries[-1]["status"] == "REVIEWED"
+
+
+def test_file_reviewed_item_swallows_pypdf_error(tmp_path: Path, monkeypatch):
+    """F16: a pypdf serialization failure must not abort review filing."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "doc.pdf")
+    app_dir = tmp_path / "app_data"
+    cfg = AppConfig(documents_root=docs)
+
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+    )
+
+    monkeypatch.setattr(
+        "scansort.pipeline.review.process_pdf_metadata_and_rotation",
+        lambda **kwargs: (_ for _ in ()).throw(PyPdfError("bad object stream")),
+    )
+
+    dest = file_reviewed_item(
+        item=item,
+        target_folder="Health",
+        document_date="260901",
+        description="Doc",
+        config=cfg,
+        hints_path=app_dir / "folder_hints.json",
+        history_jsonl=app_dir / HISTORY_JSONL_NAME,
+        history_csv=app_dir / HISTORY_CSV_NAME,
+        lock_path=app_dir / "operations.lock",
+    )
+    assert dest.exists()
+
+
+def test_get_review_queue_skips_symlinked_content_outside_root(tmp_path: Path):
+    """F13: a symlinked file pointing outside the managed root must be skipped."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    outside = tmp_path / "escaped.pdf"
+    _create_dummy_pdf(outside)
+    link = review_dir / "linked_scan.pdf"
+    try:
+        os.symlink(outside, link)
+    except OSError:
+        pytest.skip("symlink creation not permitted on this platform")
+
+    items = get_review_queue(docs_root=docs, fallback_folder="_Review_Needed")
+    assert all(i.filename != "linked_scan.pdf" for i in items)
+
+
+def test_dismiss_review_item_rejects_path_outside_docs_root(tmp_path: Path):
+    """F13: dismissal must refuse to unlink a path outside the managed root."""
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    outside = tmp_path / "outside.pdf"
+    _create_dummy_pdf(outside)
+    app_dir = tmp_path / "app_data"
+
+    item = ReviewItem(
+        file_path=outside,
+        filename=outside.name,
+        file_size_bytes=outside.stat().st_size,
+        modified_time=outside.stat().st_mtime,
+    )
+
+    with pytest.raises(ValueError, match="outside"):
+        dismiss_review_item(
+            item,
+            docs_root=docs,
+            history_jsonl=app_dir / HISTORY_JSONL_NAME,
+            history_csv=app_dir / HISTORY_CSV_NAME,
+            lock_path=app_dir / "operations.lock",
+        )
+    assert outside.exists()
+
+
+def test_get_review_queue_clamps_confidence(tmp_path: Path):
+    """F17: a corrupt confidence value is clamped into the 0.0-1.0 range."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf_path = _create_dummy_pdf(review_dir / "scan.pdf")
+    history = tmp_path / HISTORY_JSONL_NAME
+    history.write_text(
+        json.dumps({"destination_path": str(pdf_path), "confidence": 14.5}) + "\n",
+        encoding="utf-8",
+    )
+
+    items = get_review_queue(
+        docs_root=docs, fallback_folder="_Review_Needed", history_path=history
+    )
+    assert len(items) == 1
+    assert items[0].confidence == 1.0
+
+
+def test_file_reviewed_item_move_cleanup_failure_does_not_mask_error(tmp_path: Path):
+    """F72: a failing cleanup unlink must not replace the original move error."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "move_fail.pdf")
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+        sha256="e" * 64,
+        summary="Summary",
+        document_type="Invoice",
+    )
+
+    def failing_move(src, dst, *args, **kwargs):
+        Path(dst).write_bytes(b"partial copy")
+        raise OSError("interrupted copy")
+
+    def failing_unlink(self, missing_ok=False):
+        raise PermissionError("locked by antivirus")
+
+    with (
+        patch("scansort.pipeline.review.shutil.move", side_effect=failing_move),
+        patch.object(Path, "unlink", failing_unlink),
+        pytest.raises(OSError, match="interrupted copy"),
+    ):
+        file_reviewed_item(
+            item=item,
+            target_folder="Health",
+            document_date="260901",
+            description="Move_Fail_Doc",
+            config=cfg,
+            history_jsonl=app_dir / HISTORY_JSONL_NAME,
+            history_csv=app_dir / HISTORY_CSV_NAME,
+            lock_path=app_dir / "operations.lock",
+        )

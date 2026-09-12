@@ -5,10 +5,13 @@ import logging
 import os
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from pypdf.errors import PyPdfError
 
 from scansort.classification.hints import add_folder_hint, get_default_hints_path
 from scansort.classification.models import sanitize_date, sanitize_description
@@ -33,7 +36,7 @@ from scansort.pipeline.dispatcher import (
     resolve_destination_dir,
     resolve_duplicates_dir,
 )
-from scansort.pipeline.hasher import compute_file_sha256
+from scansort.pipeline.hasher import check_duplicate, compute_file_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +149,7 @@ def get_review_queue(
 
     items: list[ReviewItem] = []
     dup_dir = resolve_duplicates_dir(docs_root, fallback_folder)
+    docs_root_resolved = docs_root.resolve()
     try:
         candidate_files = [
             p
@@ -153,6 +157,9 @@ def get_review_queue(
             if p.is_file()
             and p.suffix.lower() in SUPPORTED_EXTENSIONS
             and not p.is_relative_to(dup_dir)
+            # Invariant G: never act on content reached outside the managed root
+            # (e.g. a symlinked file pointing elsewhere).
+            and p.resolve().is_relative_to(docs_root_resolved)
         ]
     except OSError as e:
         logger.error("Failed to scan review folder %s: %s", review_dir, e)
@@ -175,6 +182,7 @@ def get_review_queue(
             confidence = float(rec.get("confidence", 0.0) or 0.0)
         except TypeError, ValueError:
             confidence = 0.0
+        confidence = min(max(confidence, 0.0), 1.0)
 
         suggested = str(rec.get("suggested_folder", "") or "").strip()
         rationale = str(rec.get("routing_rationale", "") or "").strip()
@@ -261,6 +269,56 @@ def _convert_review_source_to_pdf(item: ReviewItem) -> tuple[Path, Path | None]:
         return source_path, None
 
 
+def _route_review_duplicate(
+    *,
+    item: ReviewItem,
+    source_path: Path,
+    desired_name: str,
+    file_hash: str,
+    config: AppConfig,
+    jsonl_path: Path,
+    csv_path: Path,
+) -> Path:
+    """Route a manual review-filing duplicate to the duplicates folder (invariant D)."""
+    clean_fallback = config.fallback_folder.strip("/\\")
+    dup_dir = resolve_duplicates_dir(config.documents_root, clean_fallback)
+    dup_dir.mkdir(parents=True, exist_ok=True)
+    dup_dest = resolve_collision(dup_dir, desired_name)
+    try:
+        shutil.move(str(source_path), str(dup_dest))
+    except OSError:
+        try:
+            dup_dest.unlink(missing_ok=True)
+        except OSError as cleanup_err:
+            logger.warning(
+                "Could not remove partial duplicate destination %s: %s",
+                dup_dest,
+                cleanup_err,
+            )
+        raise
+
+    folder_str = str(dup_dir.relative_to(config.documents_root.resolve())).replace(
+        "\\", "/"
+    )
+    audit_logger = AuditLogger(
+        jsonl_path=jsonl_path,
+        csv_path=csv_path,
+        mirror_csv_path=config.mirror_csv_path,
+    )
+    audit_logger.log_scan(
+        _build_review_audit_entry(
+            item,
+            status="DUPLICATE",
+            sha256=file_hash,
+            new_filename=dup_dest.name,
+            destination_folder=folder_str,
+            destination_path=str(dup_dest),
+        )
+    )
+    logger.info("Duplicate review item routed: %s -> %s", item.filename, dup_dest)
+    return dup_dest
+
+
 def file_reviewed_item(
     item: ReviewItem,
     target_folder: str,
@@ -272,6 +330,7 @@ def file_reviewed_item(
     history_jsonl: Path | None = None,
     history_csv: Path | None = None,
     lock_path: Path | None = None,
+    on_duplicate: Callable[[dict[str, Any]], bool] | None = None,
 ) -> Path:
     """Manually file an item from the review queue into a target taxonomy folder.
 
@@ -286,6 +345,9 @@ def file_reviewed_item(
         history_jsonl: Optional custom path to history.jsonl.
         history_csv: Optional custom path to history.csv.
         lock_path: Optional custom path to operations.lock.
+        on_duplicate: Optional callback invoked with the matching history record
+            when identical content has already been filed. Return True to file
+            anyway, False to route to ``_Review_Needed/Duplicates/``.
 
     Returns:
         Final destination Path of the filed document.
@@ -316,77 +378,111 @@ def file_reviewed_item(
     suffix = source_path.suffix.lower() or ".pdf"
     desired_name = f"{clean_date}_{clean_desc}{suffix}"
 
+    app_dir = get_default_app_dir()
+    jsonl_path = history_jsonl or (app_dir / HISTORY_JSONL_NAME)
+    csv_path = history_csv or (app_dir / HISTORY_CSV_NAME)
+
+    # Compute SHA-256 from the original scan identity BEFORE any in-place
+    # rewrite; FAILED records carry the "UNKNOWN" sentinel, not a digest.
+    file_hash = (
+        item.sha256
+        if item.sha256 and item.sha256 != "UNKNOWN"
+        else compute_file_sha256(item.file_path)
+    )
+
+    # Consult the user before taking the cross-process lock so the interactive
+    # prompt never blocks another process's critical section.
+    file_anyway = False
+    if on_duplicate is not None:
+        pre_existing = check_duplicate(file_hash, jsonl_path)
+        if pre_existing is not None:
+            file_anyway = bool(on_duplicate(pre_existing))
+
     with interprocess_file_lock(op_lock):
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = resolve_collision(dest_dir, desired_name)
 
         if not source_path.exists():
             raise FileNotFoundError(f"Source file {item.file_path} no longer exists")
 
-        # Update PDF metadata in-place before moving if PDF
-        if source_path.suffix.lower() == ".pdf":
-            try:
-                process_pdf_metadata_and_rotation(
-                    pdf_path=source_path,
-                    output_path=source_path,
-                    title=clean_desc,
-                    subject=item.summary,
-                    keywords=[item.document_type, normalized_folder],
-                )
-            except (OSError, ValueError) as e:
-                logger.warning("Could not update metadata during review filing: %s", e)
-
-        # Compute SHA-256 from the original scan identity before any rewrite;
-        # FAILED records carry the "UNKNOWN" sentinel, which is not a digest.
-        file_hash = (
-            item.sha256
-            if item.sha256 and item.sha256 != "UNKNOWN"
-            else compute_file_sha256(item.file_path)
-        )
-
-        # Move file atomically to destination
-        try:
-            shutil.move(str(source_path), str(dest_path))
-        except OSError:
-            dest_path.unlink(missing_ok=True)
-            raise
-
-        # Log audit entry
-        app_dir = get_default_app_dir()
-        audit_logger = AuditLogger(
-            jsonl_path=history_jsonl or (app_dir / HISTORY_JSONL_NAME),
-            csv_path=history_csv or (app_dir / HISTORY_CSV_NAME),
-            mirror_csv_path=config.mirror_csv_path,
-        )
-
-        audit_logger.log_scan(
-            _build_review_audit_entry(
-                item,
-                status="REVIEWED",
-                sha256=file_hash,
-                new_filename=dest_path.name,
-                destination_folder=normalized_folder,
-                destination_path=str(dest_path),
+        # Re-verify duplicates atomically with the move (invariant D).
+        race_record = check_duplicate(file_hash, jsonl_path)
+        if race_record is not None and not file_anyway:
+            dest_path = _route_review_duplicate(
+                item=item,
+                source_path=source_path,
+                desired_name=desired_name,
+                file_hash=file_hash,
+                config=config,
+                jsonl_path=jsonl_path,
+                csv_path=csv_path,
             )
-        )
+        else:
+            dest_path = resolve_collision(dest_dir, desired_name)
 
-        # Save keyword hint if requested (best-effort: a hint failure must not
-        # misreport an already-completed filing as failed).
-        if keyword_hint and str(keyword_hint).strip():
-            h_path = hints_path or get_default_hints_path()
+            # Update PDF metadata in-place before moving if PDF
+            if source_path.suffix.lower() == ".pdf":
+                try:
+                    process_pdf_metadata_and_rotation(
+                        pdf_path=source_path,
+                        output_path=source_path,
+                        title=clean_desc,
+                        subject=item.summary,
+                        keywords=[item.document_type, normalized_folder],
+                    )
+                except (OSError, ValueError, PyPdfError) as e:
+                    logger.warning(
+                        "Could not update metadata during review filing: %s", e
+                    )
+
+            # Move file atomically to destination
             try:
-                add_folder_hint(
-                    normalized_folder, keyword_hint.strip(), hints_path=h_path
+                shutil.move(str(source_path), str(dest_path))
+            except OSError:
+                try:
+                    dest_path.unlink(missing_ok=True)
+                except OSError as cleanup_err:
+                    logger.warning(
+                        "Could not remove partial destination %s: %s",
+                        dest_path,
+                        cleanup_err,
+                    )
+                raise
+
+            audit_logger = AuditLogger(
+                jsonl_path=jsonl_path,
+                csv_path=csv_path,
+                mirror_csv_path=config.mirror_csv_path,
+            )
+            audit_logger.log_scan(
+                _build_review_audit_entry(
+                    item,
+                    status="REVIEWED",
+                    sha256=file_hash,
+                    new_filename=dest_path.name,
+                    destination_folder=normalized_folder,
+                    destination_path=str(dest_path),
                 )
-                logger.info(
-                    "Added keyword hint '%s' for folder '%s'",
-                    keyword_hint.strip(),
-                    normalized_folder,
-                )
-            except OSError as e:
-                logger.warning(
-                    "Could not save keyword hint for %s: %s", normalized_folder, e
-                )
+            )
+
+            # Save keyword hint if requested (best-effort: a hint failure must
+            # not misreport an already-completed filing as failed).
+            if keyword_hint and str(keyword_hint).strip():
+                h_path = hints_path or get_default_hints_path()
+                try:
+                    add_folder_hint(
+                        normalized_folder, keyword_hint.strip(), hints_path=h_path
+                    )
+                    logger.info(
+                        "Added keyword hint '%s' for folder '%s'",
+                        keyword_hint.strip(),
+                        normalized_folder,
+                    )
+                except OSError as e:
+                    logger.warning(
+                        "Could not save keyword hint for %s: %s",
+                        normalized_folder,
+                        e,
+                    )
 
     if converted_pdf is not None:
         converted_pdf.unlink(missing_ok=True)
@@ -405,6 +501,7 @@ def dismiss_review_item(
     history_csv: Path | None = None,
     lock_path: Path | None = None,
     mirror_csv_path: Path | None = None,
+    docs_root: Path | None = None,
 ) -> None:
     """Safely delete an unwanted or corrupt item from review needed.
 
@@ -413,7 +510,17 @@ def dismiss_review_item(
         history_jsonl: Optional custom path to history.jsonl.
         history_csv: Optional custom path to history.csv.
         lock_path: Optional custom path to operations.lock.
+        mirror_csv_path: Optional path to the Documents mirror CSV.
+        docs_root: Optional managed Documents root; when supplied, the item must
+            resolve inside it or ``ValueError`` is raised (invariant G).
     """
+    if docs_root is not None and not item.file_path.resolve().is_relative_to(
+        docs_root.resolve()
+    ):
+        raise ValueError(
+            f"Review item '{item.file_path}' is outside documents root '{docs_root}'"
+        )
+
     op_lock = lock_path or (get_default_app_dir() / OPERATIONS_LOCK_FILENAME)
     with interprocess_file_lock(op_lock):
         if item.file_path.exists():

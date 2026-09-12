@@ -219,3 +219,49 @@ def test_dispatch_file_move_os_error_cleans_up_destination(tmp_path: Path):
 
     target_file = docs_root / "_Review_Needed" / "260901_Doc.pdf"
     assert not target_file.exists()
+
+
+def test_dispatch_file_cleanup_failure_does_not_mask_move_error(tmp_path: Path):
+    """F72: a failing cleanup unlink must not replace the original move error."""
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    src = tmp_path / "scan.pdf"
+    src.write_bytes(b"%PDF-1.4")
+    meta = DocumentClassification(
+        document_date="260901",
+        description="Doc",
+        target_folder="_Review_Needed",
+    )
+
+    def fake_move_fail(*_args, **_kwargs):
+        raise OSError("Cross-device link failure")
+
+    def fake_unlink(_self, missing_ok=False):  # noqa: ARG001
+        raise PermissionError("locked by antivirus")
+
+    with (
+        patch("shutil.move", side_effect=fake_move_fail),
+        patch.object(Path, "unlink", fake_unlink),
+        pytest.raises(OSError, match="Cross-device"),
+    ):
+        dispatch_file(src, docs_root, meta)
+
+
+def test_dispatch_file_without_lock_logs_contract(tmp_path: Path, caplog):
+    """F71: calling without a lock logs that the caller must already hold it."""
+    import logging
+
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    src = tmp_path / "scan.pdf"
+    src.write_bytes(b"%PDF-1.4")
+    meta = DocumentClassification(
+        document_date="260901",
+        description="Doc",
+        target_folder="_Review_Needed",
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="scansort.pipeline.dispatcher"):
+        dispatch_file(src, docs_root, meta, lock_path=None)
+
+    assert any("caller must hold" in record.message for record in caplog.records)

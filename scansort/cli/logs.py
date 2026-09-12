@@ -60,38 +60,48 @@ def _line_passes(
 
 
 def _follow_log(log_file: Path, min_severity: int | None) -> None:
-    """Stream appended log lines, following across rotations/truncation."""
-    last_matched = False
-    while True:
-        rotated = False
-        with open(log_file, encoding="utf-8", errors="replace") as f:
-            last_inode = os.fstat(f.fileno()).st_ino
-            # Print content already present (empty on a fresh rotation).
-            for line in f:
-                last_matched, emit = _line_passes(line, min_severity, last_matched)
-                if emit:
-                    print(line, end="")
-                    sys.stdout.flush()
+    """Stream appended log lines, following across rotations/truncation.
 
-            # Poll for appended lines, detecting log rotation/truncation.
-            while True:
-                try:
-                    current_inode = os.stat(log_file).st_ino
-                except OSError:
-                    current_inode = last_inode
-                if current_inode != last_inode:
-                    rotated = True
-                    break
-                line = f.readline()
-                if line:
+    The file handle is opened only for the duration of each read and closed
+    before the poll sleep: on Windows an open handle blocks the writer's
+    ``RotatingFileHandler`` rename (WinError 32), which would defeat log
+    rotation for as long as the follower runs (F24).
+    """
+    last_matched = False
+    inode: int | None = None
+    position = 0
+    first_iteration = True
+    while True:
+        try:
+            stat = os.stat(log_file)
+        except OSError:
+            if first_iteration:
+                raise
+            time.sleep(0.2)
+            continue
+
+        if inode is None or stat.st_ino != inode or stat.st_size < position:
+            # Fresh file, rotation, or truncation: read from the beginning.
+            inode = stat.st_ino
+            position = 0
+
+        try:
+            with open(log_file, encoding="utf-8", errors="replace") as f:
+                f.seek(position)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
                     last_matched, emit = _line_passes(line, min_severity, last_matched)
                     if emit:
                         print(line, end="")
                         sys.stdout.flush()
-                else:
-                    time.sleep(0.2)
-        if not rotated:
-            break
+                    position = f.tell()
+        except OSError:
+            if first_iteration:
+                raise
+        first_iteration = False
+        time.sleep(0.2)
 
 
 def handle_logs(parsed: argparse.Namespace) -> int:

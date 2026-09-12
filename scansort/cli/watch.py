@@ -107,14 +107,22 @@ def handle_watch(parsed: argparse.Namespace) -> int:
 
     app_dir = get_default_app_dir()
     try:
-        with instance_guard(app_dir / INSTANCE_LOCK_FILENAME) as acquired:
-            if not acquired:
-                print("Another ScanSort instance is already running.", file=sys.stderr)
-                return 0
-            announce_applied_update(app_dir)
-            if maybe_apply_auto_update(cfg, app_dir):
-                return 0
-            return _run_monitor(cfg)
+        guard = instance_guard(app_dir / INSTANCE_LOCK_FILENAME)
+        acquired = guard.__enter__()
     except OSError as e:
         print(f"Error acquiring instance lock: {e}", file=sys.stderr)
         return 1
+    try:
+        if not acquired:
+            print("Another ScanSort instance is already running.", file=sys.stderr)
+            return 0
+        announce_applied_update(app_dir)
+        if maybe_apply_auto_update(cfg, app_dir):
+            return 0
+        try:
+            return _run_monitor(cfg)
+        except OSError as e:
+            print(f"Error during monitoring: {e}", file=sys.stderr)
+            return 1
+    finally:
+        guard.__exit__(None, None, None)

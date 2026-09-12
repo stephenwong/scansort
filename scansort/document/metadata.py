@@ -127,11 +127,14 @@ def process_pdf_metadata_and_rotation(
     raw_norm = orientation_angle % 360
     norm_angle = raw_norm if raw_norm in {0, 90, 180, 270} else 0
 
-    # Add pages with optional rotation (normalizing setter keeps /Rotate canonical)
-    for page in reader.pages:
-        if norm_angle != 0:
+    # Rotate the source pages first, then import the whole document so that
+    # catalog-level structures (outlines/bookmarks, named destinations,
+    # AcroForm) are preserved rather than silently dropped (invariant E).
+    if norm_angle != 0:
+        for page in reader.pages:
             page.rotation = page.rotation + norm_angle
-        writer.add_page(page)
+
+    writer.append(reader)
 
     metadata = _build_docinfo_metadata(
         existing_metadata=reader.metadata,

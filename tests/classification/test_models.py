@@ -37,6 +37,19 @@ def test_sanitize_description():
     assert len(sanitized_long) <= 60
 
 
+def test_sanitize_description_large_input_is_not_quadratic():
+    """F74: whole-word truncation must not re-join the word list per pop."""
+    import time
+
+    desc = "word " * 40000
+    started = time.perf_counter()
+    sanitized = sanitize_description(desc)
+    elapsed = time.perf_counter() - started
+
+    assert len(sanitized) <= 60
+    assert elapsed < 0.5, f"truncation took {elapsed:.2f}s (quadratic behaviour)"
+
+
 def test_sanitize_date():
     assert sanitize_date("260901") == "260901"
     today = sydney_now().strftime("%y%m%d")

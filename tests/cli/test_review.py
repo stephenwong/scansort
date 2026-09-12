@@ -464,3 +464,45 @@ def test_handle_review_cli_limit_truncation(tmp_path: Path, monkeypatch, capsys)
     assert code == 0
     captured = capsys.readouterr()
     assert "2 documents to review" in captured.out
+
+
+def test_handle_review_falls_back_to_cli_on_tcl_error(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """F25: an unreachable display must degrade to the CLI review session."""
+    import tkinter
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "scan.pdf")
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    from scansort.pipeline.review import ReviewItem
+
+    item = ReviewItem(
+        file_path=pdf,
+        filename=pdf.name,
+        file_size_bytes=pdf.stat().st_size,
+        modified_time=pdf.stat().st_mtime,
+    )
+
+    called: dict[str, object] = {}
+
+    def _fake_dialog(*_args, **_kwargs):
+        raise tkinter.TclError("couldn't connect to display ':99'")
+
+    def _fake_cli_review(items, config, limit):
+        called["items"] = items
+        return 0
+
+    monkeypatch.setattr("scansort.cli.review._load_config_or_exit", lambda: cfg)
+    monkeypatch.setattr("scansort.cli.review.get_review_queue", lambda *a, **k: [item])
+    monkeypatch.setattr("scansort.cli.review._has_gui_display", lambda: True)
+    monkeypatch.setattr("scansort.ui.review.open_review_dialog", _fake_dialog)
+    monkeypatch.setattr("scansort.cli.review._run_cli_review", _fake_cli_review)
+
+    args = argparse.Namespace(gui=False, cli=False, limit=None)
+    assert handle_review(args) == 0
+    assert called["items"] == [item]
+    assert "falling back" in capsys.readouterr().err.lower()

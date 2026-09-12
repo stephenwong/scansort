@@ -354,3 +354,47 @@ def test_convert_pdf_passthrough_atomic_on_failure(tmp_path: Path):
         convert_to_pdf(src_pdf, output_path=target)
 
     assert target.read_bytes() == b"%PDF-1.4 previous content"
+
+
+def test_mode_i_low_range_not_blackened():
+    """F63: plain mode 'I' data in the 0-255 range must not be scaled to black."""
+    from scansort.document.converter import _normalize_frame_to_rgb
+
+    frame = Image.new("I", (8, 8), 200)
+    rgb = _normalize_frame_to_rgb(frame)
+    extrema = rgb.getextrema()
+    assert all(ch_min == 200 and ch_max == 200 for ch_min, ch_max in extrema)
+
+
+def test_multiframe_tiff_normalizes_lazily(tmp_path: Path, monkeypatch):
+    """F65: frames must be normalized during save, not all materialized up front."""
+    from scansort.document import converter
+    from scansort.document.converter import convert_to_pdf
+
+    frames = [
+        Image.new("RGB", (20, 20), color=(i * 40, i * 40, i * 40)) for i in range(3)
+    ]
+    src = tmp_path / "multi.tiff"
+    frames[0].save(src, format="TIFF", save_all=True, append_images=frames[1:])
+
+    real_atomic_write = converter.atomic_write
+    real_normalize = converter._normalize_frame_to_rgb
+    normalize_calls = {"count": 0}
+    pre_save_calls = {"value": None}
+
+    def counting_normalize(frame):
+        normalize_calls["count"] += 1
+        return real_normalize(frame)
+
+    def recording_atomic_write(path, writer):
+        pre_save_calls["value"] = normalize_calls["count"]
+        return real_atomic_write(path, writer)
+
+    monkeypatch.setattr(converter, "_normalize_frame_to_rgb", counting_normalize)
+    monkeypatch.setattr(converter, "atomic_write", recording_atomic_write)
+
+    out = convert_to_pdf(src)
+
+    assert PdfReader(str(out)).get_num_pages() == 3
+    assert normalize_calls["count"] == 3
+    assert pre_save_calls["value"] == 1

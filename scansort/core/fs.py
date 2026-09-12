@@ -72,11 +72,16 @@ def interprocess_file_lock(lock_path: Path) -> Iterator[None]:
             lock_file.write(b"\0")
             lock_file.flush()
         lock_file.seek(0)
+        lock_acquired = False
         try:
             _apply_advisory_lock(lock_file.fileno(), acquire=True)
+            lock_acquired = True
             yield
         finally:
-            _apply_advisory_lock(lock_file.fileno(), acquire=False)
+            # Only unlock a region this process actually locked; on Windows an
+            # unlock of an unheld region raises and masks the real error (F67).
+            if lock_acquired:
+                _apply_advisory_lock(lock_file.fileno(), acquire=False)
 
 
 def _apply_advisory_lock(fileno: int, *, acquire: bool) -> None:

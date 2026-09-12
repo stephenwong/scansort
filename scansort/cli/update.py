@@ -11,7 +11,8 @@ from pathlib import Path
 from scansort import __version__
 from scansort.cli.args import CliArgs
 from scansort.core.config import AppConfig, get_default_app_dir
-from scansort.core.constants import UPDATE_STATE_FILENAME
+from scansort.core.constants import UPDATE_LOCK_FILENAME, UPDATE_STATE_FILENAME
+from scansort.platform.instance_guard import instance_guard
 from scansort.platform.toasts import show_toast
 from scansort.updater import (
     UpdateError,
@@ -92,18 +93,28 @@ def maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
             record_update_check(state_path)
             return False
         install_dir = Path(sys.executable).parent
-        staged_dir = download_and_stage(release, install_dir, app_dir / "tmp")
-        show_toast(
-            "ScanSort update available",
-            f"Version {release.version} downloaded. Restarting to install it.",
-        )
-        logger.info(
-            "Restarting application to apply update %s via helper...",
-            release.version,
-        )
-        with contextlib.suppress(OSError):
-            os.chdir(install_dir.parent)
-        spawn_update_helper(install_dir, staged_dir, release.version, os.getpid())
+        # Serialize the download/stage/hand-off with any running self-update
+        # helper: cleanup_stale_updates deletes sibling helper directories, so an
+        # unlocked pass could destroy a live helper mid-swap (F56). Non-blocking:
+        # a concurrent updater means this launch simply retries next time.
+        with instance_guard(app_dir / UPDATE_LOCK_FILENAME) as got_update_lock:
+            if not got_update_lock:
+                logger.info(
+                    "Another ScanSort update is in progress; retrying on a later launch."
+                )
+                return False
+            staged_dir = download_and_stage(release, install_dir, app_dir / "tmp")
+            show_toast(
+                "ScanSort update available",
+                f"Version {release.version} downloaded. Restarting to install it.",
+            )
+            logger.info(
+                "Restarting application to apply update %s via helper...",
+                release.version,
+            )
+            with contextlib.suppress(OSError):
+                os.chdir(install_dir.parent)
+            spawn_update_helper(install_dir, staged_dir, release.version, os.getpid())
         record_update_check(state_path)
         return True
     except (UpdateError, OSError) as e:

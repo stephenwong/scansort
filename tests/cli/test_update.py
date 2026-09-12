@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import scansort.updater as updater
 from scansort import __version__
 from scansort.cli.root import main_cli
@@ -15,12 +17,26 @@ from scansort.cli.update import (
 )
 from scansort.core.config import AppConfig
 from scansort.updater import ReleaseInfo, UpdateError
-from scansort.updater.feed import parse_version
+from scansort.updater.feed import GITHUB_REPO, parse_version
 
 _current_v = parse_version(__version__) or (1, 0, 0)
 NEXT_VERSION = f"{_current_v[0] + 1}.0.0"
 NEXT_TAG = f"v{NEXT_VERSION}"
 NEXT_ZIP = f"ScanSort-{NEXT_TAG}-windows-x64.zip"
+NEXT_URL = f"https://github.com/{GITHUB_REPO}/releases/download/{NEXT_TAG}/{NEXT_ZIP}"
+
+
+@pytest.fixture(autouse=True)
+def _fake_msvcrt(monkeypatch):
+    """Provide a no-op msvcrt so win32-faked tests can exercise instance_guard."""
+    import types
+
+    fake = types.ModuleType("msvcrt")
+    fake.LK_NBLCK = 1
+    fake.LK_LOCK = 2
+    fake.LK_UNLCK = 0
+    fake.locking = MagicMock()
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
 
 
 def test_cli_self_update_dispatches_to_updater():
@@ -87,7 +103,7 @@ def test_maybe_apply_auto_update_installs_when_release_found(
         "assets": [
             {
                 "name": NEXT_ZIP,
-                "browser_download_url": "https://example.com/a.zip",
+                "browser_download_url": NEXT_URL,
                 "size": 1,
             }
         ],
@@ -130,7 +146,7 @@ def test_maybe_apply_auto_update_tolerates_chdir_failure(tmp_path: Path, monkeyp
         "assets": [
             {
                 "name": NEXT_ZIP,
-                "browser_download_url": "https://example.com/a.zip",
+                "browser_download_url": NEXT_URL,
                 "size": 1,
             }
         ],
@@ -192,7 +208,7 @@ def test_maybe_apply_auto_update_recovers_from_spawn_failure(
         "assets": [
             {
                 "name": NEXT_ZIP,
-                "browser_download_url": "https://example.com/a.zip",
+                "browser_download_url": NEXT_URL,
             }
         ],
     }
@@ -369,3 +385,44 @@ def test_main_cli_check_update_json_failure(capsys, monkeypatch):
     data = json.loads(captured.out)
     assert data["update_available"] is False
     assert "Network unreachable" in data["error"]
+
+
+def test_maybe_apply_auto_update_defers_when_update_lock_held(
+    tmp_path: Path, monkeypatch
+):
+    """F56: a concurrent update must not delete a live helper's directory."""
+    from contextlib import contextmanager
+
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    exe_path = tmp_path / "Programs" / "ScanSort" / "ScanSort.exe"
+    exe_path.parent.mkdir(parents=True)
+    exe_path.write_bytes(b"old")
+    monkeypatch.setattr(sys, "executable", str(exe_path), raising=False)
+
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    app_dir = tmp_path / "appdata"
+    app_dir.mkdir()
+    release = ReleaseInfo(
+        version=NEXT_VERSION,
+        tag_name=NEXT_TAG,
+        asset_name=NEXT_ZIP,
+        download_url=NEXT_URL,
+        size_bytes=1,
+        sha256=None,
+        published_at=None,
+    )
+
+    @contextmanager
+    def _held_guard(_path):
+        yield False
+
+    with (
+        patch("scansort.cli.update.fetch_latest_release", return_value={}),
+        patch("scansort.cli.update.available_update", return_value=release),
+        patch("scansort.cli.update.download_and_stage") as mock_download,
+        patch("scansort.cli.update.instance_guard", _held_guard),
+    ):
+        assert maybe_apply_auto_update(cfg, app_dir) is False
+
+    mock_download.assert_not_called()

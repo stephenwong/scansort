@@ -18,9 +18,14 @@ NOTIFICATION_TITLE = "ScanSort"
 
 
 def _clean_reason(reason: str) -> str:
-    """Collapse whitespace, redact secrets, and truncate an error reason."""
+    """Collapse whitespace, redact secrets, and truncate an error reason.
+
+    Redaction deliberately skips the OS vault lookup: this runs on the filing
+    path and the ``AIza…`` regex already covers API-key shapes, so a hung
+    Credential Manager must not stall notification building (F50).
+    """
     text = " ".join(reason.split())
-    text = redact_secrets_from_text(text)
+    text = redact_secrets_from_text(text, use_vault=False)
     if len(text) > MAX_REASON_CHARS:
         cutoff = text[:MAX_REASON_CHARS].rfind(" ")
         end = cutoff if cutoff > MAX_REASON_CHARS // 2 else MAX_REASON_CHARS

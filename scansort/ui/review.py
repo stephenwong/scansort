@@ -11,6 +11,7 @@ from tkinter import messagebox, ttk
 from scansort.classification.taxonomy import scan_documents_folders
 from scansort.core.config import AppConfig, load_config
 from scansort.core.fs import open_in_file_manager
+from scansort.pipeline.dispatcher import resolve_duplicates_dir
 from scansort.pipeline.review import (
     ReviewItem,
     dismiss_review_item,
@@ -376,8 +377,18 @@ class ReviewDialog(tk.Toplevel):
                 description=desc_val,
                 config=self.app_config,
                 keyword_hint=hint_kw,
+                on_duplicate=self._confirm_duplicate,
             )
-            show_toast("ScanSort", f"Filed '{dest.name}' into '{target_folder}'.")
+            dup_dir = resolve_duplicates_dir(
+                self.app_config.documents_root, self.app_config.fallback_folder
+            )
+            if dest.parent == dup_dir:
+                show_toast(
+                    "ScanSort",
+                    f"Duplicate '{dest.name}' moved to the Duplicates folder.",
+                )
+            else:
+                show_toast("ScanSort", f"Filed '{dest.name}' into '{target_folder}'.")
             if self.on_filed:
                 try:
                     self.on_filed(dest)
@@ -393,6 +404,18 @@ class ReviewDialog(tk.Toplevel):
                 f"Could not file document: {e}",
                 parent=self,
             )
+
+    def _confirm_duplicate(self, record: dict) -> bool:
+        """Prompt whether to file content identical to a previous filing."""
+        previous = record.get("new_filename") or "a previously filed document"
+        return bool(
+            messagebox.askyesno(
+                "Duplicate Detected",
+                f"This document appears identical to '{previous}', "
+                "which has already been filed.\n\nFile it anyway?",
+                parent=self,
+            )
+        )
 
     def _remove_current_item(self) -> None:
         """Drop the current queue item and advance to the next, if any."""
@@ -413,7 +436,11 @@ class ReviewDialog(tk.Toplevel):
             return
 
         try:
-            dismiss_review_item(item)
+            dismiss_review_item(
+                item,
+                mirror_csv_path=self.app_config.mirror_csv_path,
+                docs_root=self.app_config.documents_root,
+            )
             self._remove_current_item()
         except OSError as e:
             messagebox.showerror(

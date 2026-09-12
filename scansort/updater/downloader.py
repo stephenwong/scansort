@@ -25,6 +25,9 @@ from scansort.updater.installer import (
 logger = logging.getLogger(__name__)
 
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
+# Cap the total bytes extracted from a release archive so a malicious or
+# corrupt bundle cannot fill the install volume (zip-bomb defense).
+MAX_UNCOMPRESSED_BYTES = 1_000_000_000
 _ARCHIVE_GLOB = f"{WINDOWS_ASSET_PREFIX}*-{WINDOWS_ASSET_SUFFIX.lstrip('-')}"
 
 
@@ -109,6 +112,7 @@ def extract_bundle(zip_path: Path, dest_dir: Path) -> Path:
     logger.info("Extracting release bundle %s into %s...", zip_path.name, dest_dir)
     try:
         with zipfile.ZipFile(zip_path) as archive:
+            total_bytes = 0
             for member in archive.infolist():
                 target = _member_target(dest_dir, member.filename)
                 if member.is_dir():
@@ -116,7 +120,13 @@ def extract_bundle(zip_path: Path, dest_dir: Path) -> Path:
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, target.open("wb") as out_file:
-                    shutil.copyfileobj(source, out_file)
+                    while chunk := source.read(DOWNLOAD_CHUNK_SIZE):
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_UNCOMPRESSED_BYTES:
+                            raise UpdateError(
+                                "Release archive exceeds the uncompressed size cap."
+                            )
+                        out_file.write(chunk)
     except zipfile.BadZipFile as e:
         raise UpdateError("Release archive is corrupt.") from e
     except (zipfile.LargeZipFile, RuntimeError, NotImplementedError, OSError) as e:
@@ -174,10 +184,14 @@ def download_and_stage(
     _prune_old_archives(tmp_dir, keep_name=zip_path.name)
 
     if stage_dir.exists():
-        try:
-            shutil.rmtree(stage_dir, ignore_errors=True)
-        except OSError as e:
-            logger.warning("Could not reset stale staging dir %s: %s", stage_dir, e)
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        if stage_dir.exists():
+            # Refuse to extract over remnants of a previous staged version:
+            # overlaying would produce a hybrid install tree (F55).
+            raise UpdateError(
+                f"Could not clear previous staging directory {stage_dir}; "
+                "refusing to stage over it."
+            )
     try:
         extract_bundle(zip_path, stage_dir)
     except Exception:

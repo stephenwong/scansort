@@ -7,6 +7,23 @@ from scansort import __version__
 from scansort.core.constants import FILING_STATUSES, SUPPORTED_GEMINI_MODELS
 
 
+def _bounded_int(low: int, high: int):
+    """Return an argparse ``type=`` validator enforcing an inclusive range."""
+
+    def _parse(value: str) -> int:
+        try:
+            parsed = int(value)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(
+                f"expected an integer, got {value!r}"
+            ) from e
+        if not low <= parsed <= high:
+            raise argparse.ArgumentTypeError(f"must be between {low} and {high}")
+        return parsed
+
+    return _parse
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct command-line argument parser."""
     verbose_parser = argparse.ArgumentParser(add_help=False)
@@ -298,7 +315,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--fallback-folder", type=str, help="Set fallback review folder name"
     )
     cfg_p.add_argument(
-        "--max-depth", type=int, help="Set maximum folder scanning depth (1-10)"
+        "--max-depth",
+        type=_bounded_int(1, 10),
+        help="Set maximum folder scanning depth (1-10)",
     )
     cfg_p.add_argument(
         "--mirror-csv",
@@ -312,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cfg_p.add_argument(
         "--update-check-interval",
-        type=int,
+        type=_bounded_int(0, 60),
         help="Set update check frequency in days (0-60)",
     )
     cfg_p.add_argument(

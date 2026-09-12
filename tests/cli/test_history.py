@@ -156,7 +156,7 @@ def test_history_read_os_error(mock_app_dir: Path, capsys):
 
     with patch("builtins.open", guarded_open):
         exit_code = main_cli(["history"])
-        assert exit_code == 0
+        assert exit_code == 1
         assert "Error reading history file" in capsys.readouterr().err
 
 
@@ -211,3 +211,17 @@ def testload_history_records_skips_non_dict_lines(tmp_path):
     hist.write_text('null\n[1,2]\n{"status": "SUCCESS"}\n', encoding="utf-8")
     records = load_history_records(hist)
     assert records == [{"status": "SUCCESS"}]
+
+
+def test_load_history_records_io_error_returns_none(tmp_path, monkeypatch):
+    """F23: an unreadable history file must signal failure, not look empty."""
+    from scansort.cli.history import load_history_records
+
+    hist = tmp_path / "history.jsonl"
+    hist.write_text('{"status": "SUCCESS"}\n', encoding="utf-8")
+
+    def _denied_open(*_args, **_kwargs):
+        raise PermissionError("locked by backup tool")
+
+    monkeypatch.setattr("builtins.open", _denied_open)
+    assert load_history_records(hist) is None

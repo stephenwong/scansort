@@ -222,3 +222,30 @@ def test_open_in_file_manager_os_error(tmp_path: Path, monkeypatch):
 
     with patch("subprocess.Popen", side_effect=OSError("spawn failed")):
         assert open_in_file_manager(folder) is False
+
+
+def test_interprocess_file_lock_does_not_unlock_when_acquire_fails(
+    tmp_path, monkeypatch
+):
+    """F67: a failed acquire must not attempt to unlock an unheld region."""
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_msvcrt = MagicMock()
+    mock_msvcrt.LK_LOCK = 1
+    mock_msvcrt.LK_UNLCK = 2
+    calls: list[int] = []
+
+    def fake_locking(_fd, mode, _n):
+        calls.append(mode)
+        if mode == mock_msvcrt.LK_LOCK:
+            raise OSError("lock busy")
+
+    mock_msvcrt.locking = fake_locking
+
+    with (
+        patch.dict("sys.modules", {"msvcrt": mock_msvcrt}),
+        pytest.raises(OSError, match="lock busy"),
+        interprocess_file_lock(tmp_path / "operations.lock"),
+    ):
+        pass
+
+    assert mock_msvcrt.LK_UNLCK not in calls

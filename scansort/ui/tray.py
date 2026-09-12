@@ -91,8 +91,11 @@ class SystemTrayApp:
             and getattr(dialog, "_owns_root", False)
             and not getattr(dialog, "_mainloop_running", False)
         ):
-            with contextlib.suppress(Exception):
+            try:
                 dialog.mainloop()
+            except Exception:
+                # F39: never swallow a teardown failure without diagnostics.
+                logger.exception("Dialog mainloop failed")
 
     def _build_taxonomy_submenus(self) -> pystray.Menu:
         """Dynamically build nested submenus reflecting destination folder taxonomy."""
@@ -212,7 +215,9 @@ class SystemTrayApp:
             if self.icon is not None:
                 self.icon.icon = get_tray_icon(paused=is_now_paused)
                 self.icon.title = f"ScanSort{' (Paused)' if is_now_paused else ''}"
-        self._refresh_menu()
+        # F36: rebuilding the menu scans the taxonomy and history; keep it off
+        # pystray's event thread.
+        self._offload(self._refresh_menu, True)
 
     def undo_last(self, async_task: bool = True) -> threading.Thread | None:
         """Reverse the most recent filing move and notify the user."""

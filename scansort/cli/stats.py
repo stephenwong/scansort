@@ -28,7 +28,7 @@ def _calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         status_counts[status] += 1
 
         folder = r.get("destination_folder")
-        if folder and not folder.startswith(REVIEW_NEEDED_DIR):
+        if folder and not folder.lower().startswith(REVIEW_NEEDED_DIR.lower()):
             folder_counts[folder] += 1
 
         doc_type = r.get("document_type")
@@ -89,6 +89,8 @@ def handle_stats(parsed: argparse.Namespace) -> int:
     history_file = app_dir / HISTORY_JSONL_NAME
 
     records = load_history_records(history_file)
+    if records is None:
+        return 1
     if not records:
         print("No filing history found.")
         return 0

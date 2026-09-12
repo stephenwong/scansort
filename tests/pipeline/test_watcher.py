@@ -356,3 +356,63 @@ def test_watcher_sweep_covers_file_created_before_baseline(tmp_path: Path):
     while not file_queue.empty():
         queued.append(file_queue.get_nowait())
     assert inbox / "gap.pdf" in queued
+
+
+def test_enqueue_candidate_refuses_when_paused(tmp_path: Path):
+    """F04: a candidate racing a pause() must not be enqueued."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    scan = inbox / "scan.pdf"
+    scan.touch()
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    watcher.pause()
+    assert watcher._enqueue_candidate(scan, {}, "racing candidate") is False
+    assert file_queue.empty()
+
+
+def test_resume_and_cycle_sweeps_share_dedup(tmp_path: Path):
+    """F03: the resume sweep and a cycle sweep must not double-enqueue a file."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    scan = inbox / "scan.pdf"
+    scan.write_bytes(b"%PDF-1.4")
+
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+    watcher.pause()
+    watcher.resume()
+    assert file_queue.qsize() == 1
+
+    stop_event = threading.Event()
+    stop_event.set()
+    with patch("scansort.pipeline.watcher.watch", return_value=iter([])):
+        watcher._run_watch_cycle(inbox, stop_event)
+
+    assert file_queue.qsize() == 1
+
+
+def test_watcher_resweeps_file_that_grew_before_first_wake(tmp_path: Path):
+    """F07: a file that grew since the initial sweep must be retried."""
+    import os
+
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    scan = inbox / "growing.pdf"
+    scan.write_bytes(b"%PDF-1.4")
+    initial_mtime = scan.stat().st_mtime_ns
+
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    def mock_watch(*args, **kwargs):
+        os.utime(scan, ns=(initial_mtime, initial_mtime + 1_000_000_000))
+        yield []
+        watcher._stop_event.set()
+        yield []
+
+    with patch("scansort.pipeline.watcher.watch", side_effect=mock_watch):
+        watcher._run_watch_cycle(inbox, threading.Event())
+
+    assert file_queue.qsize() == 2

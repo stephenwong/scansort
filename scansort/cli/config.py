@@ -9,10 +9,13 @@ from scansort import __version__
 from scansort.cli.args import CliArgs
 from scansort.core.config import (
     AppConfig,
+    get_default_app_dir,
     get_default_config_path,
     load_config,
     save_config,
 )
+from scansort.core.constants import OPERATIONS_LOCK_FILENAME
+from scansort.core.fs import interprocess_file_lock
 from scansort.platform.autorun import (
     disable_autorun,
     enable_autorun,
@@ -172,15 +175,12 @@ def _apply_mutations(
     """
     has_mutation = False
 
-    if args.set_key is not None:
+    # Defer the irreversible vault write until every other mutation input has
+    # been validated: a failed sibling flag must never leave a key persisted
+    # while the command reports failure (F18).
+    pending_set_key = args.set_key
+    if pending_set_key is not None:
         has_mutation = True
-        try:
-            set_api_key(args.set_key)
-            print("Successfully saved Gemini API key to secure OS credential vault.")
-        except (ValueError, OSError) as e:
-            redacted = redact_secrets_from_text(str(e), args.set_key)
-            print(f"Error saving Gemini API key: {redacted}", file=sys.stderr)
-            return cfg, has_mutation, 1
 
     # Check for direct flag mutations
     direct_fields_changed = False
@@ -313,6 +313,16 @@ def _apply_mutations(
             return cfg, has_mutation, 1
         print(f"Windows Explorer context menu: {status_str}")
 
+    # All sibling mutations validated and applied; now persist the API key.
+    if pending_set_key is not None:
+        try:
+            set_api_key(pending_set_key)
+            print("Successfully saved Gemini API key to secure OS credential vault.")
+        except (ValueError, OSError) as e:
+            redacted = redact_secrets_from_text(str(e), pending_set_key)
+            print(f"Error saving Gemini API key: {redacted}", file=sys.stderr)
+            return cfg, has_mutation, 1
+
     return cfg, has_mutation, None
 
 
@@ -381,15 +391,23 @@ def handle_config(parsed: argparse.Namespace) -> int:
     if get_code is not None:
         return get_code
 
-    set_code = _handle_set(args, cfg)
-    if set_code is not None:
-        return set_code
+    # Serialize the whole load-modify-save span so concurrent writers (CLI and
+    # the tray Settings dialog) cannot silently drop each other's changes (F19).
+    op_lock = get_default_app_dir() / OPERATIONS_LOCK_FILENAME
+    with interprocess_file_lock(op_lock):
+        cfg = _load_config_or_exit()
+        if cfg is None:
+            return 1
 
-    cfg, has_mutation, mutation_code = _apply_mutations(args, cfg)
-    if mutation_code is not None:
-        return mutation_code
+        set_code = _handle_set(args, cfg)
+        if set_code is not None:
+            return set_code
 
-    if args.show or not has_mutation:
-        _show_config(args, cfg)
+        cfg, has_mutation, mutation_code = _apply_mutations(args, cfg)
+        if mutation_code is not None:
+            return mutation_code
+
+        if args.show or not has_mutation:
+            _show_config(args, cfg)
 
     return 0

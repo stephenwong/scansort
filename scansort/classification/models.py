@@ -48,7 +48,11 @@ def sanitize_description(desc: object, max_length: int = MAX_DESCRIPTION_LENGTH)
     joined = "_".join(words)
     if len(joined) > max_length:
         # Prefer whole-word truncation: drop trailing words until the title fits.
-        while len(words) > 1 and len("_".join(words)) > max_length:
+        # Track the joined length arithmetically so this stays O(n) instead of
+        # re-joining the full word list on every pop (quadratic on long input).
+        joined_len = len(joined)
+        while len(words) > 1 and joined_len > max_length:
+            joined_len -= len(words[-1]) + 1  # +1 for the removed separator
             words.pop()
         joined = "_".join(words)
         if len(joined) > max_length:

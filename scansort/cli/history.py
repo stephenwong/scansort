@@ -11,8 +11,12 @@ from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HISTORY_JSONL_NAME
 
 
-def load_history_records(history_path: Path) -> list[dict[str, Any]]:
-    """Load and parse JSONL records, tolerating empty files or malformed lines."""
+def load_history_records(history_path: Path) -> list[dict[str, Any]] | None:
+    """Load and parse JSONL records, tolerating empty files or malformed lines.
+
+    Returns ``None`` when the file exists but cannot be read (I/O failure), so
+    callers can distinguish a genuine read error from an empty history (F23).
+    """
     records: list[dict[str, Any]] = []
     try:
         if not history_path.exists() or history_path.stat().st_size == 0:
@@ -32,7 +36,7 @@ def load_history_records(history_path: Path) -> list[dict[str, Any]]:
         return []
     except OSError as e:
         print(f"Error reading history file: {e}", file=sys.stderr)
-        return []
+        return None
 
     return records
 
@@ -57,6 +61,8 @@ def handle_history(parsed: argparse.Namespace) -> int:
     history_file = app_dir / HISTORY_JSONL_NAME
 
     records = load_history_records(history_file)
+    if records is None:
+        return 1
     if not records:
         print("No filing history found.")
         return 0

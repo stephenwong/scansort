@@ -42,7 +42,14 @@ def _normalize_frame_to_rgb(frame: Image.Image) -> Image.Image:
         # saturates every sample >= 256 to 255, blanking real scans. Byte-swapped
         # and native-endian variants (I;16B/L/N) reject point() directly, so all
         # high-bit modes are funneled through the canonical "I" mode first.
-        scaled = frame.convert("I").point(lambda v: v * (255 / 65535))
+        canonical = frame.convert("I")
+        if frame.mode == "I":
+            # Plain 32-bit "I" is not range-bounded: some writers store 0-255
+            # samples there, which the 16-bit divisor would collapse to black.
+            _, high = canonical.getextrema()
+            if high <= 255:
+                return canonical.convert("L").convert("RGB")
+        scaled = canonical.point(lambda v: v * (255 / 65535))
         return scaled.convert("L").convert("RGB")
     if frame.mode in ("RGBA", "LA") or (
         frame.mode == "P" and "transparency" in frame.info
@@ -94,12 +101,21 @@ def _convert_jpeg_lossless(input_path: Path, target_pdf: Path) -> None:
 def _convert_image_via_pillow(input_path: Path, target_pdf: Path) -> int:
     """Convert an image to PDF via Pillow supporting multi-frame images."""
     with Image.open(input_path) as img:
-        frames = [
-            _normalize_frame_to_rgb(ImageOps.exif_transpose(frame))
-            for frame in ImageSequence.Iterator(img)
-        ]
-        first_frame = frames[0]
-        append_frames = frames[1:]
+        # Normalize lazily: multi-page TIFFs can be hundreds of MB when every
+        # frame is converted to RGB at once, so the first frame is materialized
+        # eagerly and the rest are streamed to Pillow's PDF writer as a generator.
+        frame_iterator = ImageSequence.Iterator(img)
+        first_frame = _normalize_frame_to_rgb(
+            ImageOps.exif_transpose(next(frame_iterator))
+        )
+        page_count = 1
+
+        def _remaining_frames():
+            nonlocal page_count
+            for frame in frame_iterator:
+                page_count += 1
+                yield _normalize_frame_to_rgb(ImageOps.exif_transpose(frame))
+
         res = _extract_dpi(img)
 
         atomic_write(
@@ -108,11 +124,10 @@ def _convert_image_via_pillow(input_path: Path, target_pdf: Path) -> int:
                 out,
                 format="PDF",
                 save_all=True,
-                append_images=append_frames,
+                append_images=_remaining_frames(),
                 resolution=res,
             ),
         )
-        page_count = len(frames)
 
     logger.info(
         "Converted image %s to PDF %s via Pillow (%d pages, %.0f DPI).",

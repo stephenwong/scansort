@@ -25,17 +25,18 @@ def run_pipeline_worker(
     """
     logger.info("ScanSort pipeline worker started.")
     while True:
-        if stop_event.is_set() and file_queue.empty():
-            break
-
         try:
             item = file_queue.get(timeout=0.5)
         except queue.Empty:
-            # Re-check emptiness: an item may have been enqueued concurrently
-            # with the timeout, and shutdown must drain rather than drop it.
-            if stop_event.is_set() and file_queue.empty():
+            if not stop_event.is_set():
+                continue
+            # Shutdown requested and the queue momentarily looks empty: wait a
+            # short bounded period so a producer that enqueued concurrently with
+            # the emptiness check is still drained rather than stranded (F05).
+            try:
+                item = file_queue.get(timeout=0.2)
+            except queue.Empty:
                 break
-            continue
 
         try:
             process_fn(item)

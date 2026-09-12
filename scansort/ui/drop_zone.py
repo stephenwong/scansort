@@ -234,7 +234,14 @@ class DropZoneWindow(SingletonToplevel):
         last_dest: Path | None = None
 
         for path in file_paths:
-            resolved = path.resolve()
+            try:
+                resolved = path.resolve()
+            except OSError as e:
+                # F28: a resolve failure must not kill the worker mid-batch and
+                # leave the status stuck on "Processing...".
+                logger.warning("Could not resolve Drop Zone path %s: %s", path, e)
+                error_count += 1
+                continue
             if not resolved.is_file():
                 logger.warning("Drop Zone file not found: %s", path)
                 error_count += 1

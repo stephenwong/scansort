@@ -1,5 +1,6 @@
 """GitHub Releases feed query, version parsing, and candidate evaluation."""
 
+import http.client
 import json
 import logging
 import urllib.request
@@ -86,7 +87,7 @@ def fetch_latest_release(
     try:
         with opener(request, timeout=timeout) as response:
             payload = json.loads(response.read())
-    except (OSError, ValueError) as e:
+    except (OSError, http.client.HTTPException, ValueError) as e:
         raise UpdateError(f"Update check failed: {e}") from e
     if not isinstance(payload, dict):
         raise UpdateError("Update check returned an unexpected payload.")
@@ -162,6 +163,12 @@ def available_update(
 
     download_url = asset.get("browser_download_url")
     if not isinstance(download_url, str) or not download_url:
+        return None
+    expected_prefix = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/"
+    if not download_url.startswith(expected_prefix):
+        logger.warning(
+            "Ignoring release asset with unexpected download URL: %s", download_url
+        )
         return None
     size = asset.get("size")
     size_bytes = size if isinstance(size, int) and size > 0 else None

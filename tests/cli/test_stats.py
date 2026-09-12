@@ -96,3 +96,16 @@ def test_stats_explicit_null_values(mock_app_dir: Path, capsys):
     assert data["total_scans"] == 1
     assert data["status_counts"]["UNKNOWN"] == 1
     assert "NONE" not in data["status_counts"]
+
+
+def test_stats_excludes_review_folder_case_insensitively():
+    """F26: review/fallback folders of any casing must not appear as destinations."""
+    from scansort.cli.stats import _calculate_metrics
+
+    records = [
+        {"status": "FAILED", "destination_folder": "_review_needed"},
+        {"status": "DUPLICATE", "destination_folder": "_REVIEW_NEEDED"},
+        {"status": "SUCCESS", "destination_folder": "Utilities"},
+    ]
+    metrics = _calculate_metrics(records)
+    assert metrics["top_folders"] == {"Utilities": 1}

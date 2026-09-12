@@ -349,3 +349,41 @@ def test_download_and_stage_cleans_stage_on_extract_runtime_error(
         download_and_stage(info, install_dir, tmp_path / "tmp")
     leftover = list(install_dir.parent.glob("ScanSort.stage-*"))
     assert leftover == []
+
+
+def test_extract_bundle_enforces_uncompressed_size_cap(tmp_path: Path, monkeypatch):
+    """F54: a zip whose actual expanded bytes exceed the cap must be rejected."""
+    import zipfile
+
+    from scansort.updater import downloader
+
+    monkeypatch.setattr(downloader, "MAX_UNCOMPRESSED_BYTES", 100)
+    zip_path = tmp_path / "bomb.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("ScanSort.exe", b"x" * 500)
+
+    with pytest.raises(UpdateError, match="size cap"):
+        extract_bundle(zip_path, tmp_path / "staged")
+
+
+def test_download_and_stage_refuses_unclearable_stage_dir(tmp_path: Path, monkeypatch):
+    """F55: an uncleared staging dir must abort, not overlay a hybrid tree."""
+    import scansort.updater.downloader as downloader
+
+    info = _stage_info(tmp_path)
+    install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    tmp_dir = tmp_path / "apptmp"
+    stage_dir = tmp_path / f"ScanSort.stage-{__version__}"
+    stage_dir.mkdir()
+    (stage_dir / "junk").write_bytes(b"stale")
+
+    # Simulate an AV/locked file that prevents rmtree from clearing the dir.
+    monkeypatch.setattr(downloader.shutil, "rmtree", lambda *args, **kwargs: None)
+
+    with pytest.raises(UpdateError, match="staging directory"):
+        download_and_stage(
+            info,
+            install_dir,
+            tmp_dir,
+            opener=_fake_urlopen(_release_zip_bytes()),
+        )

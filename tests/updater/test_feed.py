@@ -8,6 +8,7 @@ import pytest
 
 from scansort import __version__
 from scansort.updater.feed import (
+    GITHUB_REPO,
     REQUEST_TIMEOUT,
     WINDOWS_ASSET_PREFIX,
     WINDOWS_ASSET_SUFFIX,
@@ -47,9 +48,14 @@ def _payload(
     *,
     asset_name: str | None = None,
     digest: object = None,
-    url: str = f"https://example.com/{WINDOWS_ASSET_PREFIX}v{__version__}{WINDOWS_ASSET_SUFFIX}",
+    url: str | None = None,
     size: int | None = 123,
 ) -> dict:
+    if url is None:
+        url = (
+            f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/"
+            f"{WINDOWS_ASSET_PREFIX}{tag}{WINDOWS_ASSET_SUFFIX}"
+        )
     return {
         "tag_name": tag,
         "assets": [
@@ -142,6 +148,41 @@ def test_fetch_latest_release_failures_raise_update_error():
         fetch_latest_release(opener=_fake_urlopen(b"[1, 2]"))
 
 
+def test_fetch_latest_release_maps_http_exception_to_update_error():
+    """F52: mid-body HTTPException must surface as an UpdateError."""
+    import http.client
+
+    class _BrokenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            raise http.client.IncompleteRead(b"partial", 100)
+
+    def opener(request, timeout=None):
+        return _BrokenResponse()
+
+    with pytest.raises(UpdateError, match="Update check failed"):
+        fetch_latest_release(opener=opener)
+
+
+def test_available_update_rejects_non_github_download_url():
+    """F53: only the expected GitHub release host/path may be downloaded."""
+    assert (
+        available_update(_payload(url="http://evil.example/x.zip"), (0, 0, 1)) is None
+    )
+    assert (
+        available_update(
+            _payload(url="https://github.com/attacker/repo/releases/download/vX/x.zip"),
+            (0, 0, 1),
+        )
+        is None
+    )
+
+
 def test_available_update_returns_newer_release():
     info = available_update(_payload(digest="sha256:abcdef"), (0, 0, 1))
     assert info is not None
@@ -214,7 +255,9 @@ def test_updater_emits_lifecycle_logs(caplog):
         "assets": [
             {
                 "name": NEXT_ZIP,
-                "browser_download_url": "https://example.com/dl.zip",
+                "browser_download_url": (
+                    f"https://github.com/{GITHUB_REPO}/releases/download/{NEXT_TAG}/{NEXT_ZIP}"
+                ),
                 "size": 100,
             }
         ],

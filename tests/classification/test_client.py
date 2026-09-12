@@ -649,3 +649,40 @@ def test_classification_preserves_suggested_folder_on_fallback(minimal_pdf: Path
     assert res.target_folder == "_Review_Needed"
     assert res.suggested_folder == "Health/Dental"
     assert res.confidence == 0.58
+
+
+def test_taxonomy_membership_is_case_insensitive():
+    """F59: case drift on an acronym folder must not demote a correct match."""
+    res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Bank Fee",
+                "target_folder": "finances/anz_bank",
+                "confidence": 0.95,
+                "document_type": "Bill",
+            }
+        ),
+        taxonomy=["Finances/ANZ_Bank"],
+    )
+    assert res.target_folder == "Finances/ANZ_Bank"
+    assert res.suggested_folder == "Finances/ANZ_Bank"
+    assert "Matched discovered taxonomy" in res.routing_rationale
+
+
+def test_model_requested_review_has_accurate_rationale():
+    """F61: the model's own _Review_Needed choice must not claim a taxonomy match."""
+    res = _classify_text(
+        json.dumps(
+            {
+                "document_date": "260901",
+                "description": "Scanned Thing",
+                "target_folder": "_Review_Needed",
+                "confidence": 0.95,
+                "document_type": "Other",
+            }
+        ),
+        taxonomy=["Finances"],
+    )
+    assert res.target_folder == "_Review_Needed"
+    assert "Model requested manual review" in res.routing_rationale

@@ -94,12 +94,18 @@ def mask_api_key(key: str | None) -> str:
     return f"{prefix}••••••••{suffix}"
 
 
-def redact_secrets_from_text(text: str, key: str | None = None) -> str:
+def redact_secrets_from_text(
+    text: str, key: str | None = None, *, use_vault: bool = True
+) -> str:
     """Sanitize logs, console messages, or exceptions by redacting any occurrences of the API key.
 
     Args:
         text: The message or stack trace to redact.
-        key: Optional known active key to redact explicitly. If None, queries get_api_key().
+        key: Optional known active key to redact explicitly.
+        use_vault: When True and *key* is None, query the OS vault for the active
+            key. Pass False on latency-sensitive paths (e.g. toast builds) to
+            avoid a blocking credential-manager IPC; the ``AIza…`` regex still
+            catches pattern-shaped keys.
 
     Returns:
         Redacted text with keys replaced by redaction placeholders.
@@ -110,7 +116,12 @@ def redact_secrets_from_text(text: str, key: str | None = None) -> str:
     redacted = text
 
     # Redact explicit key or fallback to vault/env key
-    active_key = key if key is not None else get_api_key()
+    if key is not None:
+        active_key = key
+    elif use_vault:
+        active_key = get_api_key()
+    else:
+        active_key = None
     if active_key and active_key.strip():
         redacted = redacted.replace(active_key.strip(), "[REDACTED_KEY]")
 

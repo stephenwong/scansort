@@ -137,3 +137,15 @@ def test_notify_scan_stranded_dispatches_built_message():
         folder_path=folder_path,
         log_path=log_path,
     )
+
+
+def test_clean_reason_skips_vault_lookup():
+    """F50: building a failure reason must not hit the OS credential vault."""
+    from scansort.platform.notifications import _clean_reason
+
+    with patch(
+        "scansort.platform.notifications.redact_secrets_from_text"
+    ) as mock_redact:
+        mock_redact.return_value = "clean"
+        _clean_reason("Failed: network error")
+    assert mock_redact.call_args.kwargs.get("use_vault") is False

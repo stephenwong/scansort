@@ -150,11 +150,27 @@ class GeminiClassifier:
                     f"(suggested '{target}') -> routed to {REVIEW_NEEDED_DIR}."
                 )
                 target = REVIEW_NEEDED_DIR
-            elif target not in taxonomy and target != REVIEW_NEEDED_DIR:
-                routing_rationale = f"Suggested folder '{target}' not in discovered taxonomy -> routed to {REVIEW_NEEDED_DIR}."
-                target = REVIEW_NEEDED_DIR
+            elif target == REVIEW_NEEDED_DIR:
+                routing_rationale = (
+                    f"Model requested manual review with {conf * 100:.0f}% confidence."
+                )
             else:
-                routing_rationale = f"Matched discovered taxonomy folder '{target}' with {conf * 100:.0f}% confidence."
+                # Match taxonomy entries case-insensitively: Windows paths are
+                # case-insensitive and models drift on acronym casing (F59).
+                canonical = (
+                    target
+                    if target in taxonomy
+                    else next(
+                        (t for t in taxonomy if t.lower() == target.lower()), None
+                    )
+                )
+                if canonical is None:
+                    routing_rationale = f"Suggested folder '{target}' not in discovered taxonomy -> routed to {REVIEW_NEEDED_DIR}."
+                    target = REVIEW_NEEDED_DIR
+                else:
+                    target = canonical
+                    suggested_folder = canonical
+                    routing_rationale = f"Matched discovered taxonomy folder '{canonical}' with {conf * 100:.0f}% confidence."
 
         return DocumentClassification(
             document_date=doc_date,

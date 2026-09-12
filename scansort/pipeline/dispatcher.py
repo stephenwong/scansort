@@ -126,7 +126,12 @@ def dispatch_file(
         source_path: Path to the processed (or stabilized) file in drop folder.
         docs_root: Root of Documents directory.
         classification: Extracted classification from Gemini.
-        lock_path: Optional cross-process lock file guarding resolve+move.
+        lock_path: Optional cross-process lock file guarding resolve+move. When
+            omitted (``None``), the caller **must already hold** the shared
+            ``operations.lock`` around this call; otherwise two processes can
+            resolve the same collision-free name and one can delete the other's
+            just-filed document on Windows. The coordinator passes ``None`` only
+            because it holds that lock (see ``ScanSortPipeline._apply_metadata_and_dispatch``).
 
     Returns:
         Final destination Path of the filed document.
@@ -134,6 +139,11 @@ def dispatch_file(
     Raises:
         OSError: If destination cannot be created or file move fails.
     """
+    if lock_path is None:
+        logger.debug(
+            "dispatch_file called without lock_path; caller must hold operations.lock."
+        )
+
     dest_dir = resolve_destination_dir(docs_root, classification.target_folder)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -145,7 +155,14 @@ def dispatch_file(
             shutil.move(str(source_path), str(dest_path))
         except OSError:
             # Remove any partially copied destination (e.g. EXDEV copy fallback).
-            dest_path.unlink(missing_ok=True)
+            try:
+                dest_path.unlink(missing_ok=True)
+            except OSError as cleanup_err:
+                logger.warning(
+                    "Could not remove partial destination %s: %s",
+                    dest_path,
+                    cleanup_err,
+                )
             raise
     logger.info("Filed document: %s -> %s", source_path.name, dest_path)
     return dest_path

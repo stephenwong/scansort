@@ -1,5 +1,6 @@
 """Unit tests for scansort.cli.logs module."""
 
+import contextlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -196,3 +197,55 @@ def test_extract_line_severity_ignores_indented_continuation():
     from scansort.cli.logs import _extract_line_severity
 
     assert _extract_line_severity("  error count is zero\n") is None
+
+
+def test_follow_log_releases_handle_during_poll(tmp_path, capsys):
+    """F24: the follower must not hold the log open across the poll sleep."""
+    import scansort.cli.logs as logs
+
+    log = tmp_path / "scansort.log"
+    log.write_text("first line\n", encoding="utf-8")
+
+    real_open = open
+    open_handles: list = []
+
+    class _Tracked:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            open_handles.append(self)
+            return self._fh
+
+        def __exit__(self, *exc):
+            if self in open_handles:
+                open_handles.remove(self)
+            return self._fh.__exit__(*exc)
+
+    def tracking_open(file, *args, **kwargs):
+        if str(file) == str(log):
+            return _Tracked(real_open(file, *args, **kwargs))
+        return real_open(file, *args, **kwargs)
+
+    calls = {"n": 0}
+
+    def sleep_spy(_seconds):
+        calls["n"] += 1
+        assert open_handles == [], "log handle held open during poll sleep"
+        if calls["n"] == 1:
+            with real_open(log, "a", encoding="utf-8") as f:
+                f.write("second line\n")
+            return
+        raise KeyboardInterrupt
+
+    with (
+        patch("builtins.open", tracking_open),
+        patch("time.sleep", side_effect=sleep_spy),
+        contextlib.suppress(KeyboardInterrupt),
+    ):
+        logs._follow_log(log, None)
+
+    assert calls["n"] == 2
+    out = capsys.readouterr().out
+    assert "first line" in out
+    assert "second line" in out

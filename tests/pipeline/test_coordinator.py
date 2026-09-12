@@ -217,6 +217,135 @@ def test_pipeline_conversion_error_returns_none(tmp_path: Path):
         assert pipeline.process_file(corrupt_file) is None
 
 
+def test_staging_failure_routes_scan_to_review(tmp_path: Path):
+    """F01: a staging failure must route to _Review_Needed with a FAILED record."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    corrupt_file = inbox / "corrupt.jpg"
+    corrupt_file.write_bytes(b"bad data")
+    docs_root = tmp_path / "Docs"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+
+    with patch(
+        "scansort.pipeline.coordinator.convert_to_pdf",
+        side_effect=ValueError("Corrupted image"),
+    ):
+        assert pipeline.process_file(corrupt_file) is None
+
+    review_dir = docs_root / cfg.fallback_folder
+    moved = list(review_dir.glob("corrupt*.jpg"))
+    assert moved, "staging-failed scan was never routed to the review folder"
+    assert not corrupt_file.exists()
+    records = [
+        json.loads(line)
+        for line in (pipeline.app_dir / "history.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert records[-1]["status"] == "FAILED"
+
+
+def test_pipeline_uses_entry_config_snapshot_during_hot_reload(tmp_path: Path):
+    """F02: a config swap mid-scan must not redirect/desync an in-flight filing."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_a = tmp_path / "DocsA"
+    (docs_a / "Health").mkdir(parents=True)
+    docs_b = tmp_path / "DocsB"
+    (docs_b / "Health").mkdir(parents=True)
+
+    cfg_a = AppConfig(watch_folder=inbox, documents_root=docs_a)
+    cfg_b = AppConfig(watch_folder=inbox, documents_root=docs_b)
+
+    mock_classifier = _make_classifier()
+
+    def _classify_then_reload(*_args, **_kwargs) -> DocumentClassification:
+        pipeline.update_config(cfg_b)
+        return DocumentClassification(
+            document_date="260901",
+            description="Snapshot_Doc",
+            target_folder="Health",
+            confidence=0.95,
+        )
+
+    mock_classifier.classify_document.side_effect = _classify_then_reload
+    pipeline = ScanSortPipeline(
+        config=cfg_a, app_dir=tmp_path / "appdata", classifier=mock_classifier
+    )
+
+    scan_file = inbox / "doc.jpg"
+    _create_sample_scan(scan_file)
+
+    dest = pipeline.process_file(scan_file)
+    assert dest is not None
+    assert dest.parent == docs_a / "Health"
+    records = [
+        json.loads(line)
+        for line in (pipeline.app_dir / "history.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert records[-1]["status"] == "SUCCESS"
+
+
+def test_success_audit_written_inside_operations_lock(tmp_path: Path, monkeypatch):
+    """F76: the SUCCESS audit record must be committed while the lock is held."""
+    from contextlib import contextmanager
+
+    import scansort.pipeline.coordinator as coordinator_module
+    from scansort.core.fs import interprocess_file_lock
+
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    mock_classifier = _make_classifier()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260901",
+        description="Lock_Audit_Doc",
+        target_folder="Utilities",
+        confidence=0.95,
+    )
+    pipeline = ScanSortPipeline(
+        config=cfg, app_dir=tmp_path / "appdata", classifier=mock_classifier
+    )
+
+    inside = {"value": False}
+
+    @contextmanager
+    def _tracking_lock(path):
+        inside["value"] = True
+        try:
+            with interprocess_file_lock(path):
+                yield
+        finally:
+            inside["value"] = False
+
+    monkeypatch.setattr(coordinator_module, "interprocess_file_lock", _tracking_lock)
+
+    success_inside: list[bool] = []
+    real_log = pipeline.audit_logger.log_scan
+
+    def _tracking_log(entry):
+        if entry.get("status") == "SUCCESS":
+            success_inside.append(inside["value"])
+        return real_log(entry)
+
+    monkeypatch.setattr(pipeline.audit_logger, "log_scan", _tracking_log)
+
+    scan_file = inbox / "doc.jpg"
+    _create_sample_scan(scan_file)
+    pipeline.process_file(scan_file)
+
+    assert success_inside == [True]
+
+
 def test_pipeline_run_worker_delegates(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
@@ -1045,3 +1174,28 @@ def test_duplicate_race_detected_inside_dispatch_lock(tmp_path: Path):
         if line.strip()
     ]
     assert records[-1]["status"] == "DUPLICATE"
+
+
+def test_transfer_file_cleanup_failure_does_not_mask_error(tmp_path: Path):
+    """F72: a failing partial-destination cleanup must not hide the move error."""
+    docs_root = tmp_path / "Docs"
+    docs_root.mkdir()
+    cfg = AppConfig(documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "appdata")
+
+    src = tmp_path / "src.pdf"
+    src.write_bytes(b"%PDF-1.4")
+    dest = tmp_path / "dest.pdf"
+
+    def fake_move(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    def fake_unlink(_self, missing_ok=False):  # noqa: ARG001
+        raise PermissionError("locked by antivirus")
+
+    with (
+        patch("scansort.pipeline.coordinator.shutil.move", side_effect=fake_move),
+        patch.object(Path, "unlink", fake_unlink),
+        pytest.raises(OSError, match="disk full"),
+    ):
+        pipeline._transfer_file(src, dest, preserve_source=False)

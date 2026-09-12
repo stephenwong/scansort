@@ -222,3 +222,19 @@ def test_ensure_csv_headers_uses_interprocess_lock(tmp_path: Path):
 
     mock_lock.assert_called_once()
     assert str(mock_lock.call_args[0][0]).endswith(".lock")
+
+
+def test_log_scan_survives_unserializable_value(tmp_path: Path):
+    """F66: a non-JSON value must not skip both audit sinks."""
+    from datetime import UTC, datetime
+
+    jsonl_path = tmp_path / "history.jsonl"
+    csv_path = tmp_path / "history.csv"
+    logger = AuditLogger(jsonl_path=jsonl_path, csv_path=csv_path)
+
+    logger.log_scan({"status": "SUCCESS", "custom": datetime.now(UTC)})
+
+    assert jsonl_path.exists()
+    assert csv_path.exists()
+    entry = json.loads(jsonl_path.read_text(encoding="utf-8").strip())
+    assert entry["status"] == "SUCCESS"

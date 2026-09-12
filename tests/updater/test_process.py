@@ -451,3 +451,16 @@ def test_perform_self_update_relaunch_failure_still_reports_success(
     assert code == 0
     assert (install_dir / "ScanSort.exe").read_bytes() == b"new"
     monkeypatch.delattr(sys, "frozen", raising=False)
+
+
+def test_wait_windows_process_keeps_polling_on_wait_failed(monkeypatch):
+    """F58: WAIT_FAILED is transient, not a timeout."""
+    fake_ctypes = MagicMock()
+    fake_kernel32 = fake_ctypes.WinDLL.return_value
+    fake_kernel32.OpenProcess.return_value = 7
+    # WAIT_FAILED then WAIT_OBJECT_0.
+    fake_kernel32.WaitForSingleObject.side_effect = [0xFFFFFFFF, 0]
+    monkeypatch.setattr("scansort.updater.process.ctypes", fake_ctypes)
+
+    assert proc._wait_windows_process(1234, timeout=2.0) is True
+    assert fake_kernel32.WaitForSingleObject.call_count == 2

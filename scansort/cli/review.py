@@ -52,6 +52,15 @@ def _input_or_cancel(prompt: str) -> str | None:
         return None
 
 
+def _confirm_duplicate(record: dict) -> bool:
+    """Prompt whether to file content identical to a previous filing."""
+    previous = record.get("new_filename") or "a previously filed document"
+    answer = _input_or_cancel(
+        f"Duplicate of '{previous}' detected. File anyway? [y/N]: "
+    )
+    return bool(answer) and answer.strip().lower() in {"y", "yes"}
+
+
 def _run_cli_review(
     items: list[ReviewItem],
     config: AppConfig,
@@ -120,6 +129,7 @@ def _run_cli_review(
                             history_csv=history_csv,
                             lock_path=lock_path,
                             mirror_csv_path=config.mirror_csv_path,
+                            docs_root=config.documents_root,
                         )
                         print(f"Dismissed {item.filename}.\n")
                     except (OSError, ValueError) as e:
@@ -191,6 +201,7 @@ def _run_cli_review(
                     history_jsonl=history_jsonl,
                     history_csv=history_csv,
                     lock_path=lock_path,
+                    on_duplicate=_confirm_duplicate,
                 )
                 print(f"Successfully filed to {dest.name} in '{target_folder}'.\n")
                 break
@@ -217,6 +228,8 @@ def handle_review(parsed: argparse.Namespace) -> int:
     use_cli = args.cli
 
     if use_gui or (not use_cli and _has_gui_display()):
+        import tkinter as tk
+
         from scansort.ui.review import open_review_dialog
 
         limit = args.limit
@@ -226,8 +239,16 @@ def handle_review(parsed: argparse.Namespace) -> int:
                 "the GUI shows the full queue.",
                 file=sys.stderr,
             )
-        dialog = open_review_dialog(config)
-        dialog.mainloop()
-        return 0
+        try:
+            dialog = open_review_dialog(config)
+            dialog.mainloop()
+            return 0
+        except tk.TclError as e:
+            # A stale/unreachable display must degrade to the terminal session
+            # rather than crashing with an unhandled traceback (F25).
+            print(
+                f"GUI unavailable ({e}); falling back to terminal review.",
+                file=sys.stderr,
+            )
 
     return _run_cli_review(items, config, limit=args.limit)

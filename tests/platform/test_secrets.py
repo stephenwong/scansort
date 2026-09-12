@@ -150,3 +150,11 @@ def test_set_api_key_redacts_credential_from_error():
         set_api_key(secret)
     assert secret not in str(excinfo.value)
     assert "REDACTED" in str(excinfo.value)
+
+
+def test_redact_secrets_use_vault_false_skips_keyring():
+    """F50: notification-path redaction must not perform a blocking vault read."""
+    with patch("scansort.platform.secrets.get_api_key") as mock_get:
+        out = redact_secrets_from_text("failure for AIza" + "a" * 30, use_vault=False)
+    mock_get.assert_not_called()
+    assert "[REDACTED" in out

@@ -67,6 +67,7 @@ def _wait_windows_process(pid: int, timeout: float) -> bool:
     process_query_limited = 0x1000
     synchronize = 0x00100000
     wait_object_0 = 0
+    wait_timeout = 0x00000102
     error_invalid_parameter = 87
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -83,9 +84,19 @@ def _wait_windows_process(pid: int, timeout: float) -> bool:
             try:
                 remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
                 result = kernel32.WaitForSingleObject(handle, remaining_ms)
-                return result == wait_object_0
             finally:
                 kernel32.CloseHandle(handle)
+            if result == wait_object_0:
+                return True
+            if result == wait_timeout:
+                return False
+            # WAIT_FAILED (or any unexpected code) is a transient API failure,
+            # not proof the process is still running; keep polling to the
+            # deadline rather than reporting a spurious timeout (F58).
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(WAIT_POLL_INTERVAL)
+            continue
 
         err = ctypes.get_last_error()
         if err == error_invalid_parameter:

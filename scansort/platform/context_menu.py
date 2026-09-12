@@ -34,10 +34,14 @@ def _build_context_menu_command(executable_path: str | None = None) -> str:
 
 
 def _delete_subkey_if_exists(reg, parent_path: str, key_name: str) -> None:
-    """Delete *key_name* under *parent_path*, ignoring a missing key."""
+    """Delete *key_name* under *parent_path*, ignoring a missing key.
+
+    RegDeleteKey requires the parent handle to carry the DELETE access right,
+    which KEY_SET_VALUE does not grant, so both bits are requested.
+    """
     try:
         with reg.OpenKey(
-            reg.HKEY_CURRENT_USER, parent_path, 0, reg.KEY_SET_VALUE
+            reg.HKEY_CURRENT_USER, parent_path, 0, reg.KEY_SET_VALUE | reg.DELETE
         ) as key:
             reg.DeleteKey(key, key_name)
     except FileNotFoundError:
@@ -93,20 +97,25 @@ def enable_context_menu(executable_path: str | None = None) -> bool:
     if sys.platform == "win32":
         try:
             reg = _get_winreg()
+            ok = True
             for ext in sorted(SUPPORTED_EXTENSIONS):
                 verb_path = f"{WIN_BASE_SUBKEY}\\{ext}\\shell\\{VERB_NAME}"
                 cmd_path = f"{verb_path}\\command"
+                try:
+                    with reg.CreateKey(reg.HKEY_CURRENT_USER, verb_path) as verb_key:
+                        reg.SetValueEx(verb_key, "", 0, reg.REG_SZ, VERB_LABEL)
+                        if icon_path:
+                            reg.SetValueEx(verb_key, "Icon", 0, reg.REG_SZ, icon_path)
 
-                with reg.CreateKey(reg.HKEY_CURRENT_USER, verb_path) as verb_key:
-                    reg.SetValueEx(verb_key, "", 0, reg.REG_SZ, VERB_LABEL)
-                    if icon_path:
-                        reg.SetValueEx(verb_key, "Icon", 0, reg.REG_SZ, icon_path)
+                    with reg.CreateKey(reg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
+                        reg.SetValueEx(cmd_key, "", 0, reg.REG_SZ, full_cmd)
+                except OSError as e:
+                    logger.warning("Failed to register context menu for %s: %s", ext, e)
+                    ok = False
 
-                with reg.CreateKey(reg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
-                    reg.SetValueEx(cmd_key, "", 0, reg.REG_SZ, full_cmd)
-
-            logger.info("Registered Windows Explorer context menu for ScanSort.")
-            return True
+            if ok:
+                logger.info("Registered Windows Explorer context menu for ScanSort.")
+            return ok
         except (OSError, AttributeError, ImportError) as e:
             logger.warning("Failed to enable Windows context menu: %s", e)
             return False
@@ -136,14 +145,20 @@ def disable_context_menu() -> bool:
     if sys.platform == "win32":
         try:
             reg = _get_winreg()
+            ok = True
             for ext in sorted(SUPPORTED_EXTENSIONS):
                 verb_path = f"{WIN_BASE_SUBKEY}\\{ext}\\shell\\{VERB_NAME}"
                 parent_shell = f"{WIN_BASE_SUBKEY}\\{ext}\\shell"
-                _delete_subkey_if_exists(reg, verb_path, "command")
-                _delete_subkey_if_exists(reg, parent_shell, VERB_NAME)
+                try:
+                    _delete_subkey_if_exists(reg, verb_path, "command")
+                    _delete_subkey_if_exists(reg, parent_shell, VERB_NAME)
+                except OSError as e:
+                    logger.warning("Failed to remove context menu for %s: %s", ext, e)
+                    ok = False
 
-            logger.info("Removed Windows Explorer context menu for ScanSort.")
-            return True
+            if ok:
+                logger.info("Removed Windows Explorer context menu for ScanSort.")
+            return ok
         except (OSError, AttributeError, ImportError) as e:
             logger.warning("Failed to remove Windows context menu: %s", e)
             return False

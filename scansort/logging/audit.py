@@ -85,8 +85,8 @@ class AuditLogger:
         try:
             self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.jsonl_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
-        except (OSError, UnicodeError) as e:
+                f.write(json.dumps(record, default=str) + "\n")
+        except (OSError, UnicodeError, TypeError, ValueError) as e:
             logger.error("Failed to append to history.jsonl: %s", e)
 
         # Write to CSV

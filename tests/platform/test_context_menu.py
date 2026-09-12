@@ -226,3 +226,96 @@ def test_context_menu_unsupported_platform(monkeypatch):
     assert is_context_menu_enabled() is False
     assert enable_context_menu() is False
     assert disable_context_menu() is True
+
+
+def _winreg_with_strict_delete():
+    """Build a winreg mock where DeleteKey emulates real Win32 access checks."""
+    mock_winreg = MagicMock()
+    mock_winreg.KEY_SET_VALUE = 0x0002
+    mock_winreg.KEY_READ = 0x00020019
+    mock_winreg.DELETE = 0x00010000
+    last_access = {"value": 0}
+
+    def fake_open_key(hive, path, reserved, access):
+        last_access["value"] = access
+        ctx = MagicMock()
+        ctx.__enter__.return_value = MagicMock()
+        return ctx
+
+    def fake_delete_key(key, name):
+        if not (last_access["value"] & mock_winreg.DELETE):
+            raise PermissionError("Access is denied")
+
+    mock_winreg.OpenKey.side_effect = fake_open_key
+    mock_winreg.DeleteKey.side_effect = fake_delete_key
+    return mock_winreg
+
+
+def test_context_menu_windows_deletekey_requires_delete_access(monkeypatch):
+    """F51: parent keys must be opened with DELETE so RegDeleteKey succeeds."""
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_winreg = _winreg_with_strict_delete()
+
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.platform.context_menu._winreg", mock_winreg, create=True),
+    ):
+        assert disable_context_menu() is True
+
+
+def test_context_menu_windows_disable_isolates_per_extension_failures(monkeypatch):
+    """F47: one extension's registry failure must not abort the remaining loop."""
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_winreg = MagicMock()
+    mock_winreg.KEY_SET_VALUE = 0x0002
+    mock_winreg.KEY_READ = 0x00020019
+    mock_winreg.DELETE = 0x00010000
+    attempts: list[str] = []
+    ext_order = sorted(SUPPORTED_EXTENSIONS)
+    failing_ext = ext_order[2]
+
+    def fake_open_key(hive, path, reserved, access):
+        attempts.append(path)
+        if f"\\{failing_ext}\\" in path:
+            raise OSError("Registry error")
+        ctx = MagicMock()
+        ctx.__enter__.return_value = MagicMock()
+        return ctx
+
+    mock_winreg.OpenKey.side_effect = fake_open_key
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.platform.context_menu._winreg", mock_winreg, create=True),
+    ):
+        assert disable_context_menu() is False
+
+    for ext in ext_order:
+        assert any(f"\\{ext}\\" in path for path in attempts)
+
+
+def test_context_menu_windows_enable_isolates_per_extension_failures(monkeypatch):
+    """F47: one extension's CreateKey failure must not abort enable's remaining loop."""
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_winreg = MagicMock()
+    mock_winreg.REG_SZ = 1
+    ext_order = sorted(SUPPORTED_EXTENSIONS)
+    failing_ext = ext_order[2]
+    attempts: list[str] = []
+
+    def fake_create_key(hive, path):
+        attempts.append(path)
+        if f"\\{failing_ext}\\" in path:
+            raise OSError("Registry error")
+        ctx = MagicMock()
+        ctx.__enter__.return_value = MagicMock()
+        return ctx
+
+    mock_winreg.CreateKey.side_effect = fake_create_key
+    with (
+        patch.dict("sys.modules", {"winreg": mock_winreg}),
+        patch("scansort.platform.context_menu._winreg", mock_winreg, create=True),
+    ):
+        assert enable_context_menu("C:\\Programs\\ScanSort.exe") is False
+
+    for ext in ext_order:
+        assert any(f"\\{ext}\\" in path for path in attempts)
