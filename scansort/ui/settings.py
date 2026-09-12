@@ -8,6 +8,12 @@ from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from scansort.classification.doctor import (
+    ACTION_NONE,
+    DoctorFinding,
+    apply_doctor_action,
+    run_doctor,
+)
 from scansort.classification.taxonomy import build_taxonomy_tree, scan_documents_folders
 from scansort.core.config import (
     AppConfig,
@@ -50,19 +56,26 @@ _FOOTNOTE_FONT = ("TkDefaultFont", 8, "italic")
 def open_settings_dialog(
     config: AppConfig | None = None,
     on_applied: Callable[[AppConfig], None] | None = None,
+    doctor: bool = False,
 ) -> "SettingsDialog":
     """Open or focus the singleton settings dialog window.
 
     Thread-safe via ``_DIALOG_LOCK``; returns the existing open instance if one
-    is already active, or instantiates a new one.
+    is already active, or instantiates a new one. When ``doctor`` is True, the
+    Taxonomy Doctor analysis runs as soon as the dialog is built.
     """
     existing = SettingsDialog.focus_existing()
     if existing is not None:
+        if doctor:
+            # Marshal onto the dialog's Tk thread; the tray calls this from a
+            # worker thread, so a direct widget call would be unsafe.
+            with contextlib.suppress(tk.TclError, RuntimeError):
+                existing.after(0, existing.run_taxonomy_doctor)
         return existing
 
     # Construct outside the lock: __init__ performs keyring/registry I/O and a
     # recursive taxonomy scan, which must not block other tray interactions.
-    dialog = SettingsDialog(config=config, on_applied=on_applied)
+    dialog = SettingsDialog(config=config, on_applied=on_applied, doctor=doctor)
     return SettingsDialog.register_or_existing(dialog)
 
 
@@ -87,6 +100,7 @@ class SettingsDialog(SingletonToplevel):
         master: tk.Misc | None = None,
         config: AppConfig | None = None,
         on_applied: Callable[[AppConfig], None] | None = None,
+        doctor: bool = False,
     ) -> None:
         super().__init__(master)
 
@@ -109,9 +123,14 @@ class SettingsDialog(SingletonToplevel):
         self.context_menu_var = tk.BooleanVar(value=is_context_menu_enabled())
         self.ocr_var = tk.BooleanVar(value=self.app_config.ocr_enabled)
         self.ocr_menu_var = tk.BooleanVar(value=is_ocr_menu_enabled())
+        self._doctor_findings: list[DoctorFinding] = []
+        self._doctor_root: Path | None = None
+        self._dismissed_finding_ids: set[str] = set()
 
         self._build_ui()
         self.refresh_taxonomy_tree()
+        if doctor:
+            self.run_taxonomy_doctor()
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding="16 16 16 16")
@@ -162,6 +181,45 @@ class SettingsDialog(SingletonToplevel):
             tree_frame, text="Refresh Folders", command=self.refresh_taxonomy_tree
         )
         btn_refresh.pack(side=tk.BOTTOM, anchor=tk.E, pady=(6, 0))
+
+        # 2b. Taxonomy Doctor (folder-health findings)
+        doctor_frame = ttk.LabelFrame(
+            container, text="Taxonomy Doctor Findings", padding="10 10 10 10"
+        )
+        doctor_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        doctor_scroll = ttk.Scrollbar(doctor_frame)
+        doctor_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.doctor_tree = ttk.Treeview(
+            doctor_frame,
+            columns=("severity", "finding"),
+            show="headings",
+            yscrollcommand=doctor_scroll.set,
+            selectmode="browse",
+        )
+        self.doctor_tree.heading("severity", text="Severity", anchor=tk.W)
+        self.doctor_tree.heading("finding", text="Finding", anchor=tk.W)
+        self.doctor_tree.column("severity", width=80, stretch=False)
+        self.doctor_tree.column("finding", width=420)
+        self.doctor_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        doctor_scroll.config(command=self.doctor_tree.yview)
+
+        doctor_bar = ttk.Frame(doctor_frame)
+        doctor_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
+        ttk.Button(
+            doctor_bar, text="Run Taxonomy Doctor", command=self.run_taxonomy_doctor
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            doctor_bar,
+            text="Approve",
+            command=self.approve_selected_doctor_finding,
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(
+            doctor_bar,
+            text="Dismiss",
+            command=self.dismiss_selected_doctor_finding,
+        ).pack(side=tk.RIGHT)
 
         # 3. Gemini API & Classification
         gemini_frame = ttk.LabelFrame(
@@ -309,6 +367,117 @@ class SettingsDialog(SingletonToplevel):
                 _insert_nodes(item_id, children)
 
         _insert_nodes("", tree_dict)
+
+    def run_taxonomy_doctor(self) -> None:
+        """Analyze the current documents tree and populate the findings list."""
+        docs_raw = self.docs_var.get().strip()
+        docs_path = Path(docs_raw) if docs_raw else None
+        if docs_path is None or not docs_path.is_dir():
+            self._doctor_findings = []
+            self._doctor_root = None
+            self._populate_doctor_tree()
+            if docs_path is None:
+                messagebox.showerror(
+                    "Taxonomy Doctor",
+                    "Documents Destination Root cannot be empty.",
+                    parent=self,
+                )
+            return
+
+        # Pin the analyzed root so an Approve can never act on a root different
+        # from the one the findings were computed against.
+        self._doctor_root = docs_path.resolve()
+        temp_cfg = self._doctor_config(self._doctor_root)
+        try:
+            report = run_doctor(temp_cfg)
+        except (OSError, ValueError) as e:
+            logger.warning("Taxonomy Doctor analysis failed: %s", e)
+            self._doctor_findings = []
+            self._populate_doctor_tree()
+            messagebox.showerror("Taxonomy Doctor", str(e), parent=self)
+            return
+        self._doctor_findings = [
+            finding
+            for finding in report.findings
+            if finding.finding_id not in self._dismissed_finding_ids
+        ]
+        self._populate_doctor_tree()
+
+    def _doctor_config(self, docs_root: Path) -> AppConfig:
+        """Build a config snapshot rooted at *docs_root* for doctor operations."""
+        return self.app_config.model_copy(
+            update={
+                "documents_root": docs_root,
+                "fallback_folder": self.fallback_var.get().strip()
+                or self.app_config.fallback_folder,
+            }
+        )
+
+    def _populate_doctor_tree(self) -> None:
+        """Render the current findings into the doctor treeview."""
+        for item in self.doctor_tree.get_children():
+            self.doctor_tree.delete(item)
+        for index, finding in enumerate(self._doctor_findings):
+            suffix = "" if finding.action == ACTION_NONE else "  [actionable]"
+            self.doctor_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(finding.severity, f"{finding.message}{suffix}"),
+            )
+
+    def _selected_doctor_finding(self) -> DoctorFinding | None:
+        """Return the selected finding, or None when nothing is selected."""
+        selection = self.doctor_tree.selection()
+        if not selection:
+            return None
+        try:
+            return self._doctor_findings[int(selection[0])]
+        except IndexError, ValueError:
+            return None
+
+    def approve_selected_doctor_finding(self) -> None:
+        """Apply the selected finding's action after re-validating containment."""
+        finding = self._selected_doctor_finding()
+        if finding is None:
+            messagebox.showinfo(
+                "Taxonomy Doctor",
+                "Select a finding to approve.",
+                parent=self,
+            )
+            return
+        if self._doctor_root is None:
+            messagebox.showerror(
+                "Taxonomy Doctor",
+                "Run the Taxonomy Doctor analysis before approving a finding.",
+                parent=self,
+            )
+            return
+        temp_cfg = self._doctor_config(self._doctor_root)
+        try:
+            message = apply_doctor_action(finding, temp_cfg)
+        except (OSError, ValueError) as e:
+            messagebox.showerror("Taxonomy Doctor", str(e), parent=self)
+            return
+        show_toast("ScanSort Taxonomy Doctor", message)
+        self.refresh_taxonomy_tree()
+        self.run_taxonomy_doctor()
+
+    def dismiss_selected_doctor_finding(self) -> None:
+        """Hide the selected finding for this session without changing files."""
+        finding = self._selected_doctor_finding()
+        if finding is None:
+            messagebox.showinfo(
+                "Taxonomy Doctor",
+                "Select a finding to dismiss.",
+                parent=self,
+            )
+            return
+        self._dismissed_finding_ids.add(finding.finding_id)
+        self._doctor_findings = [
+            f for f in self._doctor_findings if f.finding_id != finding.finding_id
+        ]
+        self._populate_doctor_tree()
 
     def _resolve_new_config(self) -> AppConfig | None:
         """Validate dialog inputs and build the updated config, or None on error."""

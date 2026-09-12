@@ -184,7 +184,12 @@ def build_parser() -> argparse.ArgumentParser:
     rescan_p.add_argument(
         "--json",
         action="store_true",
-        help="Output discovered taxonomy as a JSON array",
+        help="Output results as JSON (taxonomy array, or doctor report with --doctor)",
+    )
+    rescan_p.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Analyze folder health (near-duplicates, ghosts, over-broad and review-theme folders)",
     )
 
     # check-update command

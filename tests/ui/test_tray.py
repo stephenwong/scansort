@@ -248,6 +248,16 @@ def test_tray_app_open_settings(tmp_path: Path):
         app.open_settings(async_task=False)
         mock_dialog.assert_called_once()
 
+    with patch("scansort.ui.tray.open_settings_dialog") as mock_doctor_dialog:
+        app.open_taxonomy_doctor(async_task=False)
+        assert mock_doctor_dialog.call_args.kwargs.get("doctor") is True
+
+
+def test_tray_menu_contains_taxonomy_doctor(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    menu_texts = [getattr(item, "text", "") for item in app._build_menu().items]
+    assert "Taxonomy Doctor..." in menu_texts
+
 
 def test_tray_app_is_paused_none():
     cfg = AppConfig()

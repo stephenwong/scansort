@@ -174,6 +174,9 @@ class SystemTrayApp:
             pystray.MenuItem(
                 "Rescan / Refresh Taxonomies", lambda icon, item: self.rescan_taxonomy()
             ),
+            pystray.MenuItem(
+                "Taxonomy Doctor...", lambda icon, item: self.open_taxonomy_doctor()
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Open Drop Folder", lambda icon, item: self.open_drop_folder()
@@ -241,6 +244,23 @@ class SystemTrayApp:
                 "ScanSort Taxonomy",
                 f"Discovered {len(folders)} destination folders under Documents.",
             )
+
+        return self._offload(_task, async_task)
+
+    def open_taxonomy_doctor(self, async_task: bool = True) -> threading.Thread | None:
+        """Open Settings and run the Taxonomy Doctor folder-health analysis."""
+
+        def _task():
+            try:
+                dialog = open_settings_dialog(
+                    config=self.config,
+                    on_applied=self.on_settings_applied,
+                    doctor=True,
+                )
+                self._run_owned_mainloop(dialog)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Taxonomy Doctor failed: %s", e)
+                show_toast("ScanSort", f"Could not run Taxonomy Doctor: {e}")
 
         return self._offload(_task, async_task)
 

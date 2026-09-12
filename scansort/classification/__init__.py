@@ -1,6 +1,13 @@
 """Document classification, Gemini multimodal API client, taxonomy mapping, and hints."""
 
 from scansort.classification.client import GeminiClassifier
+from scansort.classification.doctor import (
+    DoctorFinding,
+    DoctorReport,
+    apply_doctor_action,
+    render_doctor_report,
+    run_doctor,
+)
 from scansort.classification.hints import (
     add_folder_hint,
     get_default_hints_path,
@@ -36,4 +43,9 @@ __all__ = [
     "add_folder_hint",
     "normalize_folder_key",
     "get_default_hints_path",
+    "DoctorFinding",
+    "DoctorReport",
+    "run_doctor",
+    "render_doctor_report",
+    "apply_doctor_action",
 ]

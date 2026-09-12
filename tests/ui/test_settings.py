@@ -435,3 +435,222 @@ def test_settings_destroy_twice_is_safe(tk_root, tmp_path: Path):
     dialog = SettingsDialog(master=tk_root, config=cfg)
     dialog.destroy()
     dialog.destroy()
+
+
+def _doctor_report():
+    from scansort.classification.doctor import (
+        ACTION_CREATE_FOLDER,
+        ACTION_NONE,
+        KIND_OVERBROAD_FOLDER,
+        KIND_REVIEW_CLUSTER,
+        SEVERITY_LOW,
+        SEVERITY_MEDIUM,
+        DoctorFinding,
+        DoctorReport,
+    )
+
+    return DoctorReport(
+        folders=["Misc"],
+        findings=[
+            DoctorFinding(
+                kind=KIND_REVIEW_CLUSTER,
+                severity=SEVERITY_MEDIUM,
+                message="Recurring theme 'Pet_Insurance'",
+                action=ACTION_CREATE_FOLDER,
+                target_folder="Pet_Insurance",
+                keywords=["pet"],
+            ),
+            DoctorFinding(
+                kind=KIND_OVERBROAD_FOLDER,
+                severity=SEVERITY_LOW,
+                message="Over-broad folder 'Misc'",
+                action=ACTION_NONE,
+                primary_folder="Misc",
+            ),
+        ],
+    )
+
+
+def test_settings_dialog_doctor_run_populate_and_dismiss(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    with patch("scansort.ui.settings.run_doctor", return_value=_doctor_report()):
+        dialog.run_taxonomy_doctor()
+
+    assert len(dialog._doctor_findings) == 2
+    assert len(dialog.doctor_tree.get_children()) == 2
+
+    dialog.doctor_tree.selection_set("0")
+    dialog.dismiss_selected_doctor_finding()
+    assert len(dialog._doctor_findings) == 1
+    assert len(dialog.doctor_tree.get_children()) == 1
+    dialog.destroy()
+
+
+def test_settings_dialog_doctor_approve_action(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    with (
+        patch("scansort.ui.settings.run_doctor", return_value=_doctor_report()),
+        patch(
+            "scansort.ui.settings.apply_doctor_action",
+            return_value="Created destination folder 'Pet_Insurance'",
+        ) as mock_apply,
+        patch("scansort.ui.settings.show_toast") as mock_toast,
+    ):
+        dialog.run_taxonomy_doctor()
+        dialog.doctor_tree.selection_set("0")
+        dialog.approve_selected_doctor_finding()
+
+    mock_apply.assert_called_once()
+    assert mock_apply.call_args.args[0].target_folder == "Pet_Insurance"
+    mock_toast.assert_called_once()
+    dialog.destroy()
+
+
+def test_settings_dialog_doctor_approve_without_selection(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    with patch("tkinter.messagebox.showinfo") as mock_info:
+        dialog.approve_selected_doctor_finding()
+    mock_info.assert_called_once()
+    dialog.destroy()
+
+
+def test_settings_dialog_doctor_run_error_surfaces(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    with (
+        patch("scansort.ui.settings.run_doctor", side_effect=ValueError("bad root")),
+        patch("tkinter.messagebox.showerror") as mock_error,
+    ):
+        dialog.run_taxonomy_doctor()
+    mock_error.assert_called_once()
+    dialog.destroy()
+
+
+def test_open_settings_dialog_doctor_runs_analysis(tk_root, tmp_path: Path):
+    from scansort.ui.settings import open_settings_dialog
+
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    with patch(
+        "scansort.ui.settings.run_doctor", return_value=_doctor_report()
+    ) as mock_run:
+        dialog = open_settings_dialog(config=cfg, doctor=True)
+    assert mock_run.call_count == 1
+    assert dialog._doctor_findings
+    dialog.destroy()
+
+
+def test_open_settings_dialog_doctor_runs_on_existing_instance(tmp_path: Path):
+    from scansort.ui.settings import open_settings_dialog
+
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    dialog = open_settings_dialog(config=cfg)
+    with patch(
+        "scansort.ui.settings.run_doctor", return_value=_doctor_report()
+    ) as mock_run:
+        again = open_settings_dialog(config=cfg, doctor=True)
+        assert again is dialog
+        # The queued after(0, ...) callback runs when the event loop updates.
+        dialog.update()
+    assert mock_run.call_count == 1
+    dialog.destroy()
+
+
+def test_settings_dialog_doctor_empty_root_does_not_scan(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    dialog.docs_var.set("   ")
+    with (
+        patch("scansort.ui.settings.run_doctor") as mock_run,
+        patch("tkinter.messagebox.showerror") as mock_error,
+    ):
+        dialog.run_taxonomy_doctor()
+
+    mock_run.assert_not_called()
+    mock_error.assert_called_once()
+    assert dialog._doctor_findings == []
+    assert dialog._doctor_root is None
+    dialog.destroy()
+
+
+def test_settings_dialog_doctor_approve_uses_analyzed_root(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs_a = tmp_path / "DocsA"
+    docs_b = tmp_path / "DocsB"
+    inbox.mkdir()
+    docs_a.mkdir()
+    docs_b.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_a)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    with patch("scansort.ui.settings.run_doctor", return_value=_doctor_report()):
+        dialog.run_taxonomy_doctor()
+
+    # The user edits the documents field after the analysis was computed.
+    dialog.docs_var.set(str(docs_b))
+    dialog.doctor_tree.selection_set("0")
+    with patch(
+        "scansort.ui.settings.apply_doctor_action", return_value="ok"
+    ) as mock_apply:
+        dialog.approve_selected_doctor_finding()
+
+    assert mock_apply.call_args.args[1].documents_root == docs_a.resolve()
+    dialog.destroy()
+
+
+def test_settings_dialog_doctor_dismiss_persists_across_rerun(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+
+    with patch("scansort.ui.settings.run_doctor", return_value=_doctor_report()):
+        dialog.run_taxonomy_doctor()
+    dialog.doctor_tree.selection_set("0")
+    dismissed_id = dialog._doctor_findings[0].finding_id
+    dialog.dismiss_selected_doctor_finding()
+
+    with patch("scansort.ui.settings.run_doctor", return_value=_doctor_report()):
+        dialog.run_taxonomy_doctor()
+
+    assert all(f.finding_id != dismissed_id for f in dialog._doctor_findings)
+    dialog.destroy()

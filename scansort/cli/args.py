@@ -68,6 +68,9 @@ class CliArgs:
     gui: bool = False
     cli: bool = False
 
+    # rescan
+    doctor: bool = False
+
     # completion / help
     shell: str = "bash"
     command_name: str | None = None

@@ -204,6 +204,8 @@ View current settings: `uv run scansort config --show`
 | `scansort undo` | Reverse the last filing (repeatable) |
 | `scansort --dry-run undo` | Preview the reversal without moving files |
 | `scansort rescan` | Refresh & display folder taxonomy |
+| `scansort rescan --doctor` | Analyze folder health (near-duplicates, ghosts, catch-alls, review themes) |
+| `scansort rescan --doctor --json` | Machine-readable Taxonomy Doctor report |
 | `scansort history` | View recent filing history |
 | `scansort history -q "electricity"` | Search filing history |
 | `scansort stats` | View filing totals & API cost summary |
@@ -213,7 +215,7 @@ View current settings: `uv run scansort config --show`
 | `scansort help <command>` | Help for any subcommand |
 | `scansort --verbose watch` | Enable debug-level logging |
 
-> **Notes:** `scansort review --limit N` applies to the `--cli` session; the GUI always shows the full queue. `scansort history` and `scansort stats` exit non-zero when the audit log cannot be read. `scansort config --set` must be used alone (it is rejected when combined with other mutation flags), and unrecognised `config.json` keys are logged and ignored. Manually filing a document from the review queue re-checks its SHA-256 against history and asks you to confirm before filing content that has already been filed; declining moves it to `_Review_Needed/Duplicates/`. Filter reviewed filings with `scansort history --status REVIEWED`.
+> **Notes:** `scansort review --limit N` applies to the `--cli` session; the GUI always shows the full queue. `scansort history` and `scansort stats` exit non-zero when the audit log cannot be read. `scansort config --set` must be used alone (it is rejected when combined with other mutation flags), and unrecognised `config.json` keys are logged and ignored. Manually filing a document from the review queue re-checks its SHA-256 against history and asks you to confirm before filing content that has already been filed; declining moves it to `_Review_Needed/Duplicates/`. Filter reviewed filings with `scansort history --status REVIEWED`. `scansort rescan --doctor` is read-only: it reports near-duplicate folders, ghost folders (no recent filings), over-broad catch-alls, and recurring review themes. Apply suggestions from **Settings → Taxonomy Doctor Findings** (or the tray's "Taxonomy Doctor..." item) with 1-click Approve; nothing is created, merged, or deleted without your confirmation, and every change stays strictly inside your Documents root. Approving a proposed new folder also saves its detected keywords as classification hints for future scans.
 
 > **Tip:** The packaged `ScanSort.exe` works the same way — just replace `scansort` with `ScanSort.exe` in the commands above. When launched from a terminal, CLI output appears there; when launched by double-click or auto-start, it runs silently in the tray.
 
