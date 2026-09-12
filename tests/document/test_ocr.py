@@ -555,6 +555,53 @@ def test_append_text_layer_dereferences_indirect_contents_array():
         assert isinstance(element.get_object(), StreamObject)
 
 
+def test_append_text_layer_preserves_single_indirect_stream_reference(tmp_path):
+    """A lone indirect /Contents stream must remain indirect through a re-parse.
+
+    Regression: dereferencing the existing stream dropped its indirect
+    reference, so pypdf serialized it inline inside the /Contents array.
+    Re-reading then yielded a bare DecodedStreamObject lacking
+    ``indirect_reference``, crashing ``PdfWriter.append`` with AttributeError
+    during the metadata phase (process_pdf_metadata_and_rotation).
+    """
+    from pypdf.generic import (
+        ArrayObject,
+        DecodedStreamObject,
+        IndirectObject,
+        NameObject,
+        StreamObject,
+    )
+
+    from scansort.document.metadata import process_pdf_metadata_and_rotation
+    from scansort.document.ocr import _append_text_layer
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=100, height=100)
+    original = DecodedStreamObject()
+    original.set_data(b"q Q")
+    page[NameObject("/Contents")] = writer._add_object(original)
+
+    _append_text_layer(writer, page, [(1, 1, 5, 5, "Hello")], (100, 100))
+
+    contents = page[NameObject("/Contents")].get_object()
+    assert isinstance(contents, ArrayObject)
+    assert len(contents) == 2
+    for element in contents:
+        assert isinstance(element, IndirectObject)
+        assert isinstance(element.get_object(), StreamObject)
+
+    out = tmp_path / "annotated.pdf"
+    with open(out, "wb") as handle:
+        writer.write(handle)
+
+    reparsed = PdfReader(str(out)).pages[0][NameObject("/Contents")].get_object()
+    for element in reparsed:
+        assert isinstance(element, IndirectObject)
+
+    # The metadata phase re-parses and appends; previously raised AttributeError.
+    process_pdf_metadata_and_rotation(out, title="Regression")
+
+
 def test_copy_document_metadata_error_paths_are_non_fatal():
     from scansort.document.ocr import _copy_document_metadata
 

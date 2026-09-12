@@ -242,13 +242,16 @@ def _append_text_layer(
     stream.set_data(_build_overlay_stream(words, image_size, page))
     stream_ref = writer._add_object(stream)
     contents = page.get(NameObject("/Contents"))  # type: ignore[attr-defined]
-    if contents is not None:
-        contents = contents.get_object()
-    if isinstance(contents, ArrayObject):
-        contents.append(stream_ref)
+    resolved = contents.get_object() if contents is not None else None
+    if isinstance(resolved, ArrayObject):
+        resolved.append(stream_ref)
     elif contents is None:
         page[NameObject("/Contents")] = stream_ref  # type: ignore[index]
     else:
+        # Keep the original indirect reference: storing the dereferenced stream
+        # inline makes pypdf emit an illegal direct stream in the /Contents
+        # array, which cannot be re-parsed (no indirect_reference) and crashes
+        # a later PdfWriter.append during metadata processing.
         page[NameObject("/Contents")] = ArrayObject([contents, stream_ref])  # type: ignore[index]
 
 
