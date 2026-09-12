@@ -10,6 +10,7 @@ from typing import Any
 
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HISTORY_CSV_NAME, HISTORY_JSONL_NAME
+from scansort.core.fs import interprocess_file_lock
 from scansort.core.timeutil import sydney_now
 
 logger = logging.getLogger(__name__)
@@ -54,19 +55,23 @@ class AuditLogger:
         self.mirror_csv_path = mirror_csv_path
 
     def _ensure_csv_headers(self, path: Path) -> None:
+        # Serialize header initialization across processes: without a lock two
+        # writers can both observe a zero-byte file and emit duplicate headers.
+        lock_path = path.parent / (path.name + ".lock")
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists():
-                if path.stat().st_size > 0:
+            with interprocess_file_lock(lock_path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.exists():
+                    if path.stat().st_size > 0:
+                        return
+                    with open(path, "a", newline="", encoding="utf-8") as f:
+                        if os.fstat(f.fileno()).st_size == 0:
+                            csv.writer(f).writerow(CSV_HEADERS)
+                            f.flush()
                     return
-                # Zero-byte file: append the header only while still empty so a
-                # concurrent process's appends are never truncated.
-                with open(path, "a", newline="", encoding="utf-8") as f:
-                    if os.fstat(f.fileno()).st_size == 0:
-                        csv.writer(f).writerow(CSV_HEADERS)
-                return
-            with open(path, "x", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(CSV_HEADERS)
+                with open(path, "x", newline="", encoding="utf-8") as f:
+                    csv.writer(f).writerow(CSV_HEADERS)
+                    f.flush()
         except FileExistsError:
             pass  # A concurrent process created the file first; never truncate.
         except OSError as e:

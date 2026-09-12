@@ -28,6 +28,36 @@ from scansort.platform.secrets import (
     set_api_key,
 )
 
+_TRUTHY_TOKENS = frozenset({"true", "1", "yes", "enable", "enabled"})
+_FALSY_TOKENS = frozenset({"false", "0", "no", "disable", "disabled"})
+
+# Flags that mutate persisted state; combining them with --set/--get is rejected
+# rather than silently applying only one.
+_MUTATION_FLAGS = (
+    "set_key",
+    "watch_folder",
+    "documents_folder",
+    "gemini_model",
+    "fallback_folder",
+    "max_depth",
+    "mirror_csv",
+    "auto_update",
+    "update_check_interval",
+    "dry_run",
+    "autostart",
+    "context_menu",
+)
+
+
+def _has_other_mutations(
+    parsed: argparse.Namespace, exclude: str | None = None
+) -> bool:
+    """Return True when a mutation flag other than ``exclude`` is present."""
+    return any(
+        attr != exclude and getattr(parsed, attr, None) is not None
+        for attr in _MUTATION_FLAGS
+    )
+
 
 def _try_save_config(cfg: AppConfig) -> bool:
     """Persist configuration, printing user-friendly error on failure."""
@@ -59,12 +89,18 @@ def handle_config(parsed: argparse.Namespace) -> int:
         return 1
 
     if getattr(parsed, "get", None):
+        if _has_other_mutations(parsed):
+            print(
+                "Error: --get cannot be combined with mutation flags.",
+                file=sys.stderr,
+            )
+            return 1
         field_query = parsed.get.strip().lower()
         if field_query in ("gemini_key", "api_key", "gemini_api_key"):
             api_key = get_api_key()
             print(mask_api_key(api_key))
             return 0
-        if hasattr(cfg, field_query):
+        if field_query in AppConfig.model_fields:
             print(getattr(cfg, field_query))
             return 0
         print(f"Unknown configuration field: {parsed.get}", file=sys.stderr)
@@ -73,19 +109,29 @@ def handle_config(parsed: argparse.Namespace) -> int:
     if getattr(parsed, "set", None):
         field_name = parsed.set[0].strip().lower()
         raw_val = parsed.set[1].strip()
-        if not hasattr(cfg, field_name):
+        if field_name not in AppConfig.model_fields:
             print(f"Unknown configuration field: {parsed.set[0]}", file=sys.stderr)
+            return 1
+        if _has_other_mutations(parsed):
+            print(
+                "Error: --set cannot be combined with other mutation flags.",
+                file=sys.stderr,
+            )
             return 1
         updated_dict = cfg.model_dump()
         current_val = getattr(cfg, field_name)
         if isinstance(current_val, bool):
-            updated_dict[field_name] = raw_val.lower() in (
-                "true",
-                "1",
-                "yes",
-                "enable",
-                "enabled",
-            )
+            token = raw_val.lower()
+            if token in _TRUTHY_TOKENS:
+                updated_dict[field_name] = True
+            elif token in _FALSY_TOKENS:
+                updated_dict[field_name] = False
+            else:
+                print(
+                    f"Invalid boolean value for {field_name}: {raw_val}",
+                    file=sys.stderr,
+                )
+                return 1
         elif isinstance(current_val, int):
             try:
                 updated_dict[field_name] = int(raw_val)
@@ -112,7 +158,7 @@ def handle_config(parsed: argparse.Namespace) -> int:
 
     has_mutation = False
 
-    if getattr(parsed, "set_key", None):
+    if getattr(parsed, "set_key", None) is not None:
         has_mutation = True
         try:
             set_api_key(parsed.set_key)

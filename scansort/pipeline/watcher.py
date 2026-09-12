@@ -107,14 +107,14 @@ class DropFolderWatcher:
             self.watch_folder = new_folder
             self._interrupt_cycle()
 
-    def _handle_changes(self, changes) -> None:
+    def _handle_changes(self, changes, seen_paths: set[Path] | None = None) -> None:
         """Process a batch of debounced change events from watchfiles."""
         with self._lock:
             if self._paused:
                 logger.debug("Watcher is paused; ignoring incoming changes.")
                 return
 
-        seen_paths: set[Path] = set()
+        seen_paths = seen_paths if seen_paths is not None else set()
         for change_type, path_str in changes:
             if change_type in {Change.added, Change.modified}:
                 candidate = Path(path_str)
@@ -134,29 +134,46 @@ class DropFolderWatcher:
 
         with self._lock:
             is_paused = self._paused
+        swept_paths: set[Path] = set()
         if not is_paused:
-            self._sweep_preexisting_files(folder)
+            self._sweep_preexisting_files(folder, swept_paths)
 
+        first_wake = True
         for changes in watch(
             folder,
             debounce=self.debounce_ms,
             stop_event=cycle_stop_event,
             recursive=False,
+            yield_on_timeout=True,
         ):
-            self._handle_changes(changes)
+            if first_wake:
+                # watchfiles has registered its baseline by this first wake, so
+                # any file created between the initial sweep and registration is
+                # now visible; sweep again (deduped) to close the gap.
+                self._handle_changes(changes, swept_paths)
+                if not is_paused:
+                    self._sweep_preexisting_files(folder, swept_paths)
+                first_wake = False
+            else:
+                self._handle_changes(changes)
             if self._stop_event.is_set() or self._restart_event.is_set():
                 break
 
-    def _sweep_preexisting_files(self, folder: Path) -> None:
+    def _sweep_preexisting_files(
+        self, folder: Path, seen: set[Path] | None = None
+    ) -> None:
         """Enqueue supported files already present when a watch cycle starts.
 
         watchfiles only reports changes after registration, so scans that arrived
         while the app was stopped (or were left queued at shutdown) would otherwise
-        never be filed.
+        never be filed. ``seen`` prevents re-enqueuing across the two sweeps that
+        bracket watcher registration.
         """
+        seen = seen if seen is not None else set()
         try:
             for candidate in sorted(folder.iterdir()):
-                if should_process_path(candidate):
+                if candidate not in seen and should_process_path(candidate):
+                    seen.add(candidate)
                     logger.info("Queuing pre-existing scan: %s", candidate.name)
                     self.file_queue.put(candidate)
         except OSError as e:
@@ -164,8 +181,12 @@ class DropFolderWatcher:
 
     def start(self) -> None:
         """Run the blocking watchfiles event loop until stop() is called."""
-        self._running = True
-        self._stop_event.clear()
+        with self._lock:
+            # Honor a stop() that landed before start(): do not erase the signal.
+            if self._stop_event.is_set():
+                logger.info("DropFolderWatcher.start() ignored: already stopped.")
+                return
+            self._running = True
 
         try:
             while True:

@@ -107,6 +107,39 @@ def test_resolve_duplicates_dir_symlink_escape_falls_back(tmp_path: Path):
     assert dup_dir.is_relative_to(docs_root.resolve())
 
 
+def test_resolve_destination_dir_review_symlink_escape_raises(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    review = docs_root / "_Review_Needed"
+    try:
+        review.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    # Even the fallback must never resolve outside documents_root.
+    with pytest.raises(ValueError, match="documents root"):
+        resolve_destination_dir(docs_root, "")
+
+
+def test_resolve_duplicates_dir_duplicates_symlink_escape_raises(tmp_path: Path):
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (docs_root / "_Review_Needed").mkdir()
+    dup = docs_root / "_Review_Needed" / "Duplicates"
+    try:
+        dup.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    # A symlinked Duplicates child must not redirect duplicates outside the root.
+    with pytest.raises(ValueError, match="documents root"):
+        resolve_duplicates_dir(docs_root, "")
+
+
 def test_dispatch_file_atomic_move(tmp_path: Path):
     source_dir = tmp_path / "Inbox"
     source_dir.mkdir()

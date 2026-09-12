@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from scansort.core.fs import (
     normalize_relative_folder,
     relative_folder_is_safe,
 )
+from scansort.document.converter import convert_to_pdf
 from scansort.document.metadata import process_pdf_metadata_and_rotation
 from scansort.logging.audit import AuditLogger
 from scansort.pipeline.dispatcher import (
@@ -127,7 +129,7 @@ def get_review_queue(
                                 name_map[new_fn] = rec
                     except json.JSONDecodeError:
                         continue
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
             logger.warning("Could not read history for review correlation: %s", e)
 
     items: list[ReviewItem] = []
@@ -242,24 +244,46 @@ def file_reviewed_item(
 
     clean_date = sanitize_date(document_date)
     clean_desc = sanitize_description(description)
-    suffix = item.file_path.suffix.lower() or ".pdf"
-    desired_name = f"{clean_date}_{clean_desc}{suffix}"
 
     op_lock = lock_path or (get_default_app_dir() / OPERATIONS_LOCK_FILENAME)
+
+    # Invariant B: reviewed image originals are normalized to PDF (with XMP)
+    # before filing; conversion failures fall back to the original extension.
+    source_path = item.file_path
+    converted_pdf: Path | None = None
+    if source_path.suffix.lower() != ".pdf":
+        try:
+            tmp_dir = get_default_app_dir() / "tmp"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            converted_pdf = convert_to_pdf(
+                source_path,
+                output_path=tmp_dir / f"{source_path.stem}_{os.getpid()}.pdf",
+            )
+            source_path = converted_pdf
+        except Exception as conv_err:  # noqa: BLE001 - best-effort conversion
+            logger.warning(
+                "Could not convert %s to PDF for review filing: %s",
+                item.file_path.name,
+                conv_err,
+            )
+            converted_pdf = None
+
+    suffix = source_path.suffix.lower() or ".pdf"
+    desired_name = f"{clean_date}_{clean_desc}{suffix}"
 
     with interprocess_file_lock(op_lock):
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = resolve_collision(dest_dir, desired_name)
 
-        if not item.file_path.exists():
+        if not source_path.exists():
             raise FileNotFoundError(f"Source file {item.file_path} no longer exists")
 
         # Update PDF metadata in-place before moving if PDF
-        if item.file_path.suffix.lower() == ".pdf":
+        if source_path.suffix.lower() == ".pdf":
             try:
                 process_pdf_metadata_and_rotation(
-                    pdf_path=item.file_path,
-                    output_path=item.file_path,
+                    pdf_path=source_path,
+                    output_path=source_path,
                     title=clean_desc,
                     subject=item.summary,
                     keywords=[item.document_type, normalized_folder],
@@ -267,11 +291,20 @@ def file_reviewed_item(
             except (OSError, ValueError) as e:
                 logger.warning("Could not update metadata during review filing: %s", e)
 
-        # Move file atomically to destination
-        shutil.move(str(item.file_path), str(dest_path))
+        # Compute SHA-256 from the original scan identity before any rewrite;
+        # FAILED records carry the "UNKNOWN" sentinel, which is not a digest.
+        file_hash = (
+            item.sha256
+            if item.sha256 and item.sha256 != "UNKNOWN"
+            else compute_file_sha256(item.file_path)
+        )
 
-        # Compute SHA-256 if not already cached
-        file_hash = item.sha256 or compute_file_sha256(dest_path)
+        # Move file atomically to destination
+        try:
+            shutil.move(str(source_path), str(dest_path))
+        except OSError:
+            dest_path.unlink(missing_ok=True)
+            raise
 
         # Log audit entry
         app_dir = get_default_app_dir()
@@ -295,15 +328,30 @@ def file_reviewed_item(
         }
         audit_logger.log_scan(entry)
 
-        # Save keyword hint if requested
+        # Save keyword hint if requested (best-effort: a hint failure must not
+        # misreport an already-completed filing as failed).
         if keyword_hint and str(keyword_hint).strip():
             h_path = hints_path or get_default_hints_path()
-            add_folder_hint(normalized_folder, keyword_hint.strip(), hints_path=h_path)
-            logger.info(
-                "Added keyword hint '%s' for folder '%s'",
-                keyword_hint.strip(),
-                normalized_folder,
-            )
+            try:
+                add_folder_hint(
+                    normalized_folder, keyword_hint.strip(), hints_path=h_path
+                )
+                logger.info(
+                    "Added keyword hint '%s' for folder '%s'",
+                    keyword_hint.strip(),
+                    normalized_folder,
+                )
+            except OSError as e:
+                logger.warning(
+                    "Could not save keyword hint for %s: %s", normalized_folder, e
+                )
+
+    if converted_pdf is not None:
+        converted_pdf.unlink(missing_ok=True)
+        # The image was converted and its PDF filed; the consumed original
+        # must not linger in _Review_Needed and reappear in the queue.
+        if dest_path.exists() and item.file_path.exists():
+            item.file_path.unlink(missing_ok=True)
 
     logger.info("Reviewed and filed scan: %s -> %s", item.filename, dest_path)
     return dest_path
@@ -314,6 +362,7 @@ def dismiss_review_item(
     history_jsonl: Path | None = None,
     history_csv: Path | None = None,
     lock_path: Path | None = None,
+    mirror_csv_path: Path | None = None,
 ) -> None:
     """Safely delete an unwanted or corrupt item from review needed.
 
@@ -332,6 +381,7 @@ def dismiss_review_item(
         audit_logger = AuditLogger(
             jsonl_path=history_jsonl or (app_dir / HISTORY_JSONL_NAME),
             csv_path=history_csv or (app_dir / HISTORY_CSV_NAME),
+            mirror_csv_path=mirror_csv_path,
         )
         entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),

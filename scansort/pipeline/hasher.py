@@ -44,21 +44,17 @@ def check_duplicate(file_hash: str, history_file: Path) -> dict | None:
         return None
 
     latest_record = None
-    try:
-        with open(history_file, encoding="utf-8") as f:
-            for line in f:
-                clean_line = line.strip()
-                if not clean_line or file_hash not in clean_line:
-                    continue
-                try:
-                    record = json.loads(clean_line)
-                    if isinstance(record, dict) and record.get("sha256") == file_hash:
-                        latest_record = record
-                except json.JSONDecodeError:
-                    continue
-    except OSError as e:
-        logger.warning("Error reading history file at %s: %s", history_file, e)
-        return None
+    with open(history_file, encoding="utf-8") as f:
+        for line in f:
+            clean_line = line.strip()
+            if not clean_line or file_hash not in clean_line:
+                continue
+            try:
+                record = json.loads(clean_line)
+                if isinstance(record, dict) and record.get("sha256") == file_hash:
+                    latest_record = record
+            except json.JSONDecodeError:
+                continue
 
     if latest_record and latest_record.get("status") != STATUS_UNDONE:
         return latest_record

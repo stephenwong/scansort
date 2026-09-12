@@ -3,6 +3,7 @@
 import logging
 import shutil
 from pathlib import Path
+from typing import Any
 
 import img2pdf
 from PIL import Image, ImageOps, ImageSequence
@@ -18,7 +19,7 @@ def is_supported_format(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
 
-_HIGH_BIT_GRAY_MODES: tuple[str, ...] = ("I", "I;16", "I;16B", "I;16L")
+_HIGH_BIT_GRAY_MODES: tuple[str, ...] = ("I", "I;16", "I;16B", "I;16L", "I;16N")
 
 # img2pdf raises these for inputs it cannot wrap losslessly; Pillow fallback handles them.
 _IMG2PDF_FALLBACK_ERRORS: tuple[type[BaseException], ...] = (
@@ -38,8 +39,10 @@ def _normalize_frame_to_rgb(frame: Image.Image) -> Image.Image:
     """Safely convert an image frame to RGB, compositing alpha channels onto white."""
     if frame.mode in _HIGH_BIT_GRAY_MODES:
         # 16-bit/int grayscale must be scaled 16->8 bits; Pillow's convert("RGB")
-        # saturates every sample >= 256 to 255, blanking real scans.
-        scaled = frame.point(lambda v: v * (255 / 65535))
+        # saturates every sample >= 256 to 255, blanking real scans. Byte-swapped
+        # and native-endian variants (I;16B/L/N) reject point() directly, so all
+        # high-bit modes are funneled through the canonical "I" mode first.
+        scaled = frame.convert("I").point(lambda v: v * (255 / 65535))
         return scaled.convert("L").convert("RGB")
     if frame.mode in ("RGBA", "LA") or (
         frame.mode == "P" and "transparency" in frame.info
@@ -68,8 +71,19 @@ def _extract_dpi(img: Image.Image, default: float = DEFAULT_DPI) -> float:
 
 def _convert_jpeg_lossless(input_path: Path, target_pdf: Path) -> None:
     """Lossless wrapping of JPEG streams via img2pdf (preserves exact DPI and zero re-compression)."""
+    # img2pdf wraps DPI-less JPEGs at its own 96 dpi default, inconsistent with
+    # the Pillow path's DEFAULT_DPI; supply a fixed layout for that case only.
+    with Image.open(input_path) as probe:
+        has_dpi = bool(probe.info.get("dpi"))
+    kwargs: dict[str, Any] = {}
+    if not has_dpi:
+        kwargs["layout_fun"] = img2pdf.get_fixed_dpi_layout_fun(
+            (DEFAULT_DPI, DEFAULT_DPI)
+        )
     with open(input_path, "rb") as src:
-        atomic_write(target_pdf, lambda out: img2pdf.convert(src, outputstream=out))
+        atomic_write(
+            target_pdf, lambda out: img2pdf.convert(src, outputstream=out, **kwargs)
+        )
     logger.info(
         "Wrapped JPEG %s into PDF %s losslessly via img2pdf.",
         input_path.name,
@@ -136,13 +150,15 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
 
     ext = input_path.suffix.lower()
 
-    # If it is already a PDF, passthrough or copy
+    # If it is already a PDF, passthrough or copy (atomically: a partial copy
+    # must never truncate an existing target).
     if ext == ".pdf":
         if output_path is None or output_path.resolve() == input_path.resolve():
             return input_path
         target_pdf = output_path
         target_pdf.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(input_path, target_pdf)
+        with open(input_path, "rb") as src:
+            atomic_write(target_pdf, lambda out: shutil.copyfileobj(src, out))
         return target_pdf
 
     target_pdf = output_path or input_path.with_suffix(".pdf")
@@ -150,23 +166,16 @@ def convert_to_pdf(input_path: Path, output_path: Path | None = None) -> Path:
         raise ValueError(f"output_path must differ from the input file: {input_path}")
     target_pdf.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        if ext in {".jpg", ".jpeg"}:
-            try:
-                _convert_jpeg_lossless(input_path, target_pdf)
-                return target_pdf
-            except _IMG2PDF_FALLBACK_ERRORS as e:
-                logger.warning(
-                    "img2pdf failed on %s (%s). Falling back to Pillow.",
-                    input_path.name,
-                    e,
-                )
+    if ext in {".jpg", ".jpeg"}:
+        try:
+            _convert_jpeg_lossless(input_path, target_pdf)
+            return target_pdf
+        except _IMG2PDF_FALLBACK_ERRORS as e:
+            logger.warning(
+                "img2pdf failed on %s (%s). Falling back to Pillow.",
+                input_path.name,
+                e,
+            )
 
-        _convert_image_via_pillow(input_path, target_pdf)
-        return target_pdf
-
-    except Exception:
-        # Clean up any incomplete or 0-byte output file on conversion failure (S3-04)
-        if target_pdf.exists() and target_pdf.resolve() != input_path.resolve():
-            target_pdf.unlink(missing_ok=True)
-        raise
+    _convert_image_via_pillow(input_path, target_pdf)
+    return target_pdf

@@ -106,11 +106,13 @@ def relative_folder_is_safe(rel: str) -> bool:
         True if the value can be safely joined under a documents root.
     """
     value = str(rel).strip()
-    if not value or value.startswith(("/", "\\")):
+    if not value or value.startswith(("/", "\\")) or "\x00" in value:
         return False
 
     normalized = value.replace("\\", "/")
-    if any(segment == ".." for segment in normalized.split("/")):
+    if any(
+        segment == ".." or segment.strip() == ".." for segment in normalized.split("/")
+    ):
         return False
     return not PureWindowsPath(normalized).drive
 

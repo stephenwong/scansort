@@ -65,13 +65,15 @@ def wait_for_file_stability(
     while (time.monotonic() - start_time) < timeout:
         try:
             st = path.stat()
-        except OSError:
-            # File disappeared (deleted or temporarily locked from stat):
-            # immediately fail rather than spinning the timeout.
-            logger.debug(
-                "File %s disappeared or inaccessible during stabilization.", path.name
-            )
+        except FileNotFoundError:
+            # File genuinely vanished: fail fast rather than spinning the timeout.
+            logger.debug("File %s vanished during stabilization.", path.name)
             return False
+        except OSError:
+            # Transient error (e.g. AV/SMB lock): retry within the timeout window.
+            logger.debug("Transient stat error for %s; retrying.", path.name)
+            time.sleep(poll_interval)
+            continue
 
         current_size = st.st_size
 

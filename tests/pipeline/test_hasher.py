@@ -70,7 +70,8 @@ def test_check_duplicate_skips_empty_and_corrupt_lines(tmp_path: Path):
     assert result["new_filename"] == "found.pdf"
 
 
-def test_check_duplicate_handles_os_error(tmp_path: Path):
+def test_check_duplicate_propagates_os_error(tmp_path: Path):
+    """A read failure must not be misreported as 'not a duplicate'."""
     history_file = tmp_path / "history.jsonl"
     history_file.touch()
     orig_open = open
@@ -80,8 +81,8 @@ def test_check_duplicate_handles_os_error(tmp_path: Path):
             raise OSError("Read error")
         return orig_open(file, *args, **kwargs)
 
-    with patch("builtins.open", guarded_open):
-        assert check_duplicate("somehash", history_file) is None
+    with patch("builtins.open", guarded_open), pytest.raises(OSError):
+        check_duplicate("somehash", history_file)
 
 
 def test_check_duplicate_ignores_undone(tmp_path: Path):
@@ -137,6 +138,6 @@ def test_check_duplicate_mid_stream_os_error_returns_none(tmp_path: Path):
             return FaultyFile()
         return orig_open(file, *args, **kwargs)
 
-    with patch("builtins.open", guarded_open):
-        # Mid-stream error must return None, not r1
-        assert check_duplicate(h, hist) is None
+    with patch("builtins.open", guarded_open), pytest.raises(OSError):
+        # Mid-stream error must surface, not be misread as "no duplicate".
+        check_duplicate(h, hist)

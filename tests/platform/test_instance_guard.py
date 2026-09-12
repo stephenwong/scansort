@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from scansort.platform.instance_guard import instance_guard
 
 
@@ -31,10 +33,30 @@ def test_instance_guard_windows_branch(tmp_path: Path, monkeypatch):
 def test_instance_guard_windows_contention_branch(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     mock_msvcrt = MagicMock()
-    mock_msvcrt.locking.side_effect = [None, OSError("Lock violation"), None]
+    import errno
+
+    mock_msvcrt.locking.side_effect = [
+        None,
+        OSError(errno.EACCES, "Lock violation"),
+        None,
+    ]
     with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}):
         lock_path = tmp_path / "instance3.lock"
         with instance_guard(lock_path) as acquired:
             assert acquired is True
             with instance_guard(lock_path) as second:
                 assert second is False
+
+
+def test_instance_guard_non_contention_oserror_propagates(tmp_path: Path, monkeypatch):
+    import errno
+
+    monkeypatch.setattr("sys.platform", "win32")
+    mock_msvcrt = MagicMock()
+    mock_msvcrt.locking.side_effect = OSError(errno.ENOLCK, "no locks available")
+    with (
+        patch.dict("sys.modules", {"msvcrt": mock_msvcrt}),
+        pytest.raises(OSError),
+        instance_guard(tmp_path / "instance.lock"),
+    ):
+        pass

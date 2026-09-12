@@ -4,6 +4,7 @@ import hashlib
 import io
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -154,7 +155,17 @@ def test_extract_bundle_materializes_release_files(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "entry", ["../evil.txt", "/abs.txt", "a/../../evil", "C:/evil.txt"]
+    "entry",
+    [
+        "../evil.txt",
+        "/abs.txt",
+        "a/../../evil",
+        "C:/evil.txt",
+        ".. /evil.txt",
+        "a/.. /.. /evil",
+        "a/... /evil",
+        ".. ./evil",
+    ],
 )
 def test_extract_bundle_rejects_unsafe_members(tmp_path: Path, entry: str):
     import zipfile
@@ -280,3 +291,61 @@ def test_download_and_stage_tolerates_old_archive_removal_failure(
     )
     assert (stage / "ScanSort.exe").is_file()
     assert old_zip.exists()
+
+
+def test_download_release_handles_http_exception(tmp_path: Path):
+    import http.client
+
+    info = ReleaseInfo(
+        version=__version__,
+        tag_name=f"v{__version__}",
+        asset_name=WINDOWS_ZIP,
+        download_url="https://example.com/a.zip",
+        size_bytes=None,
+        sha256=None,
+        published_at=None,
+    )
+
+    class _BrokenResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n=-1):
+            raise http.client.IncompleteRead(b"x", 100)
+
+    def broken_opener(request, timeout=None):
+        return _BrokenResponse()
+
+    dest = tmp_path / "dl.zip"
+    with pytest.raises(UpdateError, match="Download failed"):
+        download_release(info, dest, opener=broken_opener)
+    assert not dest.exists()
+
+
+def test_download_and_stage_cleans_stage_on_extract_runtime_error(
+    tmp_path: Path, monkeypatch
+):
+    from scansort.updater import downloader
+
+    info = MagicMock()
+    info.asset_name = WINDOWS_ZIP
+    info.version = __version__
+    info.sha256 = None
+    info.size_bytes = None
+    install_dir = tmp_path / "ScanSort"
+    install_dir.mkdir()
+
+    monkeypatch.setattr(
+        downloader, "download_release", MagicMock(return_value=tmp_path / "a.zip")
+    )
+    monkeypatch.setattr(
+        downloader, "extract_bundle", MagicMock(side_effect=RuntimeError("encrypted"))
+    )
+
+    with pytest.raises(RuntimeError):
+        download_and_stage(info, install_dir, tmp_path / "tmp")
+    leftover = list(install_dir.parent.glob("ScanSort.stage-*"))
+    assert leftover == []

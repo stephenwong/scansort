@@ -44,6 +44,7 @@ class SystemTrayApp:
         self.pipeline = pipeline
         self.stop_event = stop_event or threading.Event()
         self._lock = threading.Lock()
+        self._shutting_down = False
 
         self.icon = pystray.Icon(
             name="ScanSort",
@@ -57,6 +58,15 @@ class SystemTrayApp:
         if self.watcher is not None and hasattr(self.watcher, "is_paused"):
             return self.watcher.is_paused()
         return False
+
+    def _refresh_menu(self) -> None:
+        """Rebuild the tray menu outside the lock, then publish it under the lock."""
+        if self.icon is None or self._shutting_down:
+            return
+        menu = self._build_menu()
+        with self._lock:
+            if self.icon is not None and not self._shutting_down:
+                self.icon.menu = menu
 
     def _build_taxonomy_submenus(self) -> pystray.Menu:
         """Dynamically build nested submenus reflecting destination folder taxonomy."""
@@ -162,21 +172,21 @@ class SystemTrayApp:
 
     def toggle_pause(self) -> None:
         """Toggle the pause state of monitoring."""
-        with self._lock:
-            if self.is_paused():
-                if self.watcher is not None and hasattr(self.watcher, "resume"):
-                    self.watcher.resume()
-                show_toast("ScanSort", "Monitoring resumed.")
-            else:
-                if self.watcher is not None and hasattr(self.watcher, "pause"):
-                    self.watcher.pause()
-                show_toast("ScanSort", "Monitoring paused.")
+        if self.is_paused():
+            if self.watcher is not None and hasattr(self.watcher, "resume"):
+                self.watcher.resume()
+            show_toast("ScanSort", "Monitoring resumed.")
+        else:
+            if self.watcher is not None and hasattr(self.watcher, "pause"):
+                self.watcher.pause()
+            show_toast("ScanSort", "Monitoring paused.")
 
-            is_now_paused = self.is_paused()
+        is_now_paused = self.is_paused()
+        with self._lock:
             if self.icon is not None:
                 self.icon.icon = get_tray_icon(paused=is_now_paused)
                 self.icon.title = f"ScanSort{' (Paused)' if is_now_paused else ''}"
-                self.icon.menu = self._build_menu()
+        self._refresh_menu()
 
     def undo_last(self, async_task: bool = True) -> threading.Thread | None:
         """Reverse the most recent filing move and notify the user."""
@@ -196,12 +206,11 @@ class SystemTrayApp:
         """Refresh folder taxonomy discovery."""
 
         def _task():
-            folders = run_rescan(self.config)
             if self.pipeline is not None and hasattr(self.pipeline, "folder_mapper"):
-                self.pipeline.folder_mapper.refresh()
-            with self._lock:
-                if self.icon is not None:
-                    self.icon.menu = self._build_menu()
+                folders = self.pipeline.folder_mapper.refresh()
+            else:
+                folders = run_rescan(self.config)
+            self._refresh_menu()
             show_toast(
                 "ScanSort Taxonomy",
                 f"Discovered {len(folders)} destination folders under Documents.",
@@ -239,17 +248,21 @@ class SystemTrayApp:
         """Display the Tkinter settings dialog with instant hot-reload."""
 
         def _task():
-            dialog = open_settings_dialog(
-                config=self.config,
-                on_applied=self.on_settings_applied,
-            )
-            if (
-                dialog is not None
-                and getattr(dialog, "_owns_root", False)
-                and not getattr(dialog, "_mainloop_running", False)
-            ):
-                with contextlib.suppress(Exception):
-                    dialog.mainloop()
+            try:
+                dialog = open_settings_dialog(
+                    config=self.config,
+                    on_applied=self.on_settings_applied,
+                )
+                if (
+                    dialog is not None
+                    and getattr(dialog, "_owns_root", False)
+                    and not getattr(dialog, "_mainloop_running", False)
+                ):
+                    with contextlib.suppress(Exception):
+                        dialog.mainloop()
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Settings dialog failed: %s", e)
+                show_toast("ScanSort", f"Could not open Settings: {e}")
 
         if not async_task:
             _task()
@@ -266,9 +279,7 @@ class SystemTrayApp:
 
         def _task():
             def _on_filed(_dest: Path) -> None:
-                with self._lock:
-                    if self.icon is not None:
-                        self.icon.menu = self._build_menu()
+                self._refresh_menu()
 
             dialog = open_review_dialog(
                 config=self.config,
@@ -282,9 +293,7 @@ class SystemTrayApp:
                 with contextlib.suppress(Exception):
                     dialog.mainloop()
 
-            with self._lock:
-                if self.icon is not None:
-                    self.icon.menu = self._build_menu()
+            self._refresh_menu()
 
         if not async_task:
             _task()
@@ -303,43 +312,46 @@ class SystemTrayApp:
             import tkinter as tk
             from tkinter import filedialog
 
-            root = tk.Tk()
-            root.withdraw()
             try:
-                chosen = filedialog.askopenfilenames(
-                    title="Select Documents to File",
-                    filetypes=[
-                        (
-                            "Supported Documents",
-                            "*.pdf;*.jpg;*.jpeg;*.png;*.tiff;*.tif",
-                        ),
-                        ("All Files", "*.*"),
-                    ],
-                )
-            finally:
-                root.destroy()
+                root = tk.Tk()
+                root.withdraw()
+                try:
+                    chosen = filedialog.askopenfilenames(
+                        parent=root,
+                        title="Select Documents to File",
+                        filetypes=[
+                            (
+                                "Supported Documents",
+                                "*.pdf *.jpg *.jpeg *.png *.tiff *.tif",
+                            ),
+                            ("All Files", "*.*"),
+                        ],
+                    )
+                finally:
+                    root.destroy()
 
-            if not chosen:
-                return
+                if not chosen:
+                    return
 
-            paths = [Path(p) for p in chosen]
-            show_toast("ScanSort", f"Filing {len(paths)} document(s)...")
-            success = 0
-            if self.pipeline is not None:
-                for p in paths:
-                    try:
-                        dest = self.pipeline.process_file(
-                            p.resolve(), preserve_source=False
-                        )
-                        if dest is not None:
-                            success += 1
-                    except Exception as e:  # noqa: BLE001
-                        logger.error("Error filing document %s: %s", p.name, e)
+                paths = [Path(p) for p in chosen]
+                show_toast("ScanSort", f"Filing {len(paths)} document(s)...")
+                success = 0
+                if self.pipeline is not None:
+                    for p in paths:
+                        try:
+                            dest = self.pipeline.process_file(
+                                p.resolve(), preserve_source=False
+                            )
+                            if dest is not None:
+                                success += 1
+                        except Exception as e:  # noqa: BLE001
+                            logger.error("Error filing document %s: %s", p.name, e)
 
-            show_toast("ScanSort", f"Filed {success} of {len(paths)} document(s).")
-            with self._lock:
-                if self.icon is not None:
-                    self.icon.menu = self._build_menu()
+                show_toast("ScanSort", f"Filed {success} of {len(paths)} document(s).")
+                self._refresh_menu()
+            except Exception as e:  # noqa: BLE001
+                logger.exception("File Document(s) dialog failed: %s", e)
+                show_toast("ScanSort", f"Could not open file picker: {e}")
 
         if not async_task:
             _task()
@@ -355,22 +367,24 @@ class SystemTrayApp:
             from scansort.ui.drop_zone import open_drop_zone_window
 
             def _on_filed(_dest: Path) -> None:
-                with self._lock:
-                    if self.icon is not None:
-                        self.icon.menu = self._build_menu()
+                self._refresh_menu()
 
-            dialog = open_drop_zone_window(
-                config=self.config,
-                pipeline=self.pipeline,
-                on_filed=_on_filed,
-            )
-            if (
-                dialog is not None
-                and getattr(dialog, "_owns_root", False)
-                and not getattr(dialog, "_mainloop_running", False)
-            ):
-                with contextlib.suppress(Exception):
-                    dialog.mainloop()
+            try:
+                dialog = open_drop_zone_window(
+                    config=self.config,
+                    pipeline=self.pipeline,
+                    on_filed=_on_filed,
+                )
+                if (
+                    dialog is not None
+                    and getattr(dialog, "_owns_root", False)
+                    and not getattr(dialog, "_mainloop_running", False)
+                ):
+                    with contextlib.suppress(Exception):
+                        dialog.mainloop()
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Drop Zone window failed: %s", e)
+                show_toast("ScanSort", f"Could not open Drop Zone: {e}")
 
         if not async_task:
             _task()
@@ -417,15 +431,17 @@ class SystemTrayApp:
                 self.pipeline.config = new_cfg
                 if hasattr(self.pipeline, "update_config"):
                     self.pipeline.update_config(new_cfg)
-
-            if self.icon is not None:
-                self.icon.menu = self._build_menu()
+        self._refresh_menu()
 
     def exit_app(self) -> None:
         """Cleanly terminate the application and its worker threads."""
-        self.stop_event.set()
+        # Stop the producer before signalling the worker so the watcher cannot
+        # enqueue an item into a queue the worker is already draining to exit.
         if self.watcher is not None and hasattr(self.watcher, "stop"):
             self.watcher.stop()
+        self.stop_event.set()
+        with self._lock:
+            self._shutting_down = True
         if self.icon is not None:
             with contextlib.suppress(Exception):
                 self.icon.stop()

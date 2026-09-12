@@ -78,3 +78,44 @@ def test_worker_exits_immediately_when_stop_event_set_on_empty_queue():
     mock_process = MagicMock()
     run_pipeline_worker(mock_process, file_queue, stop_event)
     mock_process.assert_not_called()
+
+
+def test_worker_drains_item_enqueued_during_final_timeout():
+    """An item that arrives as get() times out must still be processed on shutdown."""
+    import queue as _queue
+
+    class RacyQueue:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, block=True, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise _queue.Empty
+            if self.calls == 2:
+                return "late"
+            raise _queue.Empty
+
+        def empty(self):
+            return self.calls >= 2
+
+        def task_done(self):
+            pass
+
+    q = RacyQueue()
+    stop = threading.Event()
+    processed = []
+
+    def process(item):
+        processed.append(item)
+
+    stop.set()
+    t = threading.Thread(
+        target=run_pipeline_worker,
+        args=(process, q, stop),
+        kwargs={"rate_limit_delay": 0.0},
+    )
+    t.start()
+    t.join(timeout=2.0)
+    assert not t.is_alive()
+    assert processed == ["late"]

@@ -1,5 +1,6 @@
 """Release asset download, verification, archive extraction, and staging."""
 
+import http.client
 import logging
 import shutil
 import urllib.request
@@ -58,7 +59,7 @@ def download_release(
             while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
                 out_file.write(chunk)
                 total += len(chunk)
-    except OSError as e:
+    except (OSError, http.client.HTTPException, ValueError) as e:
         dest_path.unlink(missing_ok=True)
         raise UpdateError(f"Download failed: {e}") from e
 
@@ -83,7 +84,12 @@ def _member_target(dest_dir: Path, name: str) -> Path:
     clean = name.replace("\\", "/")
     path = PurePosixPath(clean)
     parts = path.parts
-    unsafe = not parts or any(part in {"..", ""} or ":" in part for part in parts)
+    # Windows strips trailing spaces/dots from path components, so ".. " and
+    # "..." normalize to ".." at open() time and must be rejected up front.
+    unsafe = not parts or any(
+        part in {"..", ""} or ":" in part or part.rstrip(" .") in {"", ".", ".."}
+        for part in parts
+    )
     if path.is_absolute() or unsafe:
         raise UpdateError(f"Unsafe archive entry: {name}")
     return dest_dir.joinpath(*parts)
@@ -111,6 +117,8 @@ def extract_bundle(zip_path: Path, dest_dir: Path) -> Path:
                     shutil.copyfileobj(source, out_file)
     except zipfile.BadZipFile as e:
         raise UpdateError("Release archive is corrupt.") from e
+    except (zipfile.LargeZipFile, RuntimeError, NotImplementedError, OSError) as e:
+        raise UpdateError(f"Release archive could not be extracted: {e}") from e
     if not (dest_dir / EXECUTABLE_NAME).is_file():
         raise UpdateError("Release bundle does not contain ScanSort.exe.")
     logger.info("Extracted release bundle %s successfully.", zip_path.name)
@@ -168,10 +176,14 @@ def download_and_stage(
     _prune_old_archives(tmp_dir, keep_name=zip_path.name)
 
     if stage_dir.exists():
-        shutil.rmtree(stage_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(stage_dir)
+        except OSError as e:
+            logger.warning("Could not reset stale staging dir %s: %s", stage_dir, e)
+            shutil.rmtree(stage_dir, ignore_errors=True)
     try:
         extract_bundle(zip_path, stage_dir)
-    except UpdateError:
+    except Exception:
         shutil.rmtree(stage_dir, ignore_errors=True)
         raise
     logger.info("Update %s successfully staged into %s.", info.version, stage_dir)

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from scansort.classification.taxonomy import (
     FolderMapper,
     format_taxonomy_for_prompt,
@@ -462,3 +464,76 @@ def test_run_rescan(tmp_path: Path):
     discovered = run_rescan(cfg)
     assert "Receipts" in discovered
     assert "Receipts/2026" in discovered
+
+
+def test_folder_mapper_memory_cache_drops_deleted_folders(tmp_path: Path):
+    """Invariant G: deleted folders must never be advertised within the TTL."""
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Keep").mkdir(parents=True)
+    (docs_root / "Ghost").mkdir(parents=True)
+    mapper = FolderMapper(docs_root=docs_root, cache_path=tmp_path / "folder_map.json")
+    mapper.refresh()
+    assert mapper.get_taxonomy() == ["Ghost", "Keep"]
+
+    import shutil
+
+    shutil.rmtree(docs_root / "Ghost")
+    # Memory fast path (no TTL expiry) must still prune.
+    assert mapper.get_taxonomy() == ["Keep"]
+
+
+def test_get_taxonomy_survives_concurrent_cache_invalidation(tmp_path: Path):
+    """A concurrent nulling of _cached_folders must not raise TypeError."""
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Alpha").mkdir(parents=True)
+    mapper = FolderMapper(docs_root=docs_root, cache_path=tmp_path / "folder_map.json")
+    mapper.refresh()
+
+    original_valid = mapper._is_memory_cache_valid
+
+    def racy_valid():
+        result = original_valid()
+        mapper._cached_folders = None  # another thread invalidates mid-read
+        return result
+
+    mapper._is_memory_cache_valid = racy_valid
+    assert mapper.get_taxonomy() == ["Alpha"]
+
+
+def test_folder_mapper_cache_rejects_symlinked_entries(tmp_path: Path):
+    """Cached entries replaced by symlinks must not be re-advertised."""
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Real").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    cache_path = tmp_path / "folder_map.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "documents_root": str(docs_root),
+                "folders": ["Real", "Linked"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        (docs_root / "Linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    mapper = FolderMapper(docs_root=docs_root, cache_path=cache_path)
+    assert mapper.get_taxonomy() == ["Real"]
+
+
+def test_folder_mapper_cache_survives_non_string_documents_root(tmp_path: Path):
+    """A corrupted cache with a non-string documents_root must fall back to rescan."""
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Alpha").mkdir(parents=True)
+    cache_path = tmp_path / "folder_map.json"
+    cache_path.write_text(
+        json.dumps({"documents_root": 123, "folders": ["Alpha"]}),
+        encoding="utf-8",
+    )
+
+    mapper = FolderMapper(docs_root=docs_root, cache_path=cache_path)
+    assert mapper.get_taxonomy() == ["Alpha"]

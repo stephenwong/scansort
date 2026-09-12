@@ -1,6 +1,7 @@
 """Unit tests for scansort.core.config module."""
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,15 @@ def test_load_config_corrupt_json_fallback(tmp_path: Path):
     corrupt_file = tmp_path / "corrupt_config.json"
     corrupt_file.write_text("{invalid json", encoding="utf-8")
     cfg = load_config(corrupt_file)
+    assert isinstance(cfg, AppConfig)
+    assert cfg.gemini_model == DEFAULT_GEMINI_MODEL
+
+
+def test_load_config_non_utf8_falls_back_to_defaults(tmp_path: Path):
+    """A config saved with non-UTF-8 bytes (e.g. Notepad UTF-16) must not crash."""
+    undecodable = tmp_path / "undecodable_config.json"
+    undecodable.write_bytes(b'{"watch_folder": "\xff\xfe bad"}')
+    cfg = load_config(undecodable)
     assert isinstance(cfg, AppConfig)
     assert cfg.gemini_model == DEFAULT_GEMINI_MODEL
 
@@ -346,3 +356,23 @@ def test_version_single_source_of_truth():
     assert scansort.__version__ == scansort.core.VERSION
     assert scansort.core.constants.__version__ == scansort.__version__
     assert scansort.__version__ == scansort.core.constants.VERSION
+
+
+def test_load_config_warns_on_unknown_keys(tmp_path, caplog):
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps({"watch_fodler": str(tmp_path / "W")}), encoding="utf-8"
+    )
+    with caplog.at_level(logging.WARNING):
+        load_config(cfg_file)
+    assert "watch_fodler" in caplog.text
+
+
+def test_load_config_model_validator_error_names_fields(tmp_path):
+    same = str(tmp_path / "Docs")
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps({"watch_folder": same, "documents_root": same}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match=r"watch_folder.*documents_root"):
+        load_config(cfg_file)

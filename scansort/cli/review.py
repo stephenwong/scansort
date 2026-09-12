@@ -4,7 +4,8 @@ import argparse
 import os
 import sys
 
-from scansort.core.config import AppConfig, get_default_app_dir, load_config
+from scansort.cli.config import _load_config_or_exit
+from scansort.core.config import AppConfig, get_default_app_dir
 from scansort.core.constants import (
     HINTS_FILENAME,
     HISTORY_CSV_NAME,
@@ -32,7 +33,7 @@ def _run_cli_review(
     config: AppConfig,
     limit: int | None = None,
 ) -> int:
-    queue = items[:limit] if limit else items
+    queue = items[:limit] if limit is not None and limit > 0 else items
     total = len(queue)
     app_dir = get_default_app_dir()
     hints_path = app_dir / HINTS_FILENAME
@@ -83,8 +84,12 @@ def _run_cli_review(
                 return 0
 
             if choice == "3":
-                open_in_file_manager(item.file_path)
-                print(f"Opened {item.filename} in default viewer.\n")
+                if open_in_file_manager(item.file_path):
+                    print(f"Opened {item.filename} in default viewer.\n")
+                else:
+                    print(
+                        f"Could not open {item.filename} in a viewer.", file=sys.stderr
+                    )
                 continue
 
             if choice == "4":
@@ -97,13 +102,17 @@ def _run_cli_review(
                 except EOFError, KeyboardInterrupt:
                     return 0
                 if confirm == "y":
-                    dismiss_review_item(
-                        item,
-                        history_jsonl=history_jsonl,
-                        history_csv=history_csv,
-                        lock_path=lock_path,
-                    )
-                    print(f"Dismissed {item.filename}.\n")
+                    try:
+                        dismiss_review_item(
+                            item,
+                            history_jsonl=history_jsonl,
+                            history_csv=history_csv,
+                            lock_path=lock_path,
+                            mirror_csv_path=config.mirror_csv_path,
+                        )
+                        print(f"Dismissed {item.filename}.\n")
+                    except (OSError, ValueError) as e:
+                        print(f"Error dismissing document: {e}\n", file=sys.stderr)
                 else:
                     print("Dismiss cancelled.\n")
                 break
@@ -177,7 +186,9 @@ def _run_cli_review(
 
 def handle_review(args: argparse.Namespace) -> int:
     """Handle review subcommand execution."""
-    config = load_config()
+    config = _load_config_or_exit()
+    if config is None:
+        return 1
     items = get_review_queue(config.documents_root, config.fallback_folder)
     if not items:
         print(f"No documents currently require review in '{config.fallback_folder}'.")
@@ -189,6 +200,13 @@ def handle_review(args: argparse.Namespace) -> int:
     if use_gui or (not use_cli and _has_gui_display()):
         from scansort.ui.review import open_review_dialog
 
+        limit = getattr(args, "limit", None)
+        if limit:
+            print(
+                "Note: --limit applies to the CLI review session only; "
+                "the GUI shows the full queue.",
+                file=sys.stderr,
+            )
         dialog = open_review_dialog(config)
         dialog.mainloop()
         return 0

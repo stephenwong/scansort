@@ -315,3 +315,44 @@ def test_watcher_paused_cycle_skips_preexisting_sweep(tmp_path: Path):
     watcher.resume()
     assert file_queue.qsize() == 1
     assert file_queue.get_nowait() == scan
+
+
+def test_watcher_stop_before_start_is_honored(tmp_path: Path):
+    """A stop() that lands before start() must not be erased by start()."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=queue.Queue())
+    watcher.stop()
+
+    def mock_watch(*args, **kwargs):
+        yield []
+
+    with patch("scansort.pipeline.watcher.watch", side_effect=mock_watch):
+        thread = threading.Thread(target=watcher.start)
+        thread.start()
+        thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+
+
+def test_watcher_sweep_covers_file_created_before_baseline(tmp_path: Path):
+    """A file landing between the initial sweep and watch registration must be queued."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    file_queue = queue.Queue()
+    watcher = DropFolderWatcher(watch_folder=inbox, file_queue=file_queue)
+
+    def mock_watch(*args, **kwargs):
+        (inbox / "gap.pdf").write_bytes(b"%PDF-1.4")
+        yield []
+        watcher._stop_event.set()
+        yield []
+
+    with patch("scansort.pipeline.watcher.watch", side_effect=mock_watch):
+        watcher._stop_event.set()
+        watcher._run_watch_cycle(inbox, threading.Event())
+
+    queued = []
+    while not file_queue.empty():
+        queued.append(file_queue.get_nowait())
+    assert inbox / "gap.pdf" in queued

@@ -40,11 +40,22 @@ def handle_file(parsed: argparse.Namespace) -> int:
         print("Error: No files specified to file.", file=sys.stderr)
         return 1
 
-    pipeline = ScanSortPipeline(config=cfg)
+    try:
+        pipeline = ScanSortPipeline(config=cfg)
+    except OSError as e:
+        print(f"Error preparing application directories: {e}", file=sys.stderr)
+        return 1
     any_failure = False
 
     for target_path in files:
         resolved = target_path.resolve()
+        if resolved.is_dir():
+            print(
+                f"Error: Expected a file but got a directory: {target_path.name}",
+                file=sys.stderr,
+            )
+            any_failure = True
+            continue
         if not resolved.is_file():
             print(f"Error: File not found: {target_path.name}", file=sys.stderr)
             any_failure = True

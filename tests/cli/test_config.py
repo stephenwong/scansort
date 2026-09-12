@@ -416,3 +416,55 @@ def test_cli_config_show_context_menu(capsys):
 
         assert main_cli(["config", "--json"]) == 0
         assert '"context_menu": true' in capsys.readouterr().out
+
+
+def test_cli_config_get_rejects_pydantic_method_attribute(capsys):
+    with patch("scansort.cli.config.load_config", return_value=AppConfig()):
+        assert main_cli(["config", "--get", "model_dump"]) == 1
+        assert "Unknown configuration field" in capsys.readouterr().err
+
+
+def test_cli_config_set_rejects_pydantic_method_attribute(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--set", "model_dump", "x"]) == 1
+        assert not mock_save.called
+        assert "Unknown configuration field" in capsys.readouterr().err
+
+
+def test_cli_config_set_mixed_with_set_key_errors(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+        patch("scansort.cli.config.set_api_key") as mock_key,
+    ):
+        code = main_cli(
+            ["config", "--set", "dry_run", "true", "--set-key", "AIzaSySecret123"]
+        )
+    assert code == 1
+    assert not mock_save.called
+    assert not mock_key.called
+    assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_cli_config_set_invalid_boolean_errors(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--set", "dry_run", "flase"]) == 1
+    assert not mock_save.called
+    assert "Invalid boolean value" in capsys.readouterr().err
+
+
+def test_cli_config_set_key_empty_is_rejected(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.set_api_key") as mock_key,
+    ):
+        mock_key.side_effect = ValueError("API key cannot be empty.")
+        assert main_cli(["config", "--set-key", ""]) == 1
+    assert mock_key.called
+    assert "Error saving Gemini API key" in capsys.readouterr().err

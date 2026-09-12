@@ -47,7 +47,7 @@ def parse_version(value: str) -> tuple[int, int, int] | None:
         return None
     numbers: list[int] = []
     for part in parts:
-        if not part.isdigit():
+        if not part.isdecimal():
             return None
         numbers.append(int(part))
     return tuple(numbers)  # type: ignore[return-value]

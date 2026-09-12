@@ -190,3 +190,9 @@ def test_logs_handles_undecodable_utf8(mock_app_dir: Path, capsys):
     assert exit_code == 0
     captured = capsys.readouterr()
     assert "valid" in captured.out
+
+
+def test_extract_line_severity_ignores_indented_continuation():
+    from scansort.cli.logs import _extract_line_severity
+
+    assert _extract_line_severity("  error count is zero\n") is None

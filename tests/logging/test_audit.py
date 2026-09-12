@@ -211,3 +211,20 @@ def test_log_scan_local_time_always_australia_sydney(tmp_path, monkeypatch):
     assert record["local_time"].startswith("2026-02-01 00:30")
     # The machine-independent UTC instant is preserved as an ISO +00:00 stamp.
     assert record["timestamp"].endswith("+00:00")
+
+
+def test_ensure_csv_headers_uses_interprocess_lock(tmp_path: Path):
+    from unittest.mock import MagicMock, patch
+
+    from scansort.logging.audit import AuditLogger
+
+    csv_path = tmp_path / "history.csv"
+    logger_ = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+
+    with patch("scansort.logging.audit.interprocess_file_lock") as mock_lock:
+        mock_lock.return_value.__enter__ = MagicMock(return_value=None)
+        mock_lock.return_value.__exit__ = MagicMock(return_value=False)
+        logger_._ensure_csv_headers(csv_path)
+
+    mock_lock.assert_called_once()
+    assert str(mock_lock.call_args[0][0]).endswith(".lock")

@@ -269,24 +269,35 @@ class FolderMapper:
             if isinstance(data, dict):
                 cached_root = data.get("documents_root")
                 if (
-                    cached_root
+                    isinstance(cached_root, str)
+                    and cached_root
                     and Path(cached_root).resolve() == self.docs_root.resolve()
                 ):
                     folders = data.get("folders", [])
                     if isinstance(folders, list):
-                        # Drop cached entries whose folders no longer exist so a
-                        # deleted folder is never advertised or re-created.
+                        # Drop cached entries whose folders no longer exist, or
+                        # that became symlinks/junctions/hidden, so a deleted or
+                        # escaped folder is never advertised or re-created.
                         existing = [
                             str(f)
                             for f in folders
-                            if (self.docs_root / str(f)).is_dir()
+                            if self._entry_is_discoverable(self.docs_root / str(f))
                         ]
                         self._cached_folders = existing
                         self._cache_mtime = self.cache_path.stat().st_mtime
                         return self._cached_folders
-        except OSError, ValueError:
+        except OSError, ValueError, TypeError:
             pass
         return None
+
+    def _entry_is_discoverable(self, entry: Path) -> bool:
+        """Mirror the live-scan predicates for a cached taxonomy entry."""
+        try:
+            if not entry.is_dir() or entry.is_symlink() or entry.is_junction():
+                return False
+            return not _is_hidden_directory(entry)
+        except OSError:
+            return False
 
     def get_taxonomy(self) -> list[str]:
         """Return the current taxonomy, re-scanning when the cache is stale.
@@ -296,7 +307,18 @@ class FolderMapper:
         no longer exist are pruned on load.
         """
         if self._is_memory_cache_valid() and self._cache_is_fresh():
-            return list(self._cached_folders)
+            cached = self._cached_folders
+            if cached is not None:
+                # Snapshot and prune: a folder deleted after the last scan must
+                # not be advertised (and re-created by the dispatcher) within
+                # the TTL window.
+                pruned = [
+                    str(f)
+                    for f in cached
+                    if self._entry_is_discoverable(self.docs_root / str(f))
+                ]
+                self._cached_folders = pruned
+                return list(pruned)
         disk_folders = self._load_from_disk_cache()
         if disk_folders is not None and self._cache_is_fresh():
             return list(disk_folders)

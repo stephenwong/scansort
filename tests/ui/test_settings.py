@@ -299,7 +299,7 @@ def test_settings_dialog_context_menu_failure_toast(tk_root, tmp_path: Path):
         dialog.destroy()
 
     messages = " | ".join(str(c.args[1]) for c in mock_toast.call_args_list)
-    assert "context menu could not be updated" in messages
+    assert "could not be updated" in messages
 
 
 def test_settings_dialog_open_drop_zone(tk_root, tmp_path: Path):
@@ -312,5 +312,59 @@ def test_settings_dialog_open_drop_zone(tk_root, tmp_path: Path):
     dialog = SettingsDialog(master=tk_root, config=cfg)
     with patch("scansort.ui.drop_zone.open_drop_zone_window") as mock_open:
         dialog._open_drop_zone()
-        mock_open.assert_called_once_with(master=dialog, config=dialog.config)
+        mock_open.assert_called_once_with(master=dialog, config=dialog.app_config)
+    dialog.destroy()
+
+
+def test_settings_autorun_failure_reconciles_saved_flag(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    with (
+        patch("scansort.ui.settings.save_config") as mock_save,
+        patch("scansort.ui.settings.enable_autorun", return_value=False),
+        patch("scansort.ui.settings.is_autorun_enabled", return_value=False),
+        patch("scansort.ui.settings.show_toast"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        dialog.autorun_var.set(True)
+        dialog.on_save()
+
+    saved_cfgs = [call.args[0] for call in mock_save.call_args_list]
+    assert saved_cfgs[-1].start_on_boot is False
+
+
+def test_open_settings_dialog_after_dead_instance(tmp_path: Path):
+    import tkinter as tk
+
+    import scansort.ui.settings as settings_mod
+    from scansort.ui.settings import open_settings_dialog
+
+    dead = MagicMock()
+    dead.winfo_exists.side_effect = tk.TclError("application has been destroyed")
+    settings_mod._ACTIVE_DIALOG_INSTANCE = dead
+
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    dialog = open_settings_dialog(config=cfg)
+    assert dialog is not dead
+    assert settings_mod._ACTIVE_DIALOG_INSTANCE is dialog
+    dialog.destroy()
+
+
+def test_settings_destroy_twice_is_safe(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+    dialog.destroy()
     dialog.destroy()

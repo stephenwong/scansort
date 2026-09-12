@@ -22,6 +22,7 @@ from scansort.platform.context_menu import (
     is_context_menu_enabled,
 )
 from scansort.platform.secrets import (
+    delete_api_key,
     get_api_key,
     mask_api_key,
     set_api_key,
@@ -45,16 +46,35 @@ def open_settings_dialog(
     """
     global _ACTIVE_DIALOG_INSTANCE
     with _DIALOG_LOCK:
-        if (
-            _ACTIVE_DIALOG_INSTANCE is not None
-            and _ACTIVE_DIALOG_INSTANCE.winfo_exists()
-        ):
-            _ACTIVE_DIALOG_INSTANCE.deiconify()
-            _ACTIVE_DIALOG_INSTANCE.lift()
-            _ACTIVE_DIALOG_INSTANCE.focus_force()
-            return _ACTIVE_DIALOG_INSTANCE
+        existing = _ACTIVE_DIALOG_INSTANCE
+        alive = False
+        if existing is not None:
+            with contextlib.suppress(tk.TclError):
+                alive = existing.winfo_exists()
+        if alive:
+            existing.deiconify()
+            existing.lift()
+            existing.focus_force()
+            return existing
 
-        dialog = SettingsDialog(config=config, on_applied=on_applied)
+    # Construct outside the lock: __init__ performs keyring/registry I/O and a
+    # recursive taxonomy scan, which must not block other tray interactions.
+    dialog = SettingsDialog(config=config, on_applied=on_applied)
+
+    with _DIALOG_LOCK:
+        existing = _ACTIVE_DIALOG_INSTANCE
+        alive = False
+        if existing is not None:
+            with contextlib.suppress(tk.TclError):
+                alive = existing.winfo_exists()
+        if alive:
+            # Another thread won the race; discard ours.
+            with contextlib.suppress(tk.TclError):
+                dialog.destroy()
+            existing.deiconify()
+            existing.lift()
+            existing.focus_force()
+            return existing
         _ACTIVE_DIALOG_INSTANCE = dialog
         return dialog
 
@@ -83,16 +103,16 @@ class SettingsDialog(tk.Toplevel):
         self.minsize(580, 620)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-        self.config: AppConfig = config or load_config()
+        self.app_config: AppConfig = config or load_config()
         self.on_applied = on_applied
 
-        self.watch_var = tk.StringVar(value=str(self.config.watch_folder))
-        self.docs_var = tk.StringVar(value=str(self.config.documents_root))
+        self.watch_var = tk.StringVar(value=str(self.app_config.watch_folder))
+        self.docs_var = tk.StringVar(value=str(self.app_config.documents_root))
         self.api_key_var = tk.StringVar()
         self.show_key_var = tk.BooleanVar(value=False)
-        self.model_var = tk.StringVar(value=self.config.gemini_model)
-        self.fallback_var = tk.StringVar(value=self.config.fallback_folder)
-        self.dry_run_var = tk.BooleanVar(value=self.config.dry_run)
+        self.model_var = tk.StringVar(value=self.app_config.gemini_model)
+        self.fallback_var = tk.StringVar(value=self.app_config.fallback_folder)
+        self.dry_run_var = tk.BooleanVar(value=self.app_config.dry_run)
         self.autorun_var = tk.BooleanVar(value=is_autorun_enabled())
         self.context_menu_var = tk.BooleanVar(value=is_context_menu_enabled())
 
@@ -279,7 +299,7 @@ class SettingsDialog(tk.Toplevel):
 
         folders = scan_documents_folders(
             docs_root=docs_path,
-            max_depth=self.config.max_folder_depth,
+            max_depth=self.app_config.max_folder_depth,
             fallback_folder=self.fallback_var.get(),
         )
         tree_dict = build_taxonomy_tree(folders)
@@ -317,7 +337,7 @@ class SettingsDialog(tk.Toplevel):
         docs_path = Path(docs_raw).resolve()
 
         try:
-            updated_dict = self.config.model_dump()
+            updated_dict = self.app_config.model_dump()
             updated_dict["watch_folder"] = watch_path
             updated_dict["documents_root"] = docs_path
             updated_dict["gemini_model"] = model_val
@@ -331,7 +351,9 @@ class SettingsDialog(tk.Toplevel):
             return
 
         new_key = self.api_key_var.get().strip()
+        prior_key: str | None = None
         if new_key:
+            prior_key = get_api_key()
             try:
                 set_api_key(new_key)
             except (ValueError, OSError) as e:
@@ -343,18 +365,35 @@ class SettingsDialog(tk.Toplevel):
         try:
             save_config(new_cfg)
         except OSError as e:
+            # Roll back the credential so the vault does not disagree with the
+            # config that failed to persist.
+            if new_key:
+                with contextlib.suppress(OSError, ValueError):
+                    if prior_key:
+                        set_api_key(prior_key)
+                    else:
+                        delete_api_key()
             messagebox.showerror(
                 "Save Error", f"Failed to save config file: {e}", parent=self
             )
             return
 
+        autorun_ok = True
         try:
             if self.autorun_var.get():
-                enable_autorun()
+                autorun_ok = enable_autorun()
             else:
-                disable_autorun()
+                autorun_ok = disable_autorun()
         except OSError as e:
             logger.warning("Could not update autorun setting: %s", e)
+            autorun_ok = False
+        if not autorun_ok:
+            # Reconcile the persisted flag with the real OS state.
+            actual_autorun = is_autorun_enabled()
+            if new_cfg.start_on_boot != actual_autorun:
+                new_cfg.start_on_boot = actual_autorun
+                with contextlib.suppress(OSError):
+                    save_config(new_cfg)
 
         try:
             if self.context_menu_var.get():
@@ -367,33 +406,34 @@ class SettingsDialog(tk.Toplevel):
             logger.warning("Could not update context menu setting: %s", e)
             context_menu_ok = False
 
-        self.config = new_cfg
+        self.app_config = new_cfg
         if self.on_applied is not None:
             try:
                 self.on_applied(new_cfg)
             except Exception as e:  # noqa: BLE001
                 logger.error("Error in on_applied callback: %s", e)
 
-        if context_menu_ok:
+        if context_menu_ok and autorun_ok:
             show_toast("ScanSort Settings", "Settings saved and applied successfully.")
         else:
             show_toast(
                 "ScanSort Settings",
-                "Settings saved, but the context menu could not be updated.",
+                "Settings saved, but some system integrations could not be updated.",
             )
         self.destroy()
 
     def _open_drop_zone(self) -> None:
         from scansort.ui.drop_zone import open_drop_zone_window
 
-        open_drop_zone_window(master=self, config=self.config)
+        open_drop_zone_window(master=self, config=self.app_config)
 
     def destroy(self) -> None:
         global _ACTIVE_DIALOG_INSTANCE
         with _DIALOG_LOCK:
             if _ACTIVE_DIALOG_INSTANCE is self:
                 _ACTIVE_DIALOG_INSTANCE = None
-        super().destroy()
+        with contextlib.suppress(tk.TclError):
+            super().destroy()
         if self._owns_root and self.master:
             with contextlib.suppress(tk.TclError):
                 self.master.destroy()

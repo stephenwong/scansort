@@ -1,6 +1,7 @@
 """Shell completion generator CLI subcommand handler."""
 
 import argparse
+import sys
 
 _BASH_TEMPLATE = """# Bash completion for scansort
 _scansort_completion() {
@@ -8,7 +9,7 @@ _scansort_completion() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    subcommands="watch file config undo rescan check-update logs history stats help completion"
+    subcommands="watch file config undo rescan review check-update logs history stats help completion"
 
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=( $(compgen -W "$subcommands --version -V --help -v --verbose --dry-run --minimized" -- "$cur") )
@@ -21,6 +22,9 @@ _scansort_completion() {
             ;;
         file)
             opts="--copy -c --dry-run -v --verbose --help"
+            ;;
+        review)
+            opts="--gui -g --cli -c --limit -v --verbose --help"
             ;;
         config)
             opts="--show --json --path --get --set --set-key --watch-folder --documents-folder --autostart --context-menu --gemini-model --fallback-folder --max-depth --mirror-csv --auto-update --update-check-interval --dry-run -v --verbose --help"
@@ -66,6 +70,7 @@ _scansort() {
         'file:Directly process and file specified document(s)'
         'config:Manage application settings and secrets'
         'undo:Reverse the last filed document move'
+        'review:Interactively review and file scans needing attention'
         'rescan:Rescan and display Documents folder taxonomy'
         'check-update:Check GitHub Releases for newer ScanSort versions'
         'logs:View, filter, or tail execution logs'
@@ -156,12 +161,13 @@ _scansort "$@"
 """
 
 _FISH_TEMPLATE = """# Fish completion for scansort
-set -l commands watch file config undo rescan check-update logs history stats help completion
+set -l commands watch file config undo rescan review check-update logs history stats help completion
 
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "watch" -d "Start background drop folder monitor"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "file" -d "Directly process and file specified document(s)"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "config" -d "Manage application settings and secrets"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "undo" -d "Reverse the last filed document move"
+complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "review" -d "Interactively review scans needing attention"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "rescan" -d "Rescan and display Documents folder taxonomy"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "check-update" -d "Check GitHub Releases for newer versions"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "logs" -d "View, filter, or tail execution logs"
@@ -193,6 +199,18 @@ complete -c scansort -n "__fish_seen_subcommand_from config" -l set-key -d "Stor
 complete -c scansort -n "__fish_seen_subcommand_from config" -l gemini-model -a "gemini-3.1-flash-lite gemini-3.5-flash-lite" -d "Set Gemini model"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l autostart -a "enable disable" -d "Toggle auto-start on boot"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l context-menu -a "enable disable" -d "Toggle Windows Explorer context menu"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l watch-folder -a "(__fish_complete_directories)" -d "Set watch folder"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l documents-folder -a "(__fish_complete_directories)" -d "Set documents root"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l fallback-folder -d "Set fallback folder"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l max-depth -d "Set max folder depth"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l mirror-csv -a "enable disable" -d "Mirror history CSV"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l auto-update -a "enable disable" -d "Toggle auto-update"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l update-check-interval -d "Set update check interval"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l dry-run -a "enable disable" -d "Toggle dry-run mode"
+
+complete -c scansort -n "__fish_seen_subcommand_from review" -s g -l gui -d "Use GUI review dialog"
+complete -c scansort -n "__fish_seen_subcommand_from review" -s c -l cli -d "Use interactive CLI review"
+complete -c scansort -n "__fish_seen_subcommand_from review" -l limit -d "Limit number of items"
 
 complete -c scansort -n "__fish_seen_subcommand_from logs" -s n -l lines -d "Lines to show"
 complete -c scansort -n "__fish_seen_subcommand_from logs" -s f -l follow -d "Follow log output"
@@ -215,10 +233,10 @@ _POWERSHELL_TEMPLATE = """# PowerShell completion for scansort
 Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    $subcommands = @('watch', 'file', 'config', 'undo', 'rescan', 'check-update', 'logs', 'history', 'stats', 'help', 'completion')
+    $subcommands = @('watch', 'file', 'config', 'undo', 'rescan', 'review', 'check-update', 'logs', 'history', 'stats', 'help', 'completion')
     $elements = $commandAst.ToString().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
 
-    if ($elements.Count -le 1 -or ($elements.Count -eq 2 -and -not $wordToComplete.StartsWith('-'))) {
+    if ($elements.Count -le 1 -or ($elements.Count -eq 2 -and $wordToComplete -ne '' -and -not $wordToComplete.StartsWith('-'))) {
         $subcommands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
         }
@@ -234,6 +252,9 @@ Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
     }
     elseif ($elements -contains 'config') {
         $flags += @('--show', '--json', '--path', '--get', '--set', '--set-key', '--watch-folder', '--documents-folder', '--gemini-model', '--fallback-folder', '--max-depth', '--mirror-csv', '--auto-update', '--update-check-interval', '--dry-run', '--autostart', '--context-menu')
+    }
+    elseif ($elements -contains 'review') {
+        $flags += @('--gui', '-g', '--cli', '-c', '--limit')
     }
     elseif ($elements -contains 'logs') {
         $flags += @('-n', '--lines', '-f', '--follow', '--level', '--clear')
@@ -265,7 +286,8 @@ def handle_completion(parsed: argparse.Namespace) -> int:
     template = _SHELL_TEMPLATES.get(shell)
     if not template:
         print(
-            f"Unsupported shell: {shell}. Supported shells: bash, zsh, fish, powershell"
+            f"Unsupported shell: {shell}. Supported shells: bash, zsh, fish, powershell",
+            file=sys.stderr,
         )
         return 1
     print(template.strip())

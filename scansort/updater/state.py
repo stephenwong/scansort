@@ -18,7 +18,7 @@ def load_state(state_path: Path) -> dict:
     """Read the update state file, returning {} when missing or malformed."""
     try:
         content = Path(state_path).read_text(encoding="utf-8-sig")
-    except OSError:
+    except OSError, UnicodeError:
         return {}
     try:
         data = json.loads(content)

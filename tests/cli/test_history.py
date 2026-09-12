@@ -202,3 +202,12 @@ def test_history_explicit_null_values(mock_app_dir: Path, capsys):
     captured = capsys.readouterr()
     assert "Unknown" in captured.out
     assert "UNKNOWN" in captured.out
+
+
+def test_load_history_records_skips_non_dict_lines(tmp_path):
+    from scansort.cli.history import _load_history_records
+
+    hist = tmp_path / "history.jsonl"
+    hist.write_text('null\n[1,2]\n{"status": "SUCCESS"}\n', encoding="utf-8")
+    records = _load_history_records(hist)
+    assert records == [{"status": "SUCCESS"}]

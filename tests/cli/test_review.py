@@ -33,13 +33,22 @@ def test_handle_review_empty_queue(tmp_path: Path, capsys):
     docs.mkdir()
     cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
 
-    with patch("scansort.cli.review.load_config", return_value=cfg):
+    with patch("scansort.cli.review._load_config_or_exit", return_value=cfg):
         args = argparse.Namespace(gui=False, cli=True, limit=None)
         code = handle_review(args)
 
     assert code == 0
     captured = capsys.readouterr()
     assert "No documents currently require review" in captured.out
+
+
+def test_handle_review_invalid_config_returns_1_not_crash(capsys):
+    """A config failure surfaced as None must exit 1, not propagate a traceback."""
+    with patch("scansort.cli.review._load_config_or_exit", return_value=None):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        code = handle_review(args)
+
+    assert code == 1
 
 
 def test_handle_review_cli_file_item(tmp_path: Path, monkeypatch, capsys):
@@ -60,7 +69,7 @@ def test_handle_review_cli_file_item(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -88,7 +97,7 @@ def test_handle_review_cli_dismiss_item(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -110,7 +119,7 @@ def test_handle_review_gui_delegation(tmp_path: Path):
 
     mock_dialog = MagicMock()
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.ui.review.open_review_dialog", return_value=mock_dialog
         ) as mock_open,
@@ -142,7 +151,7 @@ def test_handle_review_cli_skip_and_quit(tmp_path: Path, monkeypatch, capsys):
     )
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -179,7 +188,7 @@ def test_handle_review_cli_dismiss_cancelled_and_eof(
     monkeypatch.setattr("builtins.input", _mock_input)
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -235,7 +244,7 @@ def test_handle_review_cli_accept_ai_suggestion(tmp_path: Path, monkeypatch, cap
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch("scansort.cli.review.get_review_queue", return_value=[item]),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
@@ -270,7 +279,7 @@ def test_handle_review_cli_empty_folder_and_filing_error(
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -298,7 +307,7 @@ def test_handle_review_cli_filing_error_retry(tmp_path: Path, monkeypatch, capsy
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.file_reviewed_item",
             side_effect=[ValueError("Unsafe destination"), None],
@@ -330,7 +339,7 @@ def test_handle_review_cli_interrupts(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("builtins.input", _raise_interrupt)
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -351,7 +360,7 @@ def test_handle_review_auto_gui_when_available(tmp_path: Path):
     mock_dialog = MagicMock()
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch("scansort.cli.review._has_gui_display", return_value=True),
         patch(
             "scansort.ui.review.open_review_dialog", return_value=mock_dialog
@@ -380,7 +389,7 @@ def test_handle_review_cli_invalid_choice_and_recovery(
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -416,7 +425,7 @@ def test_handle_review_cli_secondary_prompt_interrupt(
     monkeypatch.setattr("builtins.input", _mock_input)
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),
@@ -443,7 +452,7 @@ def test_handle_review_cli_limit_truncation(tmp_path: Path, monkeypatch, capsys)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     with (
-        patch("scansort.cli.review.load_config", return_value=cfg),
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
         patch(
             "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
         ),

@@ -71,11 +71,11 @@ class ReviewDialog(tk.Toplevel):
         self.minsize(640, 560)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-        self.config: AppConfig = config or load_config()
+        self.app_config: AppConfig = config or load_config()
         self.on_filed = on_filed
 
         self.queue: list[ReviewItem] = get_review_queue(
-            self.config.documents_root, self.config.fallback_folder
+            self.app_config.documents_root, self.app_config.fallback_folder
         )
         self._current_index = 0
 
@@ -130,7 +130,7 @@ class ReviewDialog(tk.Toplevel):
             ).pack(pady=(0, 10))
             ttk.Label(
                 empty_frame,
-                text=f"All scans in '{self.config.fallback_folder}' have been organized.",
+                text=f"All scans in '{self.app_config.fallback_folder}' have been organized.",
             ).pack(pady=(0, 20))
             ttk.Button(empty_frame, text="Close", command=self.destroy).pack()
             return
@@ -203,9 +203,9 @@ class ReviewDialog(tk.Toplevel):
             row=0, column=0, sticky=tk.W, pady=2
         )
         folders = scan_documents_folders(
-            docs_root=self.config.documents_root,
-            max_depth=self.config.max_folder_depth,
-            fallback_folder=self.config.fallback_folder,
+            docs_root=self.app_config.documents_root,
+            max_depth=self.app_config.max_folder_depth,
+            fallback_folder=self.app_config.fallback_folder,
         )
         self.folder_combo = ttk.Combobox(
             file_frame,
@@ -337,7 +337,12 @@ class ReviewDialog(tk.Toplevel):
         if not self.queue:
             return
         item = self.queue[self._current_index]
-        open_in_file_manager(item.file_path)
+        if not open_in_file_manager(item.file_path):
+            messagebox.showwarning(
+                "Open Error",
+                f"Could not open {item.filename}.",
+                parent=self,
+            )
 
     def _file_current_item(self) -> None:
         if not self.queue:
@@ -362,7 +367,7 @@ class ReviewDialog(tk.Toplevel):
                 target_folder=target_folder,
                 document_date=date_val,
                 description=desc_val,
-                config=self.config,
+                config=self.app_config,
                 keyword_hint=hint_kw,
             )
             show_toast("ScanSort", f"Filed '{dest.name}' into '{target_folder}'.")

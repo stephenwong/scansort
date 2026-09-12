@@ -13,6 +13,9 @@ def handle_undo(parsed: argparse.Namespace) -> int:
     cfg = _load_config_or_exit()
     if cfg is None:
         return 1
+    if getattr(parsed, "dry_run", False) or cfg.dry_run:
+        print("Dry-run mode: would reverse the last move. No files were changed.")
+        return 0
     app_dir = get_default_app_dir()
     success, message, restored = run_undo(cfg, undo_fn=undo_last_move, app_dir=app_dir)
     if success:

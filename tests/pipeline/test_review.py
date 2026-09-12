@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pypdf import PdfReader, PdfWriter
@@ -52,6 +53,24 @@ def test_get_review_queue_empty(tmp_path: Path):
     docs.mkdir()
     items = get_review_queue(docs_root=docs, fallback_folder="_Review_Needed")
     assert items == []
+
+
+def test_get_review_queue_survives_corrupt_history_bytes(tmp_path: Path):
+    """Invalid UTF-8 in history.jsonl must degrade to no correlation, not crash."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    (review_dir / "doc.pdf").write_bytes(b"%PDF-1.4")
+    history = tmp_path / "history.jsonl"
+    history.write_bytes(b'{"status": "SUCCESS"}\n\xff\n')
+
+    items = get_review_queue(
+        docs_root=docs,
+        fallback_folder="_Review_Needed",
+        history_path=history,
+    )
+    assert len(items) == 1
+    assert items[0].filename == "doc.pdf"
 
 
 def test_get_review_queue_with_history_correlation(tmp_path: Path):
@@ -476,3 +495,201 @@ def test_file_reviewed_item_destination_escapes_docs_root(tmp_path: Path, monkey
             history_csv=app_dir / HISTORY_CSV_NAME,
             lock_path=app_dir / "operations.lock",
         )
+
+
+def test_file_reviewed_item_unknown_sha_replaced_with_real_digest(tmp_path: Path):
+    """FAILED records carry sha256='UNKNOWN'; REVIEWED must record a real digest."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "failed_scan.pdf")
+
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+        sha256="UNKNOWN",
+        summary="Failed classification",
+        document_type="Unknown",
+    )
+
+    dest = file_reviewed_item(
+        item=item,
+        target_folder="Health",
+        document_date="260901",
+        description="Recovered_Doc",
+        config=cfg,
+        history_jsonl=app_dir / HISTORY_JSONL_NAME,
+        history_csv=app_dir / HISTORY_CSV_NAME,
+        lock_path=app_dir / "operations.lock",
+    )
+
+    entry = json.loads(
+        (app_dir / HISTORY_JSONL_NAME).read_text(encoding="utf-8").strip()
+    )
+    assert len(entry["sha256"]) == 64
+    assert all(c in "0123456789abcdef" for c in entry["sha256"])
+    assert dest.exists()
+
+
+def test_file_reviewed_item_hint_failure_does_not_fail_filing(tmp_path: Path):
+    """A hint-save OSError after a successful move must not report filing failure."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "hint_fail.pdf")
+
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+        sha256="a" * 64,
+        summary="Summary",
+        document_type="Invoice",
+    )
+
+    with patch(
+        "scansort.pipeline.review.add_folder_hint", side_effect=OSError("disk full")
+    ):
+        dest = file_reviewed_item(
+            item=item,
+            target_folder="Health",
+            document_date="260901",
+            description="Hint_Fail_Doc",
+            keyword_hint="dental",
+            config=cfg,
+            history_jsonl=app_dir / HISTORY_JSONL_NAME,
+            history_csv=app_dir / HISTORY_CSV_NAME,
+            lock_path=app_dir / "operations.lock",
+        )
+
+    assert dest.exists()
+    assert not source_pdf.exists()
+    entry = json.loads(
+        (app_dir / HISTORY_JSONL_NAME).read_text(encoding="utf-8").strip()
+    )
+    assert entry["status"] == "REVIEWED"
+
+
+def test_file_reviewed_item_move_failure_cleans_partial_destination(tmp_path: Path):
+    """A failed shutil.move must not leave a partial file at the destination."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "move_fail.pdf")
+
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+        sha256="b" * 64,
+        summary="Summary",
+        document_type="Invoice",
+    )
+
+    def failing_move(src, dst, *args, **kwargs):
+        Path(dst).write_bytes(b"partial copy")
+        raise OSError("interrupted copy")
+
+    with (
+        patch("scansort.pipeline.review.shutil.move", side_effect=failing_move),
+        pytest.raises(OSError),
+    ):
+        file_reviewed_item(
+            item=item,
+            target_folder="Health",
+            document_date="260901",
+            description="Move_Fail_Doc",
+            config=cfg,
+            history_jsonl=app_dir / HISTORY_JSONL_NAME,
+            history_csv=app_dir / HISTORY_CSV_NAME,
+            lock_path=app_dir / "operations.lock",
+        )
+
+    assert not (docs / "Health" / "260901_Move_Fail_Doc.pdf").exists()
+    assert source_pdf.exists()
+
+
+def test_file_reviewed_item_converts_non_pdf_to_pdf(tmp_path: Path):
+    """Invariant B: reviewed image originals must be filed as .pdf with XMP."""
+    from PIL import Image
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_img = review_dir / "scan001.jpg"
+    Image.new("RGB", (60, 60), color=(120, 120, 120)).save(source_img, format="JPEG")
+
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    item = ReviewItem(
+        file_path=source_img,
+        filename=source_img.name,
+        file_size_bytes=source_img.stat().st_size,
+        modified_time=source_img.stat().st_mtime,
+        sha256="c" * 64,
+        summary="Holiday receipt",
+        document_type="Receipt",
+    )
+
+    dest = file_reviewed_item(
+        item=item,
+        target_folder="Travel",
+        document_date="260901",
+        description="Holiday_Receipt",
+        config=cfg,
+        history_jsonl=app_dir / HISTORY_JSONL_NAME,
+        history_csv=app_dir / HISTORY_CSV_NAME,
+        lock_path=app_dir / "operations.lock",
+    )
+
+    assert dest.suffix == ".pdf"
+    assert dest.name == "260901_Holiday_Receipt.pdf"
+    assert dest.exists()
+    assert not source_img.exists()
+    reader = PdfReader(str(dest))
+    assert reader.metadata.get("/Title") == "Holiday_Receipt"
+
+
+def test_dismiss_review_item_mirrors_to_documents_csv(tmp_path: Path):
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_pdf = _create_dummy_pdf(review_dir / "dismiss_me.pdf")
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    mirror = tmp_path / "Documents" / "_ScanSort_History.csv"
+
+    item = ReviewItem(
+        file_path=source_pdf,
+        filename=source_pdf.name,
+        file_size_bytes=source_pdf.stat().st_size,
+        modified_time=source_pdf.stat().st_mtime,
+        sha256="d" * 64,
+    )
+    with patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir):
+        dismiss_review_item(
+            item,
+            history_jsonl=app_dir / HISTORY_JSONL_NAME,
+            history_csv=app_dir / HISTORY_CSV_NAME,
+            lock_path=app_dir / "operations.lock",
+            mirror_csv_path=mirror,
+        )
+    assert "DISMISSED" in mirror.read_text(encoding="utf-8")

@@ -85,15 +85,19 @@ def test_tray_app_undo_action(tmp_path: Path):
 
 def test_tray_app_rescan_action(tmp_path: Path):
     app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    mock_pipeline.folder_mapper.refresh.return_value = [
+        "Receipts",
+        "Receipts/2026",
+    ]
 
     with (
-        patch(
-            "scansort.ui.tray.run_rescan", return_value=["Receipts", "Receipts/2026"]
-        ) as mock_rescan,
+        patch("scansort.ui.tray.run_rescan") as mock_rescan,
         patch("scansort.ui.tray.show_toast") as mock_toast,
     ):
         app.rescan_taxonomy(async_task=False)
-        mock_rescan.assert_called_once_with(cfg)
+        # With a pipeline mapper available, refresh once rather than rescanning.
+        mock_rescan.assert_not_called()
+        mock_pipeline.folder_mapper.refresh.assert_called_once()
         mock_toast.assert_called_with(
             "ScanSort Taxonomy", "Discovered 2 destination folders under Documents."
         )
@@ -172,6 +176,20 @@ def test_tray_app_exit(tmp_path: Path):
     assert stop_event.is_set()
     mock_watcher.stop.assert_called_once()
     mock_icon.stop.assert_called_once()
+
+
+def test_tray_exit_stops_watcher_before_signalling_worker(tmp_path: Path):
+    """The watcher must be stopped first so it cannot enqueue after shutdown starts."""
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    app.icon = MagicMock()
+
+    observed = {}
+    mock_watcher.stop.side_effect = lambda: observed.setdefault(
+        "stop_before_signal", not stop_event.is_set()
+    )
+
+    app.exit_app()
+    assert observed["stop_before_signal"] is True
 
 
 def test_tray_app_check_updates_no_update_and_error(tmp_path: Path):
@@ -326,3 +344,25 @@ def test_tray_app_open_drop_zone(tmp_path: Path):
         app.open_drop_zone(async_task=False)
         mock_open.assert_called_once()
         mock_dialog.mainloop.assert_called_once()
+
+
+def test_tray_file_picker_passes_explicit_parent(tmp_path: Path):
+    """The picker must use its own root, not the process-wide _default_root."""
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    fake_root = MagicMock()
+
+    with (
+        patch("tkinter.Tk", return_value=fake_root),
+        patch("tkinter.filedialog.askopenfilenames", return_value=[]) as mock_pick,
+    ):
+        app.file_documents_dialog(async_task=False)
+
+    assert mock_pick.call_args.kwargs.get("parent") is fake_root
+
+
+def test_tray_refresh_menu_skipped_while_shutting_down(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    app._shutting_down = True
+    with patch.object(app, "_build_menu") as mock_build:
+        app._refresh_menu()
+    mock_build.assert_not_called()

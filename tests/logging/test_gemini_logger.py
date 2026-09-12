@@ -38,3 +38,59 @@ def test_log_classification_event(caplog):
     assert "Routing decision: Matched discovered taxonomy folder" in logs
     assert "Tokens: 1,500 in / 100 out" in logs
     assert 'Raw Gemini response: {"document_date": "260906"}' in logs
+
+
+def test_log_classification_event_redacts_secrets(caplog):
+    import logging as _logging
+
+    from scansort.classification.models import DocumentClassification
+    from scansort.logging.gemini_logger import log_classification_event
+
+    secret = "AIzaSySuperSecretKey1234567890abcdef"
+    classification = DocumentClassification(
+        document_date="260901",
+        description="Doc",
+        target_folder="Utilities",
+        confidence=0.9,
+    )
+    classification.folder_reasoning = f"matched an invoice containing {secret}"
+
+    with caplog.at_level(_logging.INFO):
+        log_classification_event(
+            file_name="scan.pdf",
+            model="gemini-3.1-flash-lite",
+            latency_seconds=1.0,
+            classification=classification,
+            routing_rationale=f"route due to {secret}",
+            prompt_tokens=1,
+            candidates_tokens=1,
+            raw_response_text=f"{{'key': '{secret}'}}",
+        )
+
+    assert secret not in caplog.text
+    assert "REDACTED" in caplog.text
+
+
+def test_log_classification_event_collapses_newlines(caplog):
+    import logging as _logging
+
+    from scansort.classification.models import DocumentClassification
+    from scansort.logging.gemini_logger import log_classification_event
+
+    classification = DocumentClassification(
+        document_date="260901",
+        description="Doc",
+        target_folder="Utilities",
+        confidence=0.9,
+    )
+
+    with caplog.at_level(_logging.INFO):
+        log_classification_event(
+            file_name="scan.pdf",
+            model="gemini-3.1-flash-lite",
+            latency_seconds=1.0,
+            classification=classification,
+            routing_rationale="ok\n2026-09-12 ERROR scansort: FORGED",
+        )
+
+    assert "ok\n" not in caplog.text

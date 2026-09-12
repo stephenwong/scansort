@@ -75,10 +75,11 @@ class DropZoneWindow(tk.Toplevel):
         self.minsize(440, 320)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-        self.config: AppConfig = config or load_config()
-        self.pipeline = pipeline or ScanSortPipeline(config=self.config)
+        self.app_config: AppConfig = config or load_config()
+        self.pipeline = pipeline or ScanSortPipeline(config=self.app_config)
         self.on_filed = on_filed
 
+        self._processing = False
         self.copy_var = tk.BooleanVar(value=False)
         self.topmost_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Ready to file documents.")
@@ -180,7 +181,7 @@ class DropZoneWindow(tk.Toplevel):
             filetypes=[
                 (
                     "Supported Documents",
-                    "*.pdf;*.jpg;*.jpeg;*.png;*.tiff;*.tif",
+                    "*.pdf *.jpg *.jpeg *.png *.tiff *.tif",
                 ),
                 ("All Files", "*.*"),
             ],
@@ -203,6 +204,10 @@ class DropZoneWindow(tk.Toplevel):
 
     def file_documents(self, file_paths: list[Path]) -> None:
         """Process documents asynchronously on a background thread."""
+        if self._processing:
+            self.status_var.set("Already processing documents; please wait...")
+            return
+        self._processing = True
         copy_mode = self.copy_var.get()
         self.progress.start(10)
         self.status_var.set(f"Processing {len(file_paths)} document(s)...")
@@ -212,9 +217,15 @@ class DropZoneWindow(tk.Toplevel):
                 self._process_paths_sync(file_paths, copy_mode)
             finally:
                 with contextlib.suppress(Exception):
-                    self.after(0, self.progress.stop)
+                    self.after(0, self._on_worker_done)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_worker_done(self) -> None:
+        """Reset the busy guard and stop the progress bar on the Tk thread."""
+        self._processing = False
+        with contextlib.suppress(Exception):
+            self.progress.stop()
 
     def _set_status(self, text: str) -> None:
         """Update the status label, marshalling off-thread calls into the Tk event loop."""
@@ -236,6 +247,7 @@ class DropZoneWindow(tk.Toplevel):
         """
         success_count = 0
         error_count = 0
+        last_dest: Path | None = None
 
         for path in file_paths:
             resolved = path.resolve()
@@ -253,15 +265,24 @@ class DropZoneWindow(tk.Toplevel):
 
             try:
                 dest = self.pipeline.process_file(resolved, preserve_source=copy_mode)
-                if dest is not None:
-                    success_count += 1
-                    if self.on_filed:
-                        self.on_filed(dest)
-                else:
-                    error_count += 1
             except Exception as e:  # noqa: BLE001
                 logger.error("Error filing %s: %s", resolved.name, e)
                 error_count += 1
+                continue
+
+            if dest is not None:
+                success_count += 1
+                last_dest = dest
+            else:
+                error_count += 1
+
+        # Notify once per batch: rebuilds are expensive (history parse + tree
+        # scan), so per-file callbacks would make an N-file batch O(N^2).
+        if last_dest is not None and self.on_filed:
+            try:
+                self.on_filed(last_dest)
+            except Exception as e:  # noqa: BLE001
+                logger.error("on_filed callback failed for %s: %s", last_dest, e)
 
         if error_count == 0:
             status = f"Filed {success_count} document(s) successfully."

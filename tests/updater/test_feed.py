@@ -85,7 +85,7 @@ def test_parse_version_valid(raw: str, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    ["", "1.2", "1.2.3.4", "1.2.3-rc1", "v1.2", "abc", "1.x.3", None, 12],
+    ["", "1.2", "1.2.3.4", "1.2.3-rc1", "v1.2", "abc", "1.x.3", None, 12, "1.2.\u00b2"],
 )
 def test_parse_version_rejects_invalid(raw):
     assert parse_version(raw) is None

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scansort.cli.root import main_cli
+from scansort.core.config import AppConfig
 
 
 def test_cli_undo(capsys):
@@ -35,3 +36,20 @@ def test_cli_undo_os_error(capsys):
         exit_code = main_cli(["undo"])
         assert exit_code == 1
         assert "Error reversing last move" in capsys.readouterr().err
+
+
+def test_handle_undo_dry_run_does_not_reverse(tmp_path, monkeypatch, capsys):
+    import argparse
+    from unittest.mock import patch
+
+    from scansort.cli.undo import handle_undo
+
+    cfg = AppConfig()
+    with (
+        patch("scansort.cli.undo._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.undo.run_undo") as mock_run,
+    ):
+        code = handle_undo(argparse.Namespace(dry_run=True))
+    assert code == 0
+    mock_run.assert_not_called()
+    assert "Dry-run" in capsys.readouterr().out

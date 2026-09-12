@@ -1,6 +1,7 @@
 """Log inspection, streaming, and maintenance CLI subcommand handler."""
 
 import argparse
+import os
 import sys
 import time
 
@@ -33,6 +34,9 @@ def _extract_line_severity(line: str) -> int | None:
         candidate = tokens[2].upper()
         if candidate in _LEVEL_SEVERITY:
             return _LEVEL_SEVERITY[candidate]
+    # Continuation lines (tracebacks) inherit the previous line's severity.
+    if line[:1].isspace():
+        return None
     # Fallback to token search in first 50 chars
     upper_head = line[:50].upper()
     for lvl, sev in _LEVEL_SUBSTRINGS:
@@ -70,23 +74,13 @@ def handle_logs(parsed: argparse.Namespace) -> int:
 
     if getattr(parsed, "follow", False):
         try:
-            with open(log_file, encoding="utf-8", errors="replace") as f:
-                last_matched = False
-                # Read through existing lines
-                for line in f:
-                    if min_severity is not None:
-                        sev = _extract_line_severity(line)
-                        if sev is not None:
-                            last_matched = sev >= min_severity
-                        if not last_matched:
-                            continue
-                    print(line, end="")
-                    sys.stdout.flush()
-
-                # Poll for appended lines
-                while True:
-                    line = f.readline()
-                    if line:
+            last_matched = False
+            while True:
+                rotated = False
+                with open(log_file, encoding="utf-8", errors="replace") as f:
+                    last_inode = os.fstat(f.fileno()).st_ino
+                    # Print content already present (empty on a fresh rotation).
+                    for line in f:
                         if min_severity is not None:
                             sev = _extract_line_severity(line)
                             if sev is not None:
@@ -95,8 +89,30 @@ def handle_logs(parsed: argparse.Namespace) -> int:
                                 continue
                         print(line, end="")
                         sys.stdout.flush()
-                    else:
-                        time.sleep(0.2)
+
+                    # Poll for appended lines, detecting log rotation/truncation.
+                    while True:
+                        try:
+                            current_inode = os.stat(log_file).st_ino
+                        except OSError:
+                            current_inode = last_inode
+                        if current_inode != last_inode:
+                            rotated = True
+                            break
+                        line = f.readline()
+                        if line:
+                            if min_severity is not None:
+                                sev = _extract_line_severity(line)
+                                if sev is not None:
+                                    last_matched = sev >= min_severity
+                                if not last_matched:
+                                    continue
+                            print(line, end="")
+                            sys.stdout.flush()
+                        else:
+                            time.sleep(0.2)
+                if not rotated:
+                    break
         except KeyboardInterrupt:
             return 0
         except OSError as e:

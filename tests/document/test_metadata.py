@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, NameObject
 
 from scansort.document.metadata import process_pdf_metadata_and_rotation
 
@@ -253,6 +254,57 @@ def test_xmp_metadata_embedded_and_preserved(tmp_path: Path):
     process_pdf_metadata_and_rotation(pdf_path=plain, title="Plain Title")
     plain_reader = PdfReader(io.BytesIO(plain.read_bytes()))
     assert plain_reader.xmp_metadata is not None
+
+
+def test_xmp_fields_updated_when_packet_pre_exists(tmp_path: Path):
+    """Invariant E: new title/subject/keywords must reach XMP even with an existing packet."""
+    from pypdf.xmp import XmpInformation
+
+    from scansort.document.metadata import process_pdf_metadata_and_rotation
+
+    src = tmp_path / "prexmp.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    old_xmp = XmpInformation.create()
+    old_xmp.dc_title = {"x-default": "OLD TITLE"}
+    writer.xmp_metadata = old_xmp
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    process_pdf_metadata_and_rotation(
+        pdf_path=src,
+        title="NEW TITLE",
+        subject="New Subject",
+        keywords="Utilities, Water",
+    )
+
+    reader = PdfReader(io.BytesIO(src.read_bytes()))
+    assert reader.xmp_metadata is not None
+    assert reader.xmp_metadata.dc_title == {"x-default": "NEW TITLE"}
+    assert reader.xmp_metadata.dc_description == {"x-default": "New Subject"}
+    assert reader.xmp_metadata.pdf_keywords is not None
+    assert "Utilities" in reader.xmp_metadata.pdf_keywords
+
+
+def test_malformed_pre_existing_xmp_does_not_abort_processing(tmp_path: Path):
+    """A PDF with an unparseable /Metadata stream must still be processed."""
+    from scansort.document.metadata import process_pdf_metadata_and_rotation
+
+    src = tmp_path / "badxmp.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer._root_object[NameObject("/Metadata")] = writer._add_object(
+        DecodedStreamObject()
+    )
+    writer._objects[-1].set_data(b"<not-valid-xmp><<<>")
+    with open(src, "wb") as f:
+        writer.write(f)
+
+    out = process_pdf_metadata_and_rotation(pdf_path=src, title="Recovered Title")
+    assert out == src
+    reader = PdfReader(io.BytesIO(src.read_bytes()))
+    assert reader.metadata["/Title"] == "Recovered Title"
+    assert reader.xmp_metadata is not None
 
 
 def test_existing_rotation_normalized_mod_360(tmp_path: Path):

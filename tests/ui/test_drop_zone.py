@@ -288,3 +288,97 @@ def test_drop_zone_mainloop_guard(tk_root, tmp_path: Path):
         window.mainloop()
         assert mock_loop.call_count == 1
     window.destroy()
+
+
+def test_drop_zone_does_not_shadow_tk_config_method(tk_root, tmp_path: Path):
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    window = DropZoneWindow(master=tk_root, config=cfg, pipeline=MagicMock())
+    assert window.app_config is cfg
+    assert callable(window.config)
+    window.destroy()
+
+
+def test_drop_zone_busy_guard_blocks_overlapping_runs(tk_root, tmp_path: Path):
+    test_pdf = tmp_path / "doc.pdf"
+    test_pdf.write_bytes(b"%PDF-1.4")
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    mock_pipeline = MagicMock()
+    mock_pipeline.process_file.return_value = tmp_path / "Documents" / "doc.pdf"
+    window = DropZoneWindow(master=tk_root, config=cfg, pipeline=mock_pipeline)
+
+    window._processing = True
+    with patch.object(window, "_process_paths_sync") as mock_sync:
+        window.file_documents([test_pdf])
+    mock_sync.assert_not_called()
+    assert "already processing" in window.status_var.get().lower()
+    window.destroy()
+
+
+def test_drop_zone_on_filed_called_once_per_batch(tk_root, tmp_path: Path):
+    files = []
+    for i in range(3):
+        f = tmp_path / f"doc{i}.pdf"
+        f.write_bytes(b"%PDF-1.4")
+        files.append(f)
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    mock_pipeline = MagicMock()
+    mock_pipeline.process_file.side_effect = [
+        tmp_path / "Documents" / f"doc{i}.pdf" for i in range(3)
+    ]
+    calls = []
+    window = DropZoneWindow(
+        master=tk_root,
+        config=cfg,
+        pipeline=mock_pipeline,
+        on_filed=lambda d: calls.append(d),
+    )
+    window._process_paths_sync(files)
+    assert len(calls) == 1
+    window.destroy()
+
+
+def test_drop_zone_on_filed_exception_does_not_count_as_filing_error(
+    tk_root, tmp_path: Path
+):
+    test_pdf = tmp_path / "doc.pdf"
+    test_pdf.write_bytes(b"%PDF-1.4")
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    mock_pipeline = MagicMock()
+    mock_pipeline.process_file.return_value = tmp_path / "Documents" / "doc.pdf"
+
+    def _boom(_dest):
+        raise RuntimeError("tray rebuild failed")
+
+    window = DropZoneWindow(
+        master=tk_root, config=cfg, pipeline=mock_pipeline, on_filed=_boom
+    )
+    window._process_paths_sync([test_pdf])
+    assert "Filed 1 document(s) successfully" in window.status_var.get()
+    window.destroy()
+
+
+def test_drop_zone_filetypes_use_space_separated_patterns(tk_root, tmp_path: Path):
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
+    )
+    window = DropZoneWindow(master=tk_root, config=cfg, pipeline=MagicMock())
+    captured = {}
+
+    def _fake(**kwargs):
+        captured.update(kwargs)
+        return ()
+
+    with patch("tkinter.filedialog.askopenfilenames", side_effect=_fake):
+        window.browse_files()
+    pattern = dict(captured["filetypes"])["Supported Documents"]
+    assert ";" not in pattern
+    assert "*.pdf" in pattern
+    window.destroy()

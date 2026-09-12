@@ -52,6 +52,10 @@ def _resolve_safe_subfolder(
     clean_folder = relative_folder.strip("/\\")
     resolved_docs = docs_root.resolve()
     review_dir = (docs_root / REVIEW_NEEDED_DIR).resolve()
+    if not review_dir.is_relative_to(resolved_docs) or review_dir == resolved_docs:
+        raise ValueError(
+            f"Review folder '{review_dir}' escapes documents root '{docs_root}'"
+        )
 
     if not clean_folder or clean_folder == ".":
         return review_dir
@@ -114,7 +118,12 @@ def resolve_duplicates_dir(docs_root: Path, fallback_folder: str) -> Path:
     safe_base = _resolve_safe_subfolder(
         docs_root, fallback_folder, context_name="fallback folder"
     )
-    return (safe_base / DUPLICATES_DIR).resolve()
+    dup_dir = (safe_base / DUPLICATES_DIR).resolve()
+    if not dup_dir.is_relative_to(docs_root.resolve()):
+        raise ValueError(
+            f"Duplicates dir '{dup_dir}' escapes documents root '{docs_root}'"
+        )
+    return dup_dir
 
 
 def dispatch_file(

@@ -100,8 +100,8 @@ def get_tray_icon(
     if paused:
         # Amber/Orange pause circle badge in bottom-right corner
         badge_radius = int(w * 0.22)
-        badge_cx = doc_right - int(badge_radius * 0.4)
-        badge_cy = doc_bottom - int(badge_radius * 0.4)
+        badge_cx = min(doc_right, w - badge_radius - 1) - int(badge_radius * 0.4)
+        badge_cy = min(doc_bottom, h - badge_radius - 1) - int(badge_radius * 0.4)
         badge_box = [
             badge_cx - badge_radius,
             badge_cy - badge_radius,
@@ -133,8 +133,8 @@ def get_tray_icon(
     else:
         # Green / cyan active filing badge
         badge_radius = int(w * 0.20)
-        badge_cx = doc_right - int(badge_radius * 0.4)
-        badge_cy = doc_bottom - int(badge_radius * 0.4)
+        badge_cx = min(doc_right, w - badge_radius - 1) - int(badge_radius * 0.4)
+        badge_cy = min(doc_bottom, h - badge_radius - 1) - int(badge_radius * 0.4)
         badge_box = [
             badge_cx - badge_radius,
             badge_cy - badge_radius,

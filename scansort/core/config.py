@@ -157,7 +157,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
     try:
         content = path.read_text(encoding="utf-8-sig")
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
         logger.warning("Error reading config at %s (%s). Using defaults.", path, e)
         return AppConfig()
 
@@ -172,13 +172,28 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         return AppConfig()
 
     clean_data = {k: v for k, v in data.items() if v is not None}
+    unknown_keys = sorted(set(clean_data) - set(AppConfig.model_fields))
+    if unknown_keys:
+        logger.warning(
+            "Ignoring unknown config keys in %s: %s", path, ", ".join(unknown_keys)
+        )
     try:
         return AppConfig(**clean_data)
     except ValidationError as e:
         invalid_fields = sorted(
             {str(error.get("loc", ())[0]) for error in e.errors() if error.get("loc")}
         )
-        details = ", ".join(invalid_fields) if invalid_fields else "invalid values"
+        if invalid_fields:
+            details = ", ".join(invalid_fields)
+        else:
+            # Model-level (mode="after") validators have no loc, but their
+            # message names the offending fields.
+            details = (
+                "; ".join(
+                    str(error.get("msg", "invalid value")) for error in e.errors()
+                )
+                or "invalid values"
+            )
         logger.error("Config file %s has invalid settings: %s", path, details)
         raise ValueError(
             f"Config file {path} contains invalid settings ({details}). "

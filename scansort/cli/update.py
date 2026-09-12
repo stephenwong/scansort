@@ -108,7 +108,7 @@ def maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
         spawn_update_helper(install_dir, staged_dir, release.version, os.getpid())
         record_update_check(state_path)
         return True
-    except UpdateError as e:
+    except (UpdateError, OSError) as e:
         logger.warning("Automatic update skipped: %s", e)
         return False
 

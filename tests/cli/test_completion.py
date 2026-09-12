@@ -8,10 +8,10 @@ from scansort.cli.root import main_cli
 @pytest.mark.parametrize(
     ("shell", "expected_snippets"),
     [
-        ("bash", ["_scansort_completion", "watch", "history"]),
-        ("zsh", ["#compdef scansort", "watch"]),
-        ("fish", ["complete -c scansort"]),
-        ("powershell", ["Register-ArgumentCompleter", "scansort"]),
+        ("bash", ["_scansort_completion", "watch", "history", "review"]),
+        ("zsh", ["#compdef scansort", "watch", "review"]),
+        ("fish", ["complete -c scansort", "review"]),
+        ("powershell", ["Register-ArgumentCompleter", "scansort", "review"]),
     ],
 )
 def test_completion_supported_shells(capsys, shell, expected_snippets):
@@ -35,4 +35,4 @@ def test_completion_direct_call_unsupported_shell(capsys):
 
     code = handle_completion(argparse.Namespace(shell="elvish"))
     assert code == 1
-    assert "Unsupported shell" in capsys.readouterr().out
+    assert "Unsupported shell" in capsys.readouterr().err

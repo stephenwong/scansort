@@ -401,3 +401,53 @@ def test_perform_self_update_tolerates_chdir_oserror(tmp_path: Path, monkeypatch
     # Even if chdir fails, perform_self_update continues its checks gracefully
     assert perform_self_update(1, install_dir, empty, __version__) == 1
     monkeypatch.delattr(sys, "frozen", raising=False)
+
+
+@patch.dict("sys.modules", {"msvcrt": MagicMock()})
+def test_perform_self_update_returns_1_on_lock_oserror(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        "scansort.updater.process.wait_for_process_exit", lambda pid, timeout=60.0: True
+    )
+    install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
+    app_dir = tmp_path / "appdata"
+
+    monkeypatch.setattr(
+        "scansort.updater.process.interprocess_file_lock",
+        MagicMock(side_effect=OSError("lock denied")),
+    )
+
+    code = perform_self_update(
+        1234, install_dir, staged_dir, __version__, app_dir=app_dir
+    )
+    assert code == 1
+    monkeypatch.delattr(sys, "frozen", raising=False)
+
+
+@patch.dict("sys.modules", {"msvcrt": MagicMock()})
+def test_perform_self_update_relaunch_failure_still_reports_success(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        "scansort.updater.process.wait_for_process_exit", lambda pid, timeout=60.0: True
+    )
+    monkeypatch.setattr(
+        "scansort.updater.process.launch_installed_app",
+        MagicMock(side_effect=UpdateError("cannot spawn")),
+    )
+    monkeypatch.setattr("os.chdir", MagicMock())
+
+    install_dir = _make_tree(tmp_path, "ScanSort", "old")
+    staged_dir = _make_tree(tmp_path, f"ScanSort.stage-{__version__}", "new")
+    app_dir = tmp_path / "appdata"
+
+    code = perform_self_update(
+        1234, install_dir, staged_dir, __version__, app_dir=app_dir
+    )
+    assert code == 0
+    assert (install_dir / "ScanSort.exe").read_bytes() == b"new"
+    monkeypatch.delattr(sys, "frozen", raising=False)

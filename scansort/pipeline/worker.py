@@ -29,7 +29,9 @@ def run_pipeline_worker(
         try:
             item = file_queue.get(timeout=0.5)
         except queue.Empty:
-            if stop_event.is_set():
+            # Re-check emptiness: an item may have been enqueued concurrently
+            # with the timeout, and shutdown must drain rather than drop it.
+            if stop_event.is_set() and file_queue.empty():
                 break
             continue
 

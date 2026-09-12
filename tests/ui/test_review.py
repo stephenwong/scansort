@@ -187,7 +187,10 @@ def test_review_dialog_open_in_viewer(tk_root, tmp_path: Path):
     opened = []
     with (
         patch("scansort.ui.review.get_review_queue", return_value=[item]),
-        patch("scansort.ui.review.open_in_file_manager", lambda p: opened.append(p)),
+        patch(
+            "scansort.ui.review.open_in_file_manager",
+            lambda p: (opened.append(p), True)[1],
+        ),
     ):
         dialog = ReviewDialog(master=tk_root, config=cfg)
         dialog._open_in_viewer()
@@ -315,3 +318,25 @@ def test_review_dialog_dismiss_oserror_handled(tk_root, tmp_path: Path):
         mock_err.assert_called_once()
         assert len(dialog.queue) == 1
         dialog.destroy()
+
+
+def test_review_dialog_open_in_viewer_failure_warns(tk_root, tmp_path: Path):
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "scan.pdf")
+    cfg = AppConfig(documents_root=docs)
+    item = ReviewItem(
+        file_path=pdf,
+        filename=pdf.name,
+        file_size_bytes=1024,
+        modified_time=1000.0,
+    )
+    with (
+        patch("scansort.ui.review.get_review_queue", return_value=[item]),
+        patch("scansort.ui.review.open_in_file_manager", return_value=False),
+        patch("scansort.ui.review.messagebox.showwarning") as mock_warn,
+    ):
+        dialog = ReviewDialog(master=tk_root, config=cfg)
+        dialog._open_in_viewer()
+    mock_warn.assert_called_once()

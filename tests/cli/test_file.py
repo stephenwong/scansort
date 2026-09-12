@@ -302,3 +302,21 @@ def test_handle_file_dry_run_override(tmp_path: Path):
         assert handle_file(parsed) == 0
         created_cfg = mock_init.call_args.kwargs["config"]
         assert created_cfg.dry_run is True
+
+
+def test_handle_file_directory_reports_directory(tmp_path: Path, capsys):
+    from scansort.cli.file_cmd import handle_file
+
+    cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
+    target = tmp_path / "a_directory"
+    target.mkdir()
+    with (
+        patch("scansort.cli.file_cmd._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.file_cmd.get_api_key", return_value="AIzaKey123"),
+    ):
+        code = handle_file(
+            argparse.Namespace(files=[target], copy=False, dry_run=False)
+        )
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "directory" in err

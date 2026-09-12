@@ -4,11 +4,17 @@ import logging
 from typing import TYPE_CHECKING
 
 from scansort.logging.cost import format_token_cost_summary
+from scansort.platform.secrets import redact_secrets_from_text
 
 if TYPE_CHECKING:
     from scansort.classification.models import DocumentClassification
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_for_log(value: object) -> str:
+    """Collapse newlines (anti log-forging) and redact any embedded secrets."""
+    return redact_secrets_from_text(" ".join(str(value).split()))
 
 
 def log_classification_event(
@@ -52,10 +58,10 @@ def log_classification_event(
 
     reason = getattr(classification, "folder_reasoning", None)
     if reason and str(reason).strip():
-        logger.info("Folder reason: %s", str(reason).strip())
+        logger.info("Folder reason: %s", _clean_for_log(reason))
 
     if routing_rationale and routing_rationale.strip():
-        logger.info("Routing decision: %s", routing_rationale.strip())
+        logger.info("Routing decision: %s", _clean_for_log(routing_rationale))
 
     if prompt_tokens > 0 or candidates_tokens > 0:
         logger.info(
@@ -67,4 +73,4 @@ def log_classification_event(
         )
 
     if raw_response_text:
-        logger.debug("Raw Gemini response: %s", raw_response_text.strip())
+        logger.debug("Raw Gemini response: %s", _clean_for_log(raw_response_text))

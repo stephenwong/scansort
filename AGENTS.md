@@ -138,17 +138,18 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 ### C. File Ingestion & Stability
 - Physical scanners write files progressively. **Never** process an incoming file immediately on filesystem notification.
 - Always wait for write stabilization via `scansort.pipeline.stabilizer.wait_for_file_stability()` which verifies file size stagnation and non-blocking exclusive file handle availability.
-- Advisory lock probes cannot detect plain `write()`-based writers: the pipeline requires a ~1 s size-quiescence window and re-verifies the source (size + mtime) immediately before dispatch; defer rather than file a partial snapshot. Stabilization on a vanished file must fail fast (never spin the timeout).
-- The watcher must sweep pre-existing drop-folder files at every cycle start so scans that arrived while the app was off are still filed.
+- Advisory lock probes cannot detect plain `write()`-based writers: the pipeline requires a ~1 s size-quiescence window and re-verifies the source (size + mtime) immediately before dispatch; defer rather than file a partial snapshot. Stabilization must fail fast only when the file is confirmed gone (`FileNotFoundError`); transient `stat()` errors (AV/SMB locks) are retried within the timeout window rather than skipping an otherwise-fileable scan.
+- The watcher must sweep pre-existing drop-folder files at every cycle start so scans that arrived while the app was off are still filed, and must re-sweep once after watchfiles registers its baseline (the generator's first wake) so a file created in the sweep/registration gap is never stranded.
 
 ### D. Duplicate Prevention & Safe Move Reversal
 - Compute streaming SHA-256 before invoking Gemini OCR.
-- Check against `history.jsonl`. Duplicates must be routed to `Documents/_Review_Needed/Duplicates/` with status `DUPLICATE` without invoking Gemini, saving API quota.
+- Check against `history.jsonl`. Duplicates must be routed to `Documents/_Review_Needed/Duplicates/` with status `DUPLICATE` without invoking Gemini, saving API quota. A history read failure (`OSError`) must fail **closed**: propagate so the item is routed to `_Review_Needed/` rather than being misread as "not a duplicate". The duplicate check must be re-verified under `operations.lock` immediately before dispatch so a concurrent process filing identical content cannot be raced.
 - When reversing moves via `scansort undo`, restored files in the drop folder are prefixed with `_undone_` (e.g., `_undone_YYMMDD_Desc.pdf`). The drop folder watcher strictly ignores files with this prefix to prevent automated re-filing loops. Both `history.jsonl` and `history.csv` are atomically updated with `UNDONE` status.
 - `undo_last_move` may raise `OSError` on a failed physical restore (the CLI reports it); records lacking `original_path` or whose recorded destination is a directory are skipped.
 
 ### E. Orientation & Windows Search Indexing
 - If Gemini returns non-zero `orientation_correction` (90°, 180°, 270°), rotate pages using `pypdf` (assign `page.rotation` so `/Rotate` stays canonical mod 360).
+- When a PDF already carries an XMP packet, merge the new `Title`/`Subject`/`Keywords` into that packet (preserving unrelated XMP nodes) instead of returning the stale pre-existing bytes; malformed pre-existing XMP must degrade to a fresh packet rather than aborting processing.
 - Embed DocInfo and XMP metadata (`Title`, `Subject`, `Keywords`, `Author`) into every output PDF to enable native Windows Start Menu search indexing: generate an XMP packet on every output and preserve any pre-existing `/Metadata` stream.
 
 ### F. In-Place PDF Modification on Windows
@@ -161,7 +162,9 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Enforce that `watch_folder` and `documents_root` cannot be the same directory **or contain each other** (containment in either direction enables self-filing feedback loops). Paths located under a regular file are rejected.
 - Only the exact `_Review_Needed` literal may bypass the taxonomy membership gate — never a `_Review_Needed*` prefix — so model-invented subfolders are never auto-created.
 - Semantically invalid `config.json` settings cause fail-fast `ValueError`s naming the offending fields; never silently reset a parseable config to defaults or persist a fallback model.
-- Taxonomy discovery must skip symlinks/junctions (escape- or cycle-prone) and, on Windows, hidden-attribute folders; the folder cache is revalidated on a TTL so deleted folders are never advertised/re-created.
+- Taxonomy discovery must skip symlinks/junctions (escape- or cycle-prone) and, on Windows, hidden-attribute folders; the folder cache is revalidated on a TTL (and on the in-memory fast path) so deleted folders are never advertised/re-created. Cached entries replaced by symlinks/junctions/hidden folders are pruned, and a malformed cache (non-string `documents_root`, non-dict JSON) falls back to a rescan rather than raising.
+- Resolved `_Review_Needed` and `_Review_Needed/Duplicates` directories must themselves satisfy `is_relative_to(docs_root)`; a symlinked/junctioned review directory must raise `ValueError` rather than moving files outside the managed root.
+- `relative_folder_is_safe` rejects embedded NUL bytes and whitespace-padded `..` segments. Unknown `config.json` keys are logged and ignored (forward-compatible); non-UTF-8 config bytes fall back to defaults.
 - The Gemini classification system instruction explicitly instructs recognition of event and trip folders (e.g., conferences, marathons, vacations) and cross-references document dates (billing date, stay check-in/out, travel dates) and locations against event timing to route travel, lodging, and logistics receipts with high confidence ($\ge 0.70$).
 
 ### H. Intermediate File Isolation
@@ -170,8 +173,8 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 ### I. Worker Fault Tolerance & Rate Limiting
 - The background processing worker must never crash on transient API rate limits (429/503) or network disconnects.
 - Route failing items to `_Review_Needed/` (fallback folder) with a `FAILED` audit record and diagnostic logging, and keep the queue worker alive. The worker drains the queue on shutdown.
-- Resolve-then-move critical sections (`dispatch_file`, duplicate routing, `undo_last_move`) must hold the cross-process advisory lock (`app_dir/operations.lock`, `scansort.core.fs.interprocess_file_lock`); on a move failure, clean up any partial destination before re-raising.
-- Audit CSV headers must be created without truncation (`"x"`/append-when-empty, never `"w"`), cells are neutralized against spreadsheet-formula prefixes and un-encodable surrogates, and CSV/JSONL writes guard `(OSError, UnicodeError)`.
+- Resolve-then-move critical sections (`dispatch_file`, duplicate routing, `_route_failed_to_review`, `file_reviewed_item`, `undo_last_move`) must hold the cross-process advisory lock (`app_dir/operations.lock`, `scansort.core.fs.interprocess_file_lock`); on a move failure, clean up any partial destination before re-raising.
+- Audit CSV headers must be created without truncation (`"x"`/append-when-empty, never `"w"`) while holding an interprocess lock (two writers observing a zero-byte file must not emit duplicate headers), cells are neutralized against spreadsheet-formula prefixes and un-encodable surrogates, and CSV/JSONL writes guard `(OSError, UnicodeError)`.
 
 ### J. Strict Test-Driven Development (TDD) & Zero "Test Slop"
 - **Always write tests first:** For any new feature, bug fix, or behavioral change, write failing automated tests before writing production code.
@@ -203,7 +206,7 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Every `main_cli` entry (all subcommands, including the detached `--self-update` helper) calls `scansort.logging.configure_file_logging(level=...)` so diagnostics survive operation where no console exists. It attaches a rotating `scansort.log` handler (INFO or DEBUG with `--verbose` / `-v`, 1 MB × 3 backups, UTF-8) in `app_dir` plus a console stderr handler. Repeat calls for the same directory reuse handlers without stacking duplicates.
 - Root-logger level is lowered to INFO (or DEBUG under `--verbose`) so messages pass logger-level filtering. File logging is best-effort and never raises: `mkdir` or log-file open failures return `None` silently and must not abort any command, filing, update, or self-update path.
 - **Model Evaluation & Cost Visibility:** ScanSort supports only `gemini-3.1-flash-lite` (default) and `gemini-3.5-flash-lite`. Multimodal Gemini calls log structured classification events via `gemini_logger.py` including prompt/candidate/total token counts, execution latency (ms), and estimated USD cost based on official Gemini Flash Lite pricing ($0.075 input / $0.30 output per 1M tokens) in `cost.py`. Gemini's natural language `folder_reasoning` and ScanSort's deterministic `routing_rationale` are captured and logged at INFO level (raw API payloads at DEBUG), and recorded in `history.jsonl` for auditability.
-- Secrets stay covered by invariant A: only pre-redacted text (via `scansort.platform.secrets.redact_secrets_from_text()`) may ever reach the log file — audit summaries in `history.jsonl` remain truncated to 100 chars, the full redacted reason lives in `scansort.log`.
+- Secrets stay covered by invariant A: only pre-redacted text (via `scansort.platform.secrets.redact_secrets_from_text()`) may ever reach the log file — Gemini `folder_reasoning`/`routing_rationale`/raw responses are redacted and newline-collapsed before logging; keyring error text in `set_api_key` is redacted with the submitted key — audit summaries in `history.jsonl` remain truncated to 100 chars, the full redacted reason lives in `scansort.log`.
 
 ### P. Version Bumping (Single Source of Truth)
 - `scansort/__init__.py::__version__` is the **only place** the version is defined.

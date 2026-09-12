@@ -149,3 +149,51 @@ def test_attach_parent_console_swallows_win32_api_failures(monkeypatch):
     assert attach() is None
     assert sys.stdout is original_out
     assert sys.stderr is original_err
+
+
+def test_attach_parent_console_swallows_closed_stdout(monkeypatch):
+    import io
+    import sys as _sys
+
+    closed = io.StringIO()
+    closed.close()
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    monkeypatch.setattr(_sys, "platform", "win32")
+    monkeypatch.setattr(_sys, "stdout", closed)
+
+    from scansort.platform.console import attach_parent_console
+
+    attach_parent_console()  # must not raise
+
+
+def test_attach_parent_console_closes_fd_when_fdopen_fails(monkeypatch):
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "frozen", True, raising=False)
+    monkeypatch.setattr(_sys, "platform", "win32")
+    monkeypatch.setattr(_sys, "stdout", None)
+
+    opened = []
+
+    class _FakeMsvcrt:
+        @staticmethod
+        def open_osfhandle(handle, flags):
+            opened.append(handle)
+            return 42
+
+    fake_kernel32 = MagicMock()
+    fake_kernel32.AttachConsole.return_value = 1
+    fake_kernel32.GetConsoleOutputCP.return_value = 65001
+    fake_kernel32.GetStdHandle.return_value = 12
+    fake_win = MagicMock(return_value=fake_kernel32)
+
+    closed = []
+    monkeypatch.setattr("ctypes.WinDLL", fake_win, raising=False)
+    monkeypatch.setattr("os.fdopen", MagicMock(side_effect=ValueError("bad codec")))
+    monkeypatch.setattr("os.close", lambda fd: closed.append(fd))
+    monkeypatch.setitem(_sys.modules, "msvcrt", _FakeMsvcrt)
+
+    from scansort.platform.console import attach_parent_console
+
+    attach_parent_console()
+    assert closed == [42, 42]

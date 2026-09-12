@@ -108,7 +108,7 @@ def test_open_path_windows_creates_missing_file_in_existing_parent(
     monkeypatch.setattr("sys.platform", "win32")
 
     assert not log_file.exists()
-    assert toasts.open_path(log_file) is True
+    assert toasts.open_path(log_file, create_file=True) is True
     assert log_file.exists()
     mock_startfile.assert_called_once_with(str(log_file.resolve()))
 
@@ -187,7 +187,7 @@ def test_show_toast_interactive_activation(tmp_path: Path, monkeypatch):
             # Simulate clicking "View Logs" button
             Args = namedtuple("Args", ["arguments"])
             fake_toast.on_activated(Args(arguments="view_log"))
-            mock_open.assert_called_with(log_path)
+            mock_open.assert_called_with(log_path, create_file=True)
 
             mock_open.reset_mock()
             # Simulate clicking the toast body (no argument)
@@ -236,3 +236,42 @@ def test_backend_missing_toaster_classes(monkeypatch):
     with patch.dict(sys.modules, {"windows_toasts": fake_lib}):
         assert toasts.show_toast("Title", "Body") is False
     toasts._backend = None
+
+
+def test_show_toast_returns_false_when_toast_class_missing(monkeypatch):
+    import sys
+
+    fake = MagicMock(spec=["WindowsToaster"])
+    fake.WindowsToaster.return_value = MagicMock()
+    toasts._backend = None
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setitem(sys.modules, "windows_toasts", fake)
+
+    assert toasts.show_toast("Title", "Body") is False
+
+
+def test_get_backend_constructed_once_under_concurrency(monkeypatch):
+    import threading
+
+    built = []
+
+    class _SlowBackend:
+        def __init__(self):
+            built.append(1)
+
+    monkeypatch.setattr(toasts, "_backend", None)
+    monkeypatch.setattr(toasts, "WindowsToastBackend", _SlowBackend)
+
+    threads = [threading.Thread(target=toasts._get_backend) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(built) == 1
+
+
+def test_open_path_does_not_create_dotted_directory(tmp_path: Path, monkeypatch):
+    target = tmp_path / "Thesis.2024"
+    monkeypatch.setattr("sys.platform", "linux")
+    assert toasts.open_path(target) is False
+    assert not target.exists()

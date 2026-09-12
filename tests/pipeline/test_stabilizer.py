@@ -90,15 +90,44 @@ def test_is_file_locked_nonexistent(tmp_path: Path):
     assert is_file_locked(missing_file) is True
 
 
-def test_wait_for_file_stability_stat_os_error(tmp_path: Path):
-    test_file = tmp_path / "stat_err.pdf"
+def test_wait_for_file_stability_fails_fast_only_when_gone(tmp_path: Path):
+    test_file = tmp_path / "gone.pdf"
     test_file.write_text("data", encoding="utf-8")
 
-    with patch.object(Path, "stat", side_effect=OSError("Read error")):
+    with patch.object(Path, "stat", side_effect=FileNotFoundError("gone")):
         assert (
-            wait_for_file_stability(test_file, timeout=0.05, poll_interval=0.01)
-            is False
+            wait_for_file_stability(test_file, timeout=0.5, poll_interval=0.01) is False
         )
+
+
+def test_wait_for_file_stability_retries_transient_stat_errors(tmp_path: Path):
+    """A transient PermissionError (AV/SMB) must not be treated as a vanished file."""
+    test_file = tmp_path / "locked.pdf"
+    test_file.write_text("data", encoding="utf-8")
+
+    import os
+
+    calls = 0
+    real_stat = os.stat
+
+    def flaky_stat(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise PermissionError("AV lock")
+        return real_stat(self)
+
+    with (
+        patch.object(Path, "stat", flaky_stat),
+        patch("scansort.pipeline.stabilizer.is_file_locked", return_value=False),
+    ):
+        assert (
+            wait_for_file_stability(
+                test_file, timeout=1.0, poll_interval=0.01, stable_count=2
+            )
+            is True
+        )
+    assert calls >= 2
 
 
 def test_is_file_locked_readonly_file(tmp_path: Path):

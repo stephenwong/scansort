@@ -65,7 +65,7 @@ def _wait_windows_process(pid: int, timeout: float) -> bool:
     process_query_limited = 0x1000
     synchronize = 0x00100000
     wait_object_0 = 0
-    error_access_denied = 5
+    error_invalid_parameter = 87
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
@@ -86,11 +86,11 @@ def _wait_windows_process(pid: int, timeout: float) -> bool:
                 kernel32.CloseHandle(handle)
 
         err = ctypes.get_last_error() if hasattr(ctypes, "get_last_error") else 0
-        if err != error_access_denied:
-            # ERROR_INVALID_PARAMETER (87) means the PID does not exist; any other
-            # non-access-denied error also indicates the process is gone.
+        if err == error_invalid_parameter:
+            # ERROR_INVALID_PARAMETER (87): the PID does not exist.
             return True
-
+        # Any other error (including ACCESS_DENIED): keep polling until the
+        # deadline; a transient failure is not proof the process exited.
         if time.monotonic() >= deadline:
             return False
         time.sleep(WAIT_POLL_INTERVAL)
@@ -115,6 +115,8 @@ def _popen_detached(argv: list[str], cwd: Path | str | None = None) -> None:
     kwargs: dict = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NO_WINDOW
+    else:
+        kwargs["start_new_session"] = True
     if cwd is not None:
         kwargs["cwd"] = str(cwd)
     try:
@@ -255,9 +257,14 @@ def perform_self_update(
             version,
         )
         if relaunch:
-            launch_installed_app(install_dir)
+            try:
+                launch_installed_app(install_dir)
+            except UpdateError as e:
+                logger.warning(
+                    "Update installed successfully, but relaunch failed: %s", e
+                )
         return 0
-    except UpdateError as e:
+    except (UpdateError, OSError) as e:
         logger.error("Update installation failed: %s", e)
         return 1
 

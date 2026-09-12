@@ -768,6 +768,30 @@ def test_route_failed_to_review_missing_file(tmp_path: Path):
     assert not (docs_root / "_Review_Needed" / "never_existed.pdf").exists()
 
 
+def test_route_failed_to_review_holds_operations_lock(tmp_path: Path):
+    """Resolve-then-move into the shared review tree must hold the cross-process lock."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+    scan = inbox / "scan001.jpg"
+    scan.write_bytes(b"image")
+
+    with (
+        patch("scansort.pipeline.coordinator.interprocess_file_lock") as fake_lock,
+        patch("scansort.pipeline.coordinator.notify_filing_failed"),
+    ):
+        fake_lock.return_value.__enter__ = MagicMock(return_value=None)
+        fake_lock.return_value.__exit__ = MagicMock(return_value=False)
+        pipeline._route_failed_to_review(scan, reason="boom")
+
+    fake_lock.assert_called_once_with(pipeline.operations_lock)
+    assert (docs_root / "_Review_Needed" / "scan001.jpg").exists()
+    assert not scan.exists()
+
+
 def test_pipeline_records_resolved_destination_folder_when_redirected(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
@@ -941,3 +965,47 @@ def test_pipeline_preserve_source_failure(tmp_path: Path):
     # Failed copy should be in _Review_Needed
     review_dir = docs_root / "_Review_Needed"
     assert (review_dir / "broken.jpg").exists()
+
+
+def test_duplicate_race_detected_inside_dispatch_lock(tmp_path: Path):
+    """A duplicate recorded during classification must be caught at dispatch time."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260901",
+        description="Race_Doc",
+        target_folder="Utilities",
+        confidence=0.95,
+    )
+    pipeline = ScanSortPipeline(
+        config=cfg, app_dir=tmp_path / "appdata", classifier=mock_classifier
+    )
+
+    scan = inbox / "scan001.jpg"
+    _create_sample_scan(scan)
+
+    winner_record = {"new_filename": "260901_Winner.pdf", "status": "SUCCESS"}
+    # First call (pre-classification) sees nothing; the re-check under the
+    # dispatch lock observes a record another process just wrote.
+    with patch(
+        "scansort.pipeline.coordinator.check_duplicate",
+        side_effect=[None, winner_record],
+    ):
+        dest = pipeline.process_file(scan)
+
+    assert dest is not None
+    assert "Duplicates" in str(dest)
+    assert dest.exists()
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "appdata" / "history.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert records[-1]["status"] == "DUPLICATE"

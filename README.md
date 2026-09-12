@@ -187,6 +187,7 @@ View current settings: `uv run scansort config --show`
 | `scansort review --cli` | Review unfiled scans in the terminal |
 | `scansort review --limit 10` | Limit review session to first 10 documents |
 | `scansort undo` | Reverse the last filing (repeatable) |
+| `scansort --dry-run undo` | Preview the reversal without moving files |
 | `scansort rescan` | Refresh & display folder taxonomy |
 | `scansort history` | View recent filing history |
 | `scansort history -q "electricity"` | Search filing history |
@@ -196,6 +197,8 @@ View current settings: `uv run scansort config --show`
 | `scansort check-update` | Check for new versions |
 | `scansort help <command>` | Help for any subcommand |
 | `scansort --verbose watch` | Enable debug-level logging |
+
+> **Notes:** `scansort review --limit N` applies to the `--cli` session; the GUI always shows the full queue. `scansort history` and `scansort stats` exit non-zero when the audit log cannot be read. `scansort config --set` must be used alone (it is rejected when combined with other mutation flags), and unrecognised `config.json` keys are logged and ignored.
 
 > **Tip:** The packaged `ScanSort.exe` works the same way — just replace `scansort` with `ScanSort.exe` in the commands above. When launched from a terminal, CLI output appears there; when launched by double-click or auto-start, it runs silently in the tray.
 

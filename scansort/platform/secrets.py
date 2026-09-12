@@ -53,8 +53,11 @@ def set_api_key(key: str) -> None:
     try:
         keyring.set_password(SERVICE_NAME, KEY_NAME, cleaned_key)
     except (keyring.errors.KeyringError, OSError) as e:
-        logger.error("Failed to store API key in OS credential vault: %s", e)
-        raise OSError(f"Failed to store API key in OS credential vault: {e}") from e
+        safe_error = redact_secrets_from_text(str(e), cleaned_key)
+        logger.error("Failed to store API key in OS credential vault: %s", safe_error)
+        raise OSError(
+            f"Failed to store API key in OS credential vault: {safe_error}"
+        ) from e
 
 
 def delete_api_key() -> None:

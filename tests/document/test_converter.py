@@ -183,11 +183,28 @@ def test_extract_dpi_edge_cases():
     assert _extract_dpi(img) == 300.0
 
 
-def test_convert_to_pdf_unlinks_existing_target_on_failure(tmp_path: Path):
+def test_convert_to_pdf_failure_preserves_pre_existing_target(tmp_path: Path):
     img_path = tmp_path / "valid.jpg"
     _create_sample_image(img_path, img_format="JPEG")
-    target_pdf = tmp_path / "failed.pdf"
-    target_pdf.write_bytes(b"existing partial")
+    target_pdf = tmp_path / "precious.pdf"
+    target_pdf.write_bytes(b"existing valid pdf")
+
+    with (
+        patch("img2pdf.convert", side_effect=ValueError("Encoding error")),
+        patch.object(Image.Image, "save", side_effect=RuntimeError("Pillow failed")),
+        pytest.raises(RuntimeError),
+    ):
+        convert_to_pdf(img_path, output_path=target_pdf)
+
+    # atomic_write only ever replaces the target on success, so a target that
+    # exists after a failure must be the caller's pre-existing file.
+    assert target_pdf.read_bytes() == b"existing valid pdf"
+
+
+def test_convert_to_pdf_failure_leaves_no_partial_target(tmp_path: Path):
+    img_path = tmp_path / "valid.jpg"
+    _create_sample_image(img_path, img_format="JPEG")
+    target_pdf = tmp_path / "fresh.pdf"
 
     with (
         patch("img2pdf.convert", side_effect=ValueError("Encoding error")),
@@ -278,3 +295,62 @@ def test_mirror_orientation_jpeg_converts(tmp_path: Path):
     )
     right_px = extracted.getpixel((115, 30))
     assert right_px[0] > 200 and right_px[2] < 60, f"expected right-red, got {right_px}"
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16B", "I;16L", "I;16N"])
+def test_normalize_high_bit_gray_modes_no_crash_no_saturation(mode):
+    """All high-bit gray modes must normalize without ValueError or white saturation."""
+    from scansort.document.converter import _normalize_frame_to_rgb
+
+    frame = Image.new(mode, (16, 16), 6000)
+    rgb = _normalize_frame_to_rgb(frame)
+
+    assert rgb.mode == "RGB"
+    # A 6000/65535 sample must map dark, not saturate to white.
+    extrema = rgb.getextrema()
+    assert all(channel_max < 128 for _, channel_max in extrema)
+
+
+def test_convert_16bit_tiff_end_to_end(tmp_path: Path):
+    """A 16-bit TIFF scan must convert to PDF without ValueError."""
+    img_path = tmp_path / "scan16.tiff"
+    Image.new("I;16", (16, 16), 6000).save(img_path, format="TIFF")
+
+    out = convert_to_pdf(img_path)
+
+    assert out.exists() and out.stat().st_size > 0
+    assert out.read_bytes()[:5] == b"%PDF-"
+
+
+def test_convert_dpi_less_jpeg_matches_png_page_size(tmp_path: Path):
+    """A DPI-less JPEG must get the same physical page size as a DPI-less PNG."""
+    jpeg_path = tmp_path / "plain.jpg"
+    png_path = tmp_path / "plain.png"
+    Image.new("RGB", (300, 300)).save(jpeg_path, format="JPEG")  # no dpi info
+    Image.new("RGB", (300, 300)).save(png_path, format="PNG")
+
+    jpeg_out = convert_to_pdf(jpeg_path)
+    png_out = convert_to_pdf(png_path)
+
+    from pypdf import PdfReader
+
+    jpeg_box = PdfReader(str(jpeg_out)).pages[0].mediabox
+    png_box = PdfReader(str(png_out)).pages[0].mediabox
+    assert abs(float(jpeg_box.width) - float(png_box.width)) < 2.0
+    assert abs(float(jpeg_box.height) - float(png_box.height)) < 2.0
+
+
+def test_convert_pdf_passthrough_atomic_on_failure(tmp_path: Path):
+    """A failing passthrough copy must not truncate an existing target."""
+    src_pdf = tmp_path / "source.pdf"
+    src_pdf.write_bytes(b"%PDF-1.4 original bytes")
+    target = tmp_path / "existing.pdf"
+    target.write_bytes(b"%PDF-1.4 previous content")
+
+    with (
+        patch("shutil.copyfileobj", side_effect=OSError("disk full")),
+        pytest.raises(OSError),
+    ):
+        convert_to_pdf(src_pdf, output_path=target)
+
+    assert target.read_bytes() == b"%PDF-1.4 previous content"

@@ -12,20 +12,23 @@ from scansort.core.constants import HISTORY_JSONL_NAME
 
 def _load_history_records(history_path: Path) -> list[dict[str, Any]]:
     """Load and parse JSONL records, tolerating empty files or malformed lines."""
-    if not history_path.exists() or history_path.stat().st_size == 0:
-        return []
-
-    records = []
+    records: list[dict[str, Any]] = []
     try:
+        if not history_path.exists() or history_path.stat().st_size == 0:
+            return []
         with open(history_path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 clean = line.strip()
                 if not clean:
                     continue
                 try:
-                    records.append(json.loads(clean))
+                    parsed = json.loads(clean)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(parsed, dict):
+                    records.append(parsed)
+    except FileNotFoundError:
+        return []
     except OSError as e:
         print(f"Error reading history file: {e}", file=sys.stderr)
         return []

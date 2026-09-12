@@ -6,6 +6,7 @@ on the same drop folder: both would sweep and file the same scans. Acquisition
 is non-blocking so the loser exits immediately instead of waiting.
 """
 
+import errno
 import logging
 import os
 import sys
@@ -39,7 +40,11 @@ def instance_guard(lock_path: Path) -> Iterator[bool]:
                 import fcntl
 
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                # A genuine lock-subsystem failure must not masquerade as
+                # "another instance is running" (which silently disables watch).
+                raise
             logger.debug("Another ScanSort instance already holds %s", lock_path)
             yield False
             return

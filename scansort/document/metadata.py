@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from pypdf import PasswordType, PdfReader, PdfWriter
+from pypdf.errors import PyPdfError
 from pypdf.xmp import XmpInformation
 
 from scansort.core.constants import DEFAULT_AUTHOR, DEFAULT_CREATOR
@@ -22,15 +23,18 @@ def _ensure_pdf_unlocked(reader: PdfReader, filename: str) -> None:
 
 
 def _build_xmp_packet(
-    xmp_bytes: bytes | None,
+    existing_xmp: XmpInformation | bytes | None,
     title: str | None,
     subject: str | None,
     keywords: list[str] | str | None,
-) -> XmpInformation:
-    """Preserve an existing XMP packet or generate a minimal one from DocInfo fields."""
-    if xmp_bytes is not None:
-        return xmp_bytes
-    xmp = XmpInformation.create()
+) -> XmpInformation | bytes:
+    """Merge metadata into an existing XMP packet, or generate a minimal one."""
+    if isinstance(existing_xmp, XmpInformation):
+        xmp = existing_xmp
+    elif existing_xmp is not None:
+        return existing_xmp
+    else:
+        xmp = XmpInformation.create()
     if title and title.strip():
         xmp.dc_title = {"x-default": title.strip()}
     if subject and subject.strip():
@@ -112,12 +116,11 @@ def process_pdf_metadata_and_rotation(
 
     _ensure_pdf_unlocked(reader, pdf_path.name)
 
-    existing_xmp: bytes | None = None
-    if reader.xmp_metadata is not None:
-        try:
-            existing_xmp = reader.xmp_metadata.stream.get_data()
-        except AttributeError, OSError:
-            existing_xmp = None
+    existing_xmp: XmpInformation | bytes | None = None
+    try:
+        existing_xmp = reader.xmp_metadata
+    except AttributeError, OSError, PyPdfError:
+        existing_xmp = None
 
     writer = PdfWriter()
 

@@ -256,12 +256,26 @@ class ScanSortPipeline:
             keywords=keywords,
         )
 
-        final_dest = dispatch_file(
-            staging_pdf,
-            self.config.documents_root,
-            classification,
-            lock_path=self.operations_lock,
-        )
+        # Re-check for a duplicate inside the cross-process lock immediately
+        # before dispatch: while this process was classifying (a Gemini call),
+        # another process may have filed identical content, so dedup must be
+        # atomic with the move.
+        with interprocess_file_lock(self.operations_lock):
+            race_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
+            final_dest = (
+                None
+                if race_record is not None
+                else dispatch_file(
+                    staging_pdf,
+                    self.config.documents_root,
+                    classification,
+                    lock_path=None,
+                )
+            )
+        if race_record is not None:
+            return self._route_duplicate(
+                file_path, file_hash, race_record, preserve_source=preserve_source
+            )
 
         # Remove original file from drop folder if not preserving source
         if (
@@ -426,12 +440,13 @@ class ScanSortPipeline:
             review_dir = resolve_destination_dir(
                 self.config.documents_root, self.config.fallback_folder
             )
-            review_dir.mkdir(parents=True, exist_ok=True)
-            review_dest = resolve_collision(review_dir, file_path.name)
-            if preserve_source:
-                shutil.copy2(str(file_path), str(review_dest))
-            else:
-                shutil.move(str(file_path), str(review_dest))
+            with interprocess_file_lock(self.operations_lock):
+                review_dir.mkdir(parents=True, exist_ok=True)
+                review_dest = resolve_collision(review_dir, file_path.name)
+                if preserve_source:
+                    shutil.copy2(str(file_path), str(review_dest))
+                else:
+                    shutil.move(str(file_path), str(review_dest))
             resolved_docs = self.config.documents_root.resolve()
             folder_str = str(review_dir.relative_to(resolved_docs)).replace("\\", "/")
             self.audit_logger.log_scan(

@@ -28,16 +28,19 @@ def attach_parent_console() -> None:
     to attach to: the call fails silently and output stays discarded, exactly
     as before, so the background tray watcher never flashes a terminal.
     """
-    if (
-        sys.platform != "win32"
-        or not getattr(sys, "frozen", False)
-        or (sys.stdout is not None and sys.stdout.isatty())
-    ):
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
         return
     try:
+        # Probe inside the guard: a closed/invalid stdout raises here and must
+        # be swallowed like every other attachment failure.
+        if sys.stdout is not None and sys.stdout.isatty():
+            return
+
         import msvcrt
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetStdHandle.restype = ctypes.c_void_p
+        kernel32.GetStdHandle.argtypes = [ctypes.c_uint]
         if not kernel32.AttachConsole(ATTACH_PARENT_PROCESS):
             return
         output_cp = kernel32.GetConsoleOutputCP()
@@ -47,9 +50,13 @@ def attach_parent_console() -> None:
             ("stderr", STD_ERROR_HANDLE),
         ):
             handle = kernel32.GetStdHandle(std_handle)
-            if not handle or handle == -1:
+            if not handle or handle == ctypes.c_void_p(-1).value:
                 continue
             fd = msvcrt.open_osfhandle(handle, os.O_WRONLY)
-            setattr(sys, name, os.fdopen(fd, "w", encoding=encoding, buffering=1))
+            try:
+                setattr(sys, name, os.fdopen(fd, "w", encoding=encoding, buffering=1))
+            except OSError, ValueError:
+                os.close(fd)
+                continue
     except AttributeError, ImportError, LookupError, OSError, ValueError:
         return

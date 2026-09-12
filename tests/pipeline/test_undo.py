@@ -51,6 +51,14 @@ def test_undo_last_move_success(tmp_path: Path):
     assert json.loads(last_line)["status"] == "UNDONE"
 
 
+def test_undo_last_move_survives_corrupt_history_bytes(tmp_path: Path):
+    """Invalid UTF-8 in history.jsonl must report no reversible record, not crash."""
+    jsonl_path = tmp_path / "history.jsonl"
+    jsonl_path.write_bytes(b'{"status": "SUCCESS"}\n\xff\n')
+
+    assert undo_last_move(jsonl_path) is None
+
+
 @pytest.mark.parametrize("with_mirror", [False, True])
 def test_undo_updates_csv_audit_logs(tmp_path: Path, with_mirror: bool):
     inbox = tmp_path / "Inbox"

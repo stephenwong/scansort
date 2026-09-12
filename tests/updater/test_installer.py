@@ -1,5 +1,6 @@
 """Unit tests for the installation swap, retry loop, and stale artifact cleanup."""
 
+import errno
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -103,7 +104,7 @@ def test_replace_install_dir_retries_and_recovers_from_transient_lock(
         if self == install_dir and attempts[0] < 2:
             attempts[0] += 1
             raise OSError(
-                32,
+                errno.EACCES,
                 "The process cannot access the file because it is being used by another process",
             )
         return original_rename(self, target)
@@ -216,3 +217,19 @@ def test_replace_install_dir_reports_when_install_cannot_be_moved_aside(
         replace_install_dir(install_dir, staged_dir)
     assert (install_dir / "ScanSort.exe").read_bytes() == b"old"
     assert staged_dir.exists()
+
+
+def test_rename_dir_with_retry_raises_permanent_error_immediately(tmp_path: Path):
+    import errno
+
+    from scansort.updater.installer import _rename_dir_with_retry
+
+    src = tmp_path / "src"
+    src.mkdir()
+    dst = tmp_path / "dst"
+
+    with (
+        patch("pathlib.Path.rename", side_effect=OSError(errno.EXDEV, "cross-device")),
+        pytest.raises(OSError),
+    ):
+        _rename_dir_with_retry(src, dst, timeout=5.0, interval=0.5)

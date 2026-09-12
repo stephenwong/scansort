@@ -46,3 +46,12 @@ def test_get_tray_icon_custom_file_missing(tmp_path: Path):
     fallback = get_tray_icon(custom_icon_path=missing_ico)
     assert isinstance(fallback, Image.Image)
     assert fallback.size == (64, 64)
+
+
+def test_badge_within_canvas_bounds():
+    from scansort.ui.icon import get_tray_icon
+
+    for paused in (True, False):
+        for size in ((64, 64), (32, 32), (16, 16)):
+            img = get_tray_icon(paused=paused, size=size)
+            assert img.size == size

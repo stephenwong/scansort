@@ -134,3 +134,19 @@ def test_redact_secrets_fallback_to_active_vault_key(monkeypatch):
     redacted = redact_secrets_from_text(raw, key=None)
     assert active_key not in redacted
     assert "[REDACTED_KEY]" in redacted
+
+
+def test_set_api_key_redacts_credential_from_error():
+    import keyring.errors
+
+    secret = "AIzaSySuperSecretKey1234567890abcdef"
+    with (
+        patch(
+            "keyring.set_password",
+            side_effect=keyring.errors.KeyringError(f"rejected {secret}"),
+        ),
+        pytest.raises(OSError) as excinfo,
+    ):
+        set_api_key(secret)
+    assert secret not in str(excinfo.value)
+    assert "REDACTED" in str(excinfo.value)

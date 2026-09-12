@@ -4,6 +4,7 @@ Handles atomic replacement of the installation directory with retry on
 transient Windows sharing violations and collision-free backup restoration.
 """
 
+import errno
 import logging
 import shutil
 import sys
@@ -54,6 +55,14 @@ def cleanup_stale_updates(install_dir: Path, keep: Path | None = None) -> None:
                 )
 
 
+def _is_transient_rename_error(error: OSError) -> bool:
+    """Return True for sharing violations that AV/handle teardown clears."""
+    winerror = getattr(error, "winerror", None)
+    if winerror is not None:
+        return winerror in (5, 32)
+    return error.errno in (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ENOTEMPTY)
+
+
 def _rename_dir_with_retry(
     source: Path,
     target: Path,
@@ -76,6 +85,8 @@ def _rename_dir_with_retry(
             source.rename(target)
             return
         except OSError as e:
+            if not _is_transient_rename_error(e):
+                raise
             last_error = e
             if time.monotonic() >= deadline:
                 break

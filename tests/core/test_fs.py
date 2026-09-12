@@ -74,6 +74,12 @@ def test_relative_folder_is_safe_rejects_absolutes_and_traversal():
     assert not relative_folder_is_safe("   ")
 
 
+def test_relative_folder_is_safe_rejects_nul_bytes():
+    """NUL passes mkdir validation as 'embedded null character' — reject at the gate."""
+    assert not relative_folder_is_safe("a\x00b")
+    assert not relative_folder_is_safe("Finances/\x00Escaped")
+
+
 def test_normalize_relative_folder():
     assert normalize_relative_folder("Finances/Banking") == "Finances/Banking"
     assert normalize_relative_folder("Finances\\Banking\\ANZ") == "Finances/Banking/ANZ"

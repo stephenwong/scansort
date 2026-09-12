@@ -25,6 +25,14 @@ def test_load_state_handles_missing_corrupt_and_non_dict(tmp_path: Path):
     assert load_state(state_path) == {}
 
 
+def test_load_state_non_utf8_counts_as_malformed(tmp_path: Path):
+    """Corrupt/UTF-16 state bytes must count as malformed, not crash watch startup."""
+    state_path = tmp_path / "update_state.json"
+    state_path.write_bytes(b"\xff\xfe{\x00")
+    assert load_state(state_path) == {}
+    assert update_is_due(state_path, interval_days=1) is True
+
+
 def test_record_update_check_and_due_calculation(tmp_path: Path):
     state_path = tmp_path / "update_state.json"
     assert update_is_due(state_path, interval_days=1) is True

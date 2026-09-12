@@ -38,7 +38,7 @@ def _find_last_reversible_record(jsonl_path: Path) -> dict[str, object] | None:
 
     try:
         lines = jsonl_path.read_text(encoding="utf-8").splitlines()
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
         logger.warning("Error reading history file at %s: %s", jsonl_path, e)
         return None
 
@@ -182,5 +182,5 @@ def run_undo(cfg=None, undo_fn=None, app_dir=None) -> tuple[bool, str, Path | No
                 restored,
             )
         return False, "No reversible document filing action found in history.", None
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
         return False, f"Error reversing last move: {e}", None
