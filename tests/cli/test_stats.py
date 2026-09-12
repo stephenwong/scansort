@@ -98,6 +98,22 @@ def test_stats_explicit_null_values(mock_app_dir: Path, capsys):
     assert "NONE" not in data["status_counts"]
 
 
+def test_stats_counts_backfill_and_reviewed_as_successes():
+    """Maintenance/review outcomes must not deflate the success rate."""
+    from scansort.cli.stats import _calculate_metrics
+
+    metrics = _calculate_metrics(
+        [
+            {"status": "SUCCESS"},
+            {"status": "OCR_BACKFILLED"},
+            {"status": "REVIEWED"},
+            {"status": "FAILED"},
+        ]
+    )
+    assert metrics["total_scans"] == 4
+    assert metrics["success_rate_pct"] == 75.0
+
+
 def test_stats_excludes_review_folder_case_insensitively():
     """F26: review/fallback folders of any casing must not appear as destinations."""
     from scansort.cli.stats import _calculate_metrics

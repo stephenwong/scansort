@@ -41,6 +41,7 @@ scansort/
 │   │   ├── help.py             # Contextual subcommand and program help handler
 │   │   ├── history.py          # Filing history and audit trail inspection handler
 │   │   ├── logs.py             # Log viewing, filtering, tailing, and maintenance handler
+│   │   ├── ocr.py              # OCR backfill handler (scansort ocr-backfill)
 │   │   ├── parser.py           # Unified argument parser builder
 │   │   ├── rescan.py           # Taxonomy discovery and display handler
 │   │   ├── review.py           # Interactive review session handler (--gui, --cli, --limit)
@@ -58,7 +59,8 @@ scansort/
 │   ├── document/               # Document conversion, normalization, and PDF manipulation
 │   │   ├── __init__.py         # Package interface re-exports
 │   │   ├── converter.py        # Lossless JPEG/PNG/TIFF to PDF stream wrapping (img2pdf / Pillow)
-│   │   └── metadata.py         # XMP metadata embedding & pypdf auto-rotation
+│   │   ├── metadata.py         # XMP metadata embedding & pypdf auto-rotation
+│   │   └── ocr.py              # Tesseract + pypdf invisible text-layer engine & bundled-binary resolver
 │   ├── logging/                # Modular diagnostics, auditing, and cost accounting
 │   │   ├── __init__.py         # Package interface re-exports
 │   │   ├── audit.py            # Dual crash-safe JSONL and CSV logging engine
@@ -70,6 +72,7 @@ scansort/
 │   │   ├── coordinator.py      # End-to-end ScanSortPipeline coordinator
 │   │   ├── dispatcher.py       # Destination safety resolution, collision handling, and atomic filing
 │   │   ├── hasher.py           # Streaming SHA-256 duplicate scan interception
+│   │   ├── ocr_backfill.py     # In-place OCR backfill orchestration, audit, & review routing
 │   │   ├── review.py           # Review queue discovery, atomic filing, & dismissal under lock
 │   │   ├── stabilizer.py       # Exclusive file-lock polling and size growth tracker
 │   │   ├── undo.py             # Filing move reversal, drop folder restoration, & audit update
@@ -106,9 +109,9 @@ scansort/
 │   ├── classification/         # Tests for client, hints, models, and taxonomy
 │   ├── cli/                    # Tests for modular CLI subcommands (including file) and parser
 │   ├── core/                   # Tests for config, constants, and fs utilities
-│   ├── document/               # Tests for converter and metadata engines
+│   ├── document/               # Tests for converter, metadata, and OCR engines
 │   ├── logging/                # Tests for audit, setup, cost, and gemini_logger
-│   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, review, stabilizer, undo, watcher, worker
+│   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, review, ocr_backfill, stabilizer, undo, watcher, worker
 │   ├── platform/               # Tests for autorun, console, context_menu, instance_guard, notifications, secrets, toasts
 │   ├── ui/                     # Tests for tray application, procedural icon, review/settings/drop-zone dialogs, and singleton window
 │   ├── updater/                # Tests for downloader, feed, installer, process, and state
@@ -183,6 +186,7 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - Staging failures in `process_file` must route to `_Review_Needed/` with a `FAILED` record and notification, like every other failure mode — never a silent `return None`.
 - Resolve-then-move critical sections (`dispatch_file`, duplicate routing, `_route_failed_to_review`, `file_reviewed_item`, `undo_last_move`) must hold the cross-process advisory lock (`app_dir/operations.lock`, `scansort.core.fs.interprocess_file_lock`); on a move failure, clean up any partial destination before re-raising.
 - Audit CSV headers must be created without truncation (`"x"`/append-when-empty, never `"w"`) while holding an interprocess lock (two writers observing a zero-byte file must not emit duplicate headers), cells are neutralized against spreadsheet-formula prefixes and un-encodable surrogates, and CSV/JSONL writes guard `(OSError, UnicodeError, TypeError, ValueError)` (JSON is serialized with `default=str` so a stray non-JSON value can never abort both sinks).
+- **CSV schema migration:** when an existing `history.csv`/mirror CSV carries a header that is a strict prefix of the canonical `CSV_HEADERS` (i.e. new columns were appended in a later release), `AuditLogger._migrate_csv_header` rewrites it under the interprocess lock via `atomic_write`, padding every data row with empty cells so positional readers (e.g. `pandas`) stay aligned. Unrecognized/foreign header shapes are never rewritten, and any read/write failure degrades to a logged error rather than aborting the audit.
 
 ### J. Strict Test-Driven Development (TDD) & Zero "Test Slop"
 - **Always write tests first:** For any new feature, bug fix, or behavioral change, write failing automated tests before writing production code.
@@ -274,6 +278,14 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - **Desktop Quick-Filer & Drop Zone:**
   - `DropZoneWindow` (`scansort.ui.drop_zone`) provides a lightweight, stay-on-top window for dragging files, pasting file paths from the clipboard, or browsing via file dialog, with a toggle for source preservation.
   - The system tray menu exposes both "File Document(s)..." (direct file dialog picker) and "Drop Zone..." for rapid ad-hoc digital document filing.
+
+### U. Searchable OCR Text Layers & Archive Backfill
+- **Engine (`scansort.document.ocr`):** OCR uses Tesseract via `pytesseract` + `pypdf`; there is **no** `ocrmypdf` dependency. Each page's largest decodable embedded image is OCR'd with `pytesseract.image_to_data`, and an invisible text layer (render mode `3 Tr`) is appended to the page content stream with a `Helvetica` Type1 font resource (`/ScanSortOcr`). `pytesseract` is mocked in tests — never invoke the real binary in the suite.
+- **Bundled binary resolution:** `resolve_tesseract_cmd()` prefers `<exe_dir>/tesseract/tesseract(.exe)` in a frozen build, then falls back to `shutil.which("tesseract")`. The release workflow installs Tesseract via Chocolatey (`TESSERACT_DIR` env) and `scansort.spec` bundles `tesseract.exe`, its DLLs, and `eng`/`osd` traineddata under `tesseract/` (UPX-excluded); `has_ocr_support()` gates all OCR calls.
+- **Metadata preservation (invariants E/F):** `PdfWriter.append` does **not** carry DocInfo or XMP — `ocr_pdf_inplace` must explicitly re-attach `reader.metadata` and `reader.xmp_metadata` after cloning. PDFs must be read into `io.BytesIO` before parsing and written via `atomic_write`. `needs_ocr` is **per-page** (`any` page below `MIN_OCR_CHARS_PER_PAGE`), so a mixed native+scanned PDF is never skipped; an already-searchable PDF is returned **byte-stable** with no rewrite, and pages are skipped individually. A text-less page with no extractable image (e.g. a genuinely blank page) is logged and skipped rather than aborting the document; only when no page receives a text layer is the file left byte-stable with `confidence=None`.
+- **Forward path ordering:** in `ScanSortPipeline.process_file`, when `ocr_enabled` and Tesseract is available, OCR runs on the isolated staging PDF **before** Gemini classification and `process_pdf_metadata_and_rotation()` (metadata must run last or OCR output clobbers the XMP packet). An `OcrError` routes the original to `_Review_Needed/` with a `FAILED` record (invariant I). When `ocr_enabled` is set but Tesseract is missing, log a warning and file anyway. Successful runs record `ocr_engine` and `ocr_confidence` in the audit entry.
+- **Backfill (`scansort.pipeline.ocr_backfill` → `scansort ocr-backfill`):** Walks explicit PDF targets or the documents root (skipping the resolved review folder and any symlink resolving outside it), runs Tesseract on a sibling `.ocr.tmp.pdf` **outside** `operations.lock`, then re-verifies `needs_ocr` under `operations.lock` and atomically `os.replace`s the temp over the original before appending an `OCR_BACKFILLED` audit record carrying `original_sha256`, `sha256`, `ocr_engine`, `ocr_confidence`, and `ocr_language` (duplicate detection stays intact). Holding the lock only across the hash-recheck/replace/audit keeps the watcher's dispatch lock from being blocked for the duration of a long OCR pass. Per-file `OcrError` **and** `OSError` (transient stat/lock, disk-full on `atomic_write`, vanished file) are contained: the file is moved to `_Review_Needed/` with a `FAILED` record and notification, and the walk continues — never aborting the run. A file where Tesseract finds no words leaves `ocr_pdf_inplace` returning `confidence=None`; the file is left byte-stable with a "No searchable text found" message and **no** `OCR_BACKFILLED` audit (never claim a layer that was not embedded). `destination_folder` is the documents-root-relative parent with forward slashes, or `""` for external targets and PDFs sitting directly in the root. `--dry-run` lists candidates without mutation; `--limit N` caps processing; the same handler serves the per-file right-click invocation.
+- **PDF right-click verb:** `context_menu.OCR_VERB_NAME = "ScanSortOCR"` ("Make searchable with ScanSort") registers on `.pdf` only, invoking `"<exe>" ocr-backfill "%1"`, with a parallel Linux Nautilus script, a `--ocr-menu` CLI toggle, and Settings UI checkbox. Config additions are `ocr_enabled` (default `False`) and `ocr_language` (default `eng`).
 
 ---
 

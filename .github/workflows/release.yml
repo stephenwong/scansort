@@ -30,11 +30,28 @@ jobs:
           uv sync --all-extras
           uv add --dev pyinstaller
 
+      - name: Install Tesseract OCR engine
+        shell: pwsh
+        run: |
+          choco install tesseract -y --no-progress
+          $exe = Get-ChildItem "C:\Program Files\Tesseract-OCR\tesseract.exe", "C:\tools\tesseract\tesseract.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw "tesseract.exe not found after install" }
+          $dir = $exe.DirectoryName
+          "TESSERACT_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $exe --version
+
       - name: Run test suite
         run: uv run pytest -v
 
       - name: Build executable via PyInstaller
         run: uv run pyinstaller scansort.spec
+
+      - name: Verify bundled OCR engine
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist\ScanSort\tesseract\tesseract.exe)) { throw "bundled tesseract missing" }
+          if (-not (Test-Path dist\ScanSort\tesseract\tessdata\eng.traineddata)) { throw "bundled eng.traineddata missing" }
+          dist\ScanSort\tesseract\tesseract.exe --version
 
       - name: Test compiled binary
         shell: pwsh

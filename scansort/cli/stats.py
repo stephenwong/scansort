@@ -8,7 +8,14 @@ from typing import Any
 from scansort.cli.args import CliArgs
 from scansort.cli.history import load_history_records, safe_str
 from scansort.core.config import get_default_app_dir
-from scansort.core.constants import HISTORY_JSONL_NAME, REVIEW_NEEDED_DIR
+from scansort.core.constants import (
+    HISTORY_JSONL_NAME,
+    REVIEW_NEEDED_DIR,
+    STATUS_COLLISION_RENAMED,
+    STATUS_OCR_BACKFILLED,
+    STATUS_REVIEWED,
+    STATUS_SUCCESS,
+)
 from scansort.logging.cost import calculate_gemini_cost
 
 
@@ -53,8 +60,17 @@ def _calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             model = str(r.get("gemini_model") or "")
             total_cost_usd += calculate_gemini_cost(model, p_tok, c_tok)
 
-    success_count = status_counts.get("SUCCESS", 0) + status_counts.get(
-        "COLLISION_RENAMED", 0
+    # Successful outcomes include direct filings, collision-renamed filings,
+    # manual reviews, and OCR backfills; counting only the first two deflated
+    # the rate whenever a maintenance/backfill run wrote audit records.
+    success_count = sum(
+        status_counts.get(status, 0)
+        for status in (
+            STATUS_SUCCESS,
+            STATUS_COLLISION_RENAMED,
+            STATUS_REVIEWED,
+            STATUS_OCR_BACKFILLED,
+        )
     )
     success_rate = (
         round((success_count / total_scans * 100.0), 1) if total_scans > 0 else 0.0

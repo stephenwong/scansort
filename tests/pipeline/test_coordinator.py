@@ -292,6 +292,38 @@ def test_pipeline_uses_entry_config_snapshot_during_hot_reload(tmp_path: Path):
     assert records[-1]["status"] == "SUCCESS"
 
 
+def test_duplicate_route_uses_entry_config_snapshot_during_hot_reload(tmp_path: Path):
+    """F02: the duplicate branch must also honor the entry config snapshot."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_a = tmp_path / "DocsA"
+    docs_a.mkdir()
+    docs_b = tmp_path / "DocsB"
+    docs_b.mkdir()
+    cfg_a = AppConfig(watch_folder=inbox, documents_root=docs_a)
+    cfg_b = AppConfig(watch_folder=inbox, documents_root=docs_b)
+
+    pipeline = ScanSortPipeline(
+        config=cfg_a, app_dir=tmp_path / "appdata", classifier=_make_classifier()
+    )
+    scan_file = inbox / "dup.pdf"
+    scan_file.write_bytes(b"%PDF-1.4 duplicate")
+
+    def fake_check_duplicate(*_args, **_kwargs):
+        pipeline.update_config(cfg_b)
+        return {"new_filename": "260101_Previous.pdf"}
+
+    with patch(
+        "scansort.pipeline.coordinator.check_duplicate",
+        side_effect=fake_check_duplicate,
+    ):
+        dest = pipeline.process_file(scan_file)
+
+    assert dest is not None
+    assert dest.is_relative_to(docs_a)
+    assert not dest.is_relative_to(docs_b)
+
+
 def test_success_audit_written_inside_operations_lock(tmp_path: Path, monkeypatch):
     """F76: the SUCCESS audit record must be committed while the lock is held."""
     from contextlib import contextmanager
@@ -1199,3 +1231,105 @@ def test_transfer_file_cleanup_failure_does_not_mask_error(tmp_path: Path):
         pytest.raises(OSError, match="disk full"),
     ):
         pipeline._transfer_file(src, dest, preserve_source=False)
+
+
+def _read_history(app_dir: Path) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in (app_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _ocr_test_pipeline(tmp_path: Path, **overrides):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root, **overrides)
+    mock_classifier = _make_classifier()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260901",
+        description="Ocr_Scan",
+        target_folder="Utilities",
+        confidence=0.95,
+    )
+    pipeline = ScanSortPipeline(
+        config=cfg, app_dir=tmp_path / "appdata", classifier=mock_classifier
+    )
+    scan = inbox / "scan001.jpg"
+    _create_sample_scan(scan)
+    return pipeline, scan
+
+
+def test_process_file_ocr_enabled_embeds_layer_and_audits(tmp_path: Path):
+    pipeline, scan = _ocr_test_pipeline(tmp_path, ocr_enabled=True)
+    calls: dict = {}
+
+    def fake_ocr(path, language="eng"):
+        calls["path"] = path
+        calls["language"] = language
+        return path, 91.5
+
+    with (
+        patch("scansort.pipeline.coordinator.has_ocr_support", return_value=True),
+        patch("scansort.pipeline.coordinator.ocr_pdf_inplace", side_effect=fake_ocr),
+    ):
+        dest = pipeline.process_file(scan)
+
+    assert dest is not None and dest.exists()
+    assert calls["path"].parent == pipeline.tmp_dir
+    assert calls["language"] == "eng"
+    record = _read_history(tmp_path / "appdata")[-1]
+    assert record["status"] == "SUCCESS"
+    assert record["ocr_engine"] == "tesseract"
+    assert record["ocr_confidence"] == 91.5
+
+
+def test_process_file_ocr_disabled_skips_ocr(tmp_path: Path):
+    pipeline, scan = _ocr_test_pipeline(tmp_path, ocr_enabled=False)
+    with (
+        patch("scansort.pipeline.coordinator.has_ocr_support", return_value=True),
+        patch("scansort.pipeline.coordinator.ocr_pdf_inplace") as fake_ocr,
+    ):
+        dest = pipeline.process_file(scan)
+
+    assert dest is not None
+    fake_ocr.assert_not_called()
+    record = _read_history(tmp_path / "appdata")[-1]
+    assert "ocr_engine" not in record
+
+
+def test_process_file_ocr_enabled_but_unavailable_still_files(tmp_path: Path):
+    pipeline, scan = _ocr_test_pipeline(tmp_path, ocr_enabled=True)
+    with (
+        patch("scansort.pipeline.coordinator.has_ocr_support", return_value=False),
+        patch("scansort.pipeline.coordinator.ocr_pdf_inplace") as fake_ocr,
+    ):
+        dest = pipeline.process_file(scan)
+
+    assert dest is not None and dest.exists()
+    fake_ocr.assert_not_called()
+    record = _read_history(tmp_path / "appdata")[-1]
+    assert record["status"] == "SUCCESS"
+    assert "ocr_engine" not in record
+
+
+def test_process_file_ocr_failure_routes_to_review(tmp_path: Path):
+    from scansort.document.ocr import OcrError
+
+    pipeline, scan = _ocr_test_pipeline(tmp_path, ocr_enabled=True)
+    with (
+        patch("scansort.pipeline.coordinator.has_ocr_support", return_value=True),
+        patch(
+            "scansort.pipeline.coordinator.ocr_pdf_inplace",
+            side_effect=OcrError("boom"),
+        ),
+    ):
+        dest = pipeline.process_file(scan)
+
+    assert dest is None
+    assert not scan.exists()
+    record = _read_history(tmp_path / "appdata")[-1]
+    assert record["status"] == "FAILED"
+    assert record["summary"] == "Failed processing; routed to review folder."

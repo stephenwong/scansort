@@ -8,8 +8,11 @@ from scansort.platform.autorun import (
 from scansort.platform.console import attach_parent_console
 from scansort.platform.context_menu import (
     disable_context_menu,
+    disable_ocr_menu,
     enable_context_menu,
+    enable_ocr_menu,
     is_context_menu_enabled,
+    is_ocr_menu_enabled,
 )
 from scansort.platform.instance_guard import instance_guard
 from scansort.platform.notifications import (
@@ -36,6 +39,9 @@ __all__ = [
     "disable_context_menu",
     "enable_context_menu",
     "is_context_menu_enabled",
+    "disable_ocr_menu",
+    "enable_ocr_menu",
+    "is_ocr_menu_enabled",
     "attach_parent_console",
     "instance_guard",
     "delete_api_key",

@@ -23,8 +23,11 @@ from scansort.platform.autorun import (
 )
 from scansort.platform.context_menu import (
     disable_context_menu,
+    disable_ocr_menu,
     enable_context_menu,
+    enable_ocr_menu,
     is_context_menu_enabled,
+    is_ocr_menu_enabled,
 )
 from scansort.platform.secrets import (
     get_api_key,
@@ -51,6 +54,8 @@ _MUTATION_FLAGS = (
     "dry_run",
     "autostart",
     "context_menu",
+    "ocr",
+    "ocr_menu",
 )
 
 
@@ -94,7 +99,7 @@ def _handle_get(args: CliArgs, cfg: AppConfig) -> int | None:
     """Handle the ``--get`` query; returns None when it was not requested."""
     if not args.get:
         return None
-    if _has_other_mutations(args):
+    if _has_other_mutations(args) or args.set is not None:
         print(
             "Error: --get cannot be combined with mutation flags.",
             file=sys.stderr,
@@ -254,6 +259,11 @@ def _apply_mutations(
         direct_fields_changed = True
         updated_dict["dry_run"] = args.dry_run == "enable"
 
+    if args.ocr:
+        has_mutation = True
+        direct_fields_changed = True
+        updated_dict["ocr_enabled"] = args.ocr == "enable"
+
     if direct_fields_changed:
         new_cfg = _with_overrides(cfg, **updated_dict)
         if new_cfg is None:
@@ -280,6 +290,8 @@ def _apply_mutations(
             print(f"Update check interval: {cfg.update_check_interval_days} day(s)")
         if args.dry_run:
             print(f"Dry run mode: {cfg.dry_run}")
+        if args.ocr:
+            print(f"OCR text layer: {cfg.ocr_enabled}")
 
     if args.autostart:
         has_mutation = True
@@ -313,6 +325,21 @@ def _apply_mutations(
             return cfg, has_mutation, 1
         print(f"Windows Explorer context menu: {status_str}")
 
+    if args.ocr_menu:
+        has_mutation = True
+        enable = args.ocr_menu == "enable"
+        ocr_action_fn = enable_ocr_menu if enable else disable_ocr_menu
+        ocr_action_name = "enable" if enable else "disable"
+        ocr_status_str = "ENABLED" if enable else "DISABLED"
+
+        if not ocr_action_fn():
+            print(
+                f"Error: Failed to {ocr_action_name} 'Make searchable' context menu.",
+                file=sys.stderr,
+            )
+            return cfg, has_mutation, 1
+        print(f"'Make searchable' context menu: {ocr_status_str}")
+
     # All sibling mutations validated and applied; now persist the API key.
     if pending_set_key is not None:
         try:
@@ -337,11 +364,14 @@ def _config_display_payload(cfg: AppConfig) -> dict[str, object]:
         "gemini_model": cfg.gemini_model,
         "start_on_boot": is_autorun_enabled(),
         "context_menu": is_context_menu_enabled(),
+        "ocr_menu": is_ocr_menu_enabled(),
         "dry_run": cfg.dry_run,
         "max_folder_depth": cfg.max_folder_depth,
         "mirror_log_to_documents": cfg.mirror_log_to_documents,
         "auto_update": cfg.auto_update,
         "update_check_interval_days": cfg.update_check_interval_days,
+        "ocr_enabled": cfg.ocr_enabled,
+        "ocr_language": cfg.ocr_language,
         "gemini_api_key": mask_api_key(get_api_key()),
     }
 
@@ -358,6 +388,7 @@ def _show_config(args: CliArgs, cfg: AppConfig) -> None:
 
     autorun_status = "Enabled" if payload["start_on_boot"] else "Disabled"
     context_menu_status = "Enabled" if payload["context_menu"] else "Disabled"
+    ocr_menu_status = "Enabled" if payload["ocr_menu"] else "Disabled"
     auto_update = "Enabled" if payload["auto_update"] else "Disabled"
 
     print("================ ScanSort Configuration ================")
@@ -369,6 +400,9 @@ def _show_config(args: CliArgs, cfg: AppConfig) -> None:
     print(f"Gemini Model:      {payload['gemini_model']}")
     print(f"Start on Boot:     {autorun_status}")
     print(f"Context Menu:      {context_menu_status}")
+    print(f"OCR Menu:          {ocr_menu_status}")
+    print(f"OCR Text Layer:    {'Enabled' if payload['ocr_enabled'] else 'Disabled'}")
+    print(f"OCR Language:      {payload['ocr_language']}")
     print(f"Dry Run Mode:      {payload['dry_run']}")
     print(f"Auto Update:       {auto_update}")
     print(f"Update Check:      every {payload['update_check_interval_days']} day(s)")

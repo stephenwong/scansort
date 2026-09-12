@@ -40,11 +40,17 @@ class CliArgs:
     update_check_interval: int | None = None
     autostart: str | None = None
     context_menu: str | None = None
+    ocr: str | None = None
+    ocr_menu: str | None = None
     json: bool = False
 
     # file
     copy: bool = False
     files: list[Path] = field(default_factory=list)
+
+    # ocr-backfill
+    targets: list[Path] = field(default_factory=list)
+    language: str | None = None
 
     # logs
     follow: bool = False

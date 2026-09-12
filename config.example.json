@@ -8,5 +8,7 @@
   "mirror_log_to_documents": false,
   "dry_run": false,
   "auto_update": true,
-  "update_check_interval_days": 0
+  "update_check_interval_days": 0,
+  "ocr_enabled": false,
+  "ocr_language": "eng"
 }

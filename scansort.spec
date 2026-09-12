@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -65,6 +66,25 @@ datas += collect_data_files("scansort")
 # IANA timezone database required by zoneinfo on Windows (Australia/Sydney).
 datas += collect_data_files("tzdata")
 
+# Bundle the Tesseract OCR engine alongside the executable so OCR works
+# out-of-the-box in release builds (tesseract is an Apache-2.0 system binary).
+binaries = []
+upx_exclude = []
+_tesseract_dir = Path(
+    os.environ.get("TESSERACT_DIR", r"C:\Program Files\Tesseract-OCR")
+)
+if _tesseract_dir.is_dir():
+    upx_exclude.append("tesseract/*")
+    _tesseract_exe = _tesseract_dir / "tesseract.exe"
+    if _tesseract_exe.is_file():
+        binaries.append((str(_tesseract_exe), "tesseract"))
+    for _dll in _tesseract_dir.glob("*.dll"):
+        binaries.append((str(_dll), "tesseract"))
+    for _lang in ("eng.traineddata", "osd.traineddata"):
+        _data_file = _tesseract_dir / "tessdata" / _lang
+        if _data_file.is_file():
+            datas.append((str(_data_file), "tesseract/tessdata"))
+
 hiddenimports = [
     "pydantic",
     "pydantic_core",
@@ -74,6 +94,7 @@ hiddenimports = [
     "google.genai",
     "pypdf",
     "img2pdf",
+    "pytesseract",
     "PIL",
     "pystray",
     "pystray._win32",
@@ -96,7 +117,7 @@ hiddenimports += collect_submodules("pystray")
 a = Analysis(
     ["scansort/__main__.py"],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -136,6 +157,6 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=upx_exclude,
     name="ScanSort",
 )

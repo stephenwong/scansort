@@ -14,6 +14,19 @@ def test_completion_templates_cover_all_subcommands():
             assert name in template, f"{shell} completion missing {name}"
 
 
+def test_bash_config_completion_includes_ocr_flags():
+    """Bash config opts must not drift behind the other shell templates."""
+    bash = _SHELL_TEMPLATES["bash"]
+    config_line = next(
+        line
+        for line in bash.splitlines()
+        if line.strip().startswith("opts=") and "--get" in line
+    )
+    tokens = config_line.replace('opts="', "").replace('"', "").split()
+    assert "--ocr" in tokens
+    assert "--ocr-menu" in tokens
+
+
 @pytest.mark.parametrize(
     ("shell", "expected_snippets"),
     [
@@ -29,6 +42,18 @@ def test_completion_supported_shells(capsys, shell, expected_snippets):
     captured = capsys.readouterr()
     for snippet in expected_snippets:
         assert snippet in captured.out
+
+
+def test_fish_review_gui_and_cli_are_distinct_completions():
+    """The review gui/cli registrations must be separate complete commands."""
+    fish = _SHELL_TEMPLATES["fish"]
+    assert 'dialog"complete' not in fish
+    gui = [line for line in fish.splitlines() if "-l gui" in line]
+    cli = [line for line in fish.splitlines() if "-l cli" in line]
+    assert len(gui) == 1
+    assert len(cli) == 1
+    assert gui[0] != cli[0]
+    assert cli[0].startswith("complete -c scansort")
 
 
 def test_completion_invalid_shell():

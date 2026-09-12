@@ -29,6 +29,12 @@ from scansort.core.constants import (
 from scansort.core.fs import interprocess_file_lock
 from scansort.document.converter import convert_to_pdf
 from scansort.document.metadata import process_pdf_metadata_and_rotation
+from scansort.document.ocr import (
+    OCR_ENGINE_NAME,
+    OcrError,
+    has_ocr_support,
+    ocr_pdf_inplace,
+)
 from scansort.logging import AuditLogger
 from scansort.pipeline.dispatcher import (
     OPERATIONS_LOCK_FILENAME,
@@ -127,6 +133,8 @@ class ScanSortPipeline:
         summary: str,
         status: str,
         classification: DocumentClassification | None = None,
+        ocr_engine: str | None = None,
+        ocr_confidence: float | None = None,
     ) -> dict[str, Any]:
         """Build a standardized audit log entry dictionary."""
         entry: dict[str, Any] = {
@@ -139,6 +147,10 @@ class ScanSortPipeline:
             "summary": summary,
             "status": status,
         }
+        if ocr_engine is not None:
+            entry["ocr_engine"] = ocr_engine
+        if ocr_confidence is not None:
+            entry["ocr_confidence"] = float(ocr_confidence)
         if classification is not None:
             entry["gemini_model"] = self.classifier.model
             entry["confidence"] = float(classification.confidence)
@@ -244,6 +256,8 @@ class ScanSortPipeline:
         file_hash: str,
         preserve_source: bool = False,
         config: AppConfig | None = None,
+        ocr_engine: str | None = None,
+        ocr_confidence: float | None = None,
     ) -> Path:
         """Apply rotation, embed metadata, dispatch to destination, and write audit record."""
         cfg = config or self.config
@@ -283,6 +297,8 @@ class ScanSortPipeline:
                         summary=classification.summary,
                         status=STATUS_SUCCESS,
                         classification=classification,
+                        ocr_engine=ocr_engine,
+                        ocr_confidence=ocr_confidence,
                     )
                 )
 
@@ -352,6 +368,7 @@ class ScanSortPipeline:
                     file_hash,
                     existing_record,
                     preserve_source=preserve_source,
+                    config=config,
                 )
 
             # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
@@ -365,10 +382,39 @@ class ScanSortPipeline:
                 )
                 return None
 
-            # 4. Multimodal analysis and classification via Gemini
+            # 4. Embed an invisible OCR text layer before multimodal analysis so
+            # the filed PDF is Ctrl+F-able (invariant E/F). OCR mutates only the
+            # isolated staging copy; failures route to review like any staging error.
+            ocr_engine: str | None = None
+            ocr_confidence: float | None = None
+            if config.ocr_enabled:
+                if has_ocr_support():
+                    try:
+                        _, ocr_confidence = ocr_pdf_inplace(
+                            staging_pdf, language=config.ocr_language
+                        )
+                    except OcrError as e:
+                        logger.error("OCR failed for %s: %s", file_path.name, e)
+                        self._route_failed_to_review(
+                            file_path,
+                            reason=f"OCR failed: {e}",
+                            preserve_source=preserve_source,
+                            config=config,
+                        )
+                        return None
+                    if ocr_confidence is not None:
+                        ocr_engine = OCR_ENGINE_NAME
+                else:
+                    logger.warning(
+                        "OCR is enabled but tesseract was not found; filing %s "
+                        "without a text layer.",
+                        file_path.name,
+                    )
+
+            # 5. Multimodal analysis and classification via Gemini
             classification = self._classify_scan(staging_pdf)
 
-            # 5. Dry-Run Verification before any file mutation or metadata writing
+            # 6. Dry-Run Verification before any file mutation or metadata writing
             if config.dry_run:
                 target_dir = resolve_destination_dir(
                     config.documents_root, classification.target_folder
@@ -392,7 +438,7 @@ class ScanSortPipeline:
                 )
                 return None
 
-            # 6-8. Apply rotation, embed metadata, atomic dispatch, and record audit log
+            # 7-9. Apply rotation, embed metadata, atomic dispatch, and record audit log
             return self._apply_metadata_and_dispatch(
                 staging_pdf=staging_pdf,
                 file_path=file_path,
@@ -400,6 +446,8 @@ class ScanSortPipeline:
                 file_hash=file_hash,
                 preserve_source=preserve_source,
                 config=config,
+                ocr_engine=ocr_engine,
+                ocr_confidence=ocr_confidence,
             )
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing

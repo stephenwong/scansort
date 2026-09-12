@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from scansort.core.constants import (
     CONFIG_FILENAME,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_MAX_FOLDER_DEPTH,
+    DEFAULT_OCR_LANGUAGE,
     MIRROR_HISTORY_CSV_NAME,
     REVIEW_NEEDED_DIR,
     SUPPORTED_GEMINI_MODELS,
@@ -27,6 +29,25 @@ from scansort.core.constants import (
 from scansort.core.fs import atomic_write, relative_folder_is_safe
 
 logger = logging.getLogger(__name__)
+
+_OCR_LANGUAGE_RE = re.compile(r"^[a-z0-9_]+(\+[a-z0-9_]+)*$")
+
+
+def normalize_ocr_language(value: Any) -> str:
+    """Return a validated Tesseract language code, defaulting when empty.
+
+    A static membership whitelist is unsafe because the set of valid codes is
+    install-dependent (tessdata), so only the syntactic shape is enforced here.
+    """
+    if value is None or not str(value).strip():
+        return DEFAULT_OCR_LANGUAGE
+    clean = str(value).strip()
+    if not _OCR_LANGUAGE_RE.match(clean):
+        raise ValueError(
+            "ocr_language must be a Tesseract code like 'eng' or 'eng+deu', "
+            f"got '{clean}'"
+        )
+    return clean
 
 
 def get_default_app_dir() -> Path:
@@ -75,6 +96,13 @@ class AppConfig(BaseModel):
     mirror_log_to_documents: bool = False
     auto_update: bool = True
     update_check_interval_days: int = Field(default=0, ge=0, le=60)
+    ocr_enabled: bool = False
+    ocr_language: str = DEFAULT_OCR_LANGUAGE
+
+    @field_validator("ocr_language", mode="before")
+    @classmethod
+    def validate_ocr_language(cls, v: Any) -> str:
+        return normalize_ocr_language(v)
 
     @property
     def mirror_csv_path(self) -> Path | None:

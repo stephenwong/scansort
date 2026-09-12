@@ -13,7 +13,7 @@ from scansort.core.config import (
     load_config,
     save_config,
 )
-from scansort.core.constants import DEFAULT_GEMINI_MODEL
+from scansort.core.constants import DEFAULT_GEMINI_MODEL, DEFAULT_OCR_LANGUAGE
 
 
 def test_default_config():
@@ -140,6 +140,20 @@ def test_config_gemini_model_validation():
 
     with pytest.raises(ValueError, match="gemini_model must be one of"):
         AppConfig(gemini_model="unsupported-model")
+
+
+def test_config_ocr_language_validation():
+    assert AppConfig(ocr_language="").ocr_language == DEFAULT_OCR_LANGUAGE
+    assert AppConfig(ocr_language="   ").ocr_language == DEFAULT_OCR_LANGUAGE
+    assert AppConfig(ocr_language=None).ocr_language == DEFAULT_OCR_LANGUAGE
+    assert AppConfig(ocr_language="eng").ocr_language == "eng"
+    assert AppConfig(ocr_language=" eng+deu ").ocr_language == "eng+deu"
+
+    with pytest.raises(ValueError, match="ocr_language must be a Tesseract code"):
+        AppConfig(ocr_language="xx_YY!")
+
+    with pytest.raises(ValueError, match="ocr_language must be a Tesseract code"):
+        AppConfig(ocr_language="../evil")
 
 
 def test_fallback_folder_validation():

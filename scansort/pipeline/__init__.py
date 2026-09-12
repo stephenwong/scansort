@@ -9,6 +9,7 @@ from scansort.pipeline.dispatcher import (
     resolve_duplicates_dir,
 )
 from scansort.pipeline.hasher import check_duplicate, compute_file_sha256
+from scansort.pipeline.ocr_backfill import OcrBackfillResult, run_ocr_backfill
 from scansort.pipeline.review import (
     ReviewItem,
     dismiss_review_item,
@@ -39,4 +40,6 @@ __all__ = [
     "get_review_queue",
     "file_reviewed_item",
     "dismiss_review_item",
+    "OcrBackfillResult",
+    "run_ocr_backfill",
 ]

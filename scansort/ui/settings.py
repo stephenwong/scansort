@@ -24,8 +24,11 @@ from scansort.platform.autorun import (
 )
 from scansort.platform.context_menu import (
     disable_context_menu,
+    disable_ocr_menu,
     enable_context_menu,
+    enable_ocr_menu,
     is_context_menu_enabled,
+    is_ocr_menu_enabled,
 )
 from scansort.platform.secrets import (
     delete_api_key,
@@ -104,6 +107,8 @@ class SettingsDialog(SingletonToplevel):
         self.dry_run_var = tk.BooleanVar(value=self.app_config.dry_run)
         self.autorun_var = tk.BooleanVar(value=is_autorun_enabled())
         self.context_menu_var = tk.BooleanVar(value=is_context_menu_enabled())
+        self.ocr_var = tk.BooleanVar(value=self.app_config.ocr_enabled)
+        self.ocr_menu_var = tk.BooleanVar(value=is_ocr_menu_enabled())
 
         self._build_ui()
         self.refresh_taxonomy_tree()
@@ -223,6 +228,16 @@ class SettingsDialog(SingletonToplevel):
         ).pack(anchor=tk.W, pady=2)
         ttk.Checkbutton(
             opts_frame,
+            text="Embed searchable OCR text layer in new scans (requires Tesseract)",
+            variable=self.ocr_var,
+        ).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(
+            opts_frame,
+            text="Enable 'Make searchable with ScanSort' for PDFs in Explorer",
+            variable=self.ocr_menu_var,
+        ).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(
+            opts_frame,
             text="Dry-Run Mode (simulate filing without moving files)",
             variable=self.dry_run_var,
         ).pack(anchor=tk.W, pady=2)
@@ -327,6 +342,7 @@ class SettingsDialog(SingletonToplevel):
             updated_dict["fallback_folder"] = fallback_val
             updated_dict["dry_run"] = self.dry_run_var.get()
             updated_dict["start_on_boot"] = self.autorun_var.get()
+            updated_dict["ocr_enabled"] = self.ocr_var.get()
             new_cfg = AppConfig(**updated_dict)
             new_cfg.ensure_directories()
         except (ValueError, OSError) as e:
@@ -357,8 +373,8 @@ class SettingsDialog(SingletonToplevel):
             )
             return False
 
-    def _apply_system_integrations(self, new_cfg: AppConfig) -> tuple[bool, bool]:
-        """Reconcile autorun and context-menu OS state; returns (autorun_ok, menu_ok)."""
+    def _apply_system_integrations(self, new_cfg: AppConfig) -> tuple[bool, bool, bool]:
+        """Reconcile OS state; returns (autorun_ok, menu_ok, ocr_menu_ok)."""
         autorun_ok = True
         try:
             if self.autorun_var.get():
@@ -391,7 +407,21 @@ class SettingsDialog(SingletonToplevel):
         except OSError as e:
             logger.warning("Could not update context menu setting: %s", e)
             context_menu_ok = False
-        return autorun_ok, context_menu_ok
+
+        ocr_menu_ok = True
+        try:
+            desired_ocr_menu = self.ocr_menu_var.get()
+            if desired_ocr_menu != is_ocr_menu_enabled():
+                if desired_ocr_menu:
+                    ocr_menu_ok = enable_ocr_menu()
+                else:
+                    ocr_menu_ok = disable_ocr_menu()
+            if not ocr_menu_ok:
+                logger.warning("Could not update OCR context menu setting.")
+        except OSError as e:
+            logger.warning("Could not update OCR context menu setting: %s", e)
+            ocr_menu_ok = False
+        return autorun_ok, context_menu_ok, ocr_menu_ok
 
     def on_save(self) -> None:
         """Validate inputs, save configuration and credentials, and notify."""
@@ -414,7 +444,9 @@ class SettingsDialog(SingletonToplevel):
         if not self._persist_config_with_key_rollback(new_cfg, new_key, prior_key):
             return
 
-        autorun_ok, context_menu_ok = self._apply_system_integrations(new_cfg)
+        autorun_ok, context_menu_ok, ocr_menu_ok = self._apply_system_integrations(
+            new_cfg
+        )
 
         self.app_config = new_cfg
         if self.on_applied is not None:
@@ -423,7 +455,7 @@ class SettingsDialog(SingletonToplevel):
             except Exception as e:  # noqa: BLE001
                 logger.error("Error in on_applied callback: %s", e)
 
-        if context_menu_ok and autorun_ok:
+        if context_menu_ok and autorun_ok and ocr_menu_ok:
             show_toast("ScanSort Settings", "Settings saved and applied successfully.")
         else:
             show_toast(

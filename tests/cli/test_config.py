@@ -418,6 +418,60 @@ def test_cli_config_show_context_menu(capsys):
         assert '"context_menu": true' in capsys.readouterr().out
 
 
+def test_cli_config_ocr_toggle(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--ocr", "enable"]) == 0
+        assert mock_save.called
+        saved = mock_save.call_args.args[0]
+        assert saved.ocr_enabled is True
+        assert "OCR text layer: True" in capsys.readouterr().out
+
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--ocr", "disable"]) == 0
+        assert mock_save.call_args.args[0].ocr_enabled is False
+
+
+def test_cli_config_ocr_menu_toggle(capsys):
+    with patch("scansort.cli.config.enable_ocr_menu", return_value=True) as mock_en:
+        assert main_cli(["config", "--ocr-menu", "enable"]) == 0
+        assert mock_en.called
+        assert "'Make searchable' context menu: ENABLED" in capsys.readouterr().out
+
+    with patch("scansort.cli.config.disable_ocr_menu", return_value=True) as mock_dis:
+        assert main_cli(["config", "--ocr-menu", "disable"]) == 0
+        assert mock_dis.called
+        assert "'Make searchable' context menu: DISABLED" in capsys.readouterr().out
+
+
+def test_cli_config_ocr_menu_failure(capsys):
+    with patch("scansort.cli.config.enable_ocr_menu", return_value=False):
+        assert main_cli(["config", "--ocr-menu", "enable"]) == 1
+        assert (
+            "Failed to enable 'Make searchable' context menu" in capsys.readouterr().err
+        )
+
+
+def test_cli_config_show_ocr_fields(capsys):
+    with (
+        patch("scansort.cli.config.get_api_key", return_value="AIzaSyTest1234567890"),
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.is_ocr_menu_enabled", return_value=True),
+    ):
+        assert main_cli(["config", "--show"]) == 0
+        out = capsys.readouterr().out
+        assert "OCR Menu:          Enabled" in out
+        assert "OCR Text Layer:    Disabled" in out
+
+        assert main_cli(["config", "--json"]) == 0
+        assert '"ocr_menu": true' in capsys.readouterr().out
+
+
 def test_cli_config_get_rejects_pydantic_method_attribute(capsys):
     with patch("scansort.cli.config.load_config", return_value=AppConfig()):
         assert main_cli(["config", "--get", "model_dump"]) == 1
@@ -447,6 +501,24 @@ def test_cli_config_set_mixed_with_set_key_errors(capsys):
     assert not mock_save.called
     assert not mock_key.called
     assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_cli_config_get_combined_with_set_is_rejected(capsys):
+    """--get + --set must be rejected, not silently drop the mutation."""
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        code = main_cli(["config", "--get", "ocr_language", "--set", "dry_run", "true"])
+    assert code == 1
+    assert not mock_save.called
+    assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_cli_config_get_alone_still_works(capsys):
+    with patch("scansort.cli.config.load_config", return_value=AppConfig()):
+        assert main_cli(["config", "--get", "ocr_language"]) == 0
+    assert "eng" in capsys.readouterr().out
 
 
 def test_cli_config_set_invalid_boolean_errors(capsys):

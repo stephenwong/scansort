@@ -137,6 +137,135 @@ def test_ensure_csv_headers_concurrent_creation_never_truncates(tmp_path: Path):
     assert csv_path.read_text(encoding="utf-8") == "MUST_SURVIVE\n"
 
 
+def test_ensure_csv_headers_migrates_legacy_schema(tmp_path: Path):
+    """An existing short-header CSV is padded to the canonical schema."""
+    csv_path = tmp_path / "history.csv"
+    legacy_headers = [header for header, _ in audit_module.CSV_FIELD_MAPPING][:-2]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(legacy_headers)
+        writer.writerow(
+            [
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01 11:00:00",
+                "scan.pdf",
+                "260101_Scan.pdf",
+                "Utilities",
+                "/docs/Utilities/260101_Scan.pdf",
+                "abc123",
+                "Electricity bill",
+                "SUCCESS",
+            ]
+        )
+
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+    logger._ensure_csv_headers(csv_path)
+
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    assert rows[0] == audit_module.CSV_HEADERS
+    assert all(len(row) == len(audit_module.CSV_HEADERS) for row in rows)
+    assert rows[1][2] == "scan.pdf"
+    assert rows[1][8] == "SUCCESS"
+    assert rows[1][9:] == ["", ""]
+
+    # Subsequent appends stay aligned with the migrated header.
+    logger.log_scan({"status": "SUCCESS", "original_filename": "next.pdf"})
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        final_rows = list(csv.reader(f))
+    assert all(len(row) == len(audit_module.CSV_HEADERS) for row in final_rows)
+
+
+def test_ensure_csv_headers_leaves_unknown_header_untouched(tmp_path: Path):
+    """A foreign CSV shape is never rewritten (only recognized prefix schemas)."""
+    csv_path = tmp_path / "history.csv"
+    original = "Foo,Bar\n1,2\n"
+    csv_path.write_text(original, encoding="utf-8")
+
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+    logger._ensure_csv_headers(csv_path)
+
+    assert csv_path.read_text(encoding="utf-8") == original
+
+
+def test_migrate_csv_header_skips_blank_first_line(tmp_path: Path):
+    csv_path = tmp_path / "history.csv"
+    csv_path.write_text("\nrowdata\n", encoding="utf-8")
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+
+    logger._migrate_csv_header(csv_path)
+
+    assert csv_path.read_text(encoding="utf-8") == "\nrowdata\n"
+
+
+def test_migrate_csv_header_survives_unreadable_file(tmp_path: Path):
+    csv_path = tmp_path / "history.csv"
+    legacy_headers = [header for header, _ in audit_module.CSV_FIELD_MAPPING][:-2]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(legacy_headers)
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+
+    with patch("scansort.logging.audit.open", side_effect=OSError("locked")):
+        logger._migrate_csv_header(csv_path)
+
+    assert csv_path.read_text(encoding="utf-8").startswith("Timestamp")
+
+
+def test_migrate_csv_header_survives_full_read_error(tmp_path: Path):
+    csv_path = tmp_path / "history.csv"
+    legacy_headers = [header for header, _ in audit_module.CSV_FIELD_MAPPING][:-2]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(legacy_headers)
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+
+    real_open = open
+    calls = {"count": 0}
+
+    def flaky_open(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] >= 2:
+            raise OSError("gone")
+        return real_open(*args, **kwargs)
+
+    with patch("scansort.logging.audit.open", side_effect=flaky_open):
+        logger._migrate_csv_header(csv_path)
+
+    assert calls["count"] == 2
+
+
+def test_migrate_csv_header_survives_rewrite_failure(tmp_path: Path):
+    csv_path = tmp_path / "history.csv"
+    legacy_headers = [header for header, _ in audit_module.CSV_FIELD_MAPPING][:-2]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(legacy_headers)
+        writer.writerow(["x"] * len(legacy_headers))
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+
+    with patch("scansort.logging.audit.atomic_write", side_effect=OSError("read-only")):
+        logger._migrate_csv_header(csv_path)
+
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        assert next(csv.reader(f)) == legacy_headers
+
+
+def test_failed_migration_is_not_retried_on_every_append(tmp_path: Path):
+    """A persistently failing migration must be attempted once, not O(N^2) times."""
+    csv_path = tmp_path / "history.csv"
+    legacy_headers = [header for header, _ in audit_module.CSV_FIELD_MAPPING][:-2]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(legacy_headers)
+
+    logger = AuditLogger(jsonl_path=tmp_path / "h.jsonl", csv_path=csv_path)
+    with patch(
+        "scansort.logging.audit.atomic_write", side_effect=OSError("read-only")
+    ) as fake_atomic:
+        for _ in range(5):
+            logger.log_scan({"status": "SUCCESS"})
+
+    assert fake_atomic.call_count == 1
+
+
 def test_log_scan_neutralizes_spreadsheet_formula_cells(tmp_path: Path):
     jsonl_path = tmp_path / "history.jsonl"
     csv_path = tmp_path / "history.csv"

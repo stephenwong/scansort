@@ -1,6 +1,7 @@
 """Audit logger maintaining dual JSONL and CSV execution logs for all processed scans."""
 
 import csv
+import io
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ from typing import Any
 
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HISTORY_CSV_NAME, HISTORY_JSONL_NAME
-from scansort.core.fs import interprocess_file_lock
+from scansort.core.fs import atomic_write, interprocess_file_lock
 from scansort.core.timeutil import sydney_now
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ CSV_FIELD_MAPPING: list[tuple[str, str]] = [
     ("SHA256", "sha256"),
     ("Summary", "summary"),
     ("Status", "status"),
+    ("Ocr Engine", "ocr_engine"),
+    ("Ocr Confidence", "ocr_confidence"),
 ]
 
 CSV_HEADERS: list[str] = [header for header, _ in CSV_FIELD_MAPPING]
@@ -53,6 +56,7 @@ class AuditLogger:
         self.jsonl_path = jsonl_path or (app_dir / HISTORY_JSONL_NAME)
         self.csv_path = csv_path or (app_dir / HISTORY_CSV_NAME)
         self.mirror_csv_path = mirror_csv_path
+        self._migration_attempted: set[Path] = set()
 
     def _ensure_csv_headers(self, path: Path) -> None:
         # Serialize header initialization across processes: without a lock two
@@ -67,8 +71,48 @@ class AuditLogger:
                     if os.fstat(f.fileno()).st_size == 0:
                         csv.writer(f).writerow(CSV_HEADERS)
                         f.flush()
+                        return
+                self._migrate_csv_header(path)
         except OSError as e:
             logger.error("Failed to initialize CSV header at %s: %s", path, e)
+
+    def _migrate_csv_header(self, path: Path) -> None:
+        """Pad a legacy short-header CSV up to the canonical column schema.
+
+        Only a strict prefix of the canonical header (a trailing column append)
+        is migrated; unrecognized shapes are left untouched.
+        """
+        if path in self._migration_attempted:
+            return
+        self._migration_attempted.add(path)
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                first_line = f.readline()
+        except (OSError, UnicodeError) as e:
+            logger.error("Failed to inspect CSV header at %s: %s", path, e)
+            return
+        existing = next(csv.reader([first_line]), []) if first_line else []
+        if not existing or existing == CSV_HEADERS:
+            return
+        if existing != CSV_HEADERS[: len(existing)]:
+            return
+
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                rows = list(csv.reader(f))
+        except (OSError, UnicodeError, csv.Error) as e:
+            logger.error("Failed to read legacy CSV at %s: %s", path, e)
+            return
+
+        width = len(CSV_HEADERS)
+        migrated = [CSV_HEADERS]
+        migrated.extend((row + [""] * width)[:width] for row in rows[1:])
+        buffer = io.StringIO()
+        csv.writer(buffer).writerows(migrated)
+        try:
+            atomic_write(path, buffer.getvalue())
+        except OSError as e:
+            logger.error("Failed to migrate CSV header at %s: %s", path, e)
 
     def log_scan(self, entry: dict[str, Any]) -> None:
         """Record a scan event to JSONL and CSV log files.

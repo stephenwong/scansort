@@ -11,6 +11,7 @@ _SUBCOMMANDS: tuple[str, ...] = (
     "file",
     "config",
     "undo",
+    "ocr-backfill",
     "rescan",
     "review",
     "check-update",
@@ -44,11 +45,14 @@ _scansort_completion() {
         file)
             opts="--copy -c --dry-run -v --verbose --help"
             ;;
+        ocr-backfill)
+            opts="--dry-run --limit --language -v --verbose --help"
+            ;;
         review)
             opts="--gui -g --cli -c --limit -v --verbose --help"
             ;;
         config)
-            opts="--show --json --path --get --set --set-key --watch-folder --documents-folder --autostart --context-menu --gemini-model --fallback-folder --max-depth --mirror-csv --auto-update --update-check-interval --dry-run -v --verbose --help"
+            opts="--show --json --path --get --set --set-key --watch-folder --documents-folder --autostart --context-menu --ocr --ocr-menu --gemini-model --fallback-folder --max-depth --mirror-csv --auto-update --update-check-interval --dry-run -v --verbose --help"
             ;;
         logs)
             opts="-n --lines -f --follow --level --clear -v --verbose --help"
@@ -91,6 +95,7 @@ _scansort() {
         'file:Directly process and file specified document(s)'
         'config:Manage application settings and secrets'
         'undo:Reverse the last filed document move'
+        'ocr-backfill:Retrofit a searchable OCR text layer into filed PDFs'
         'review:Interactively review and file scans needing attention'
         'rescan:Rescan and display Documents folder taxonomy'
         'check-update:Check GitHub Releases for newer ScanSort versions'
@@ -147,7 +152,16 @@ _scansort() {
                         '--update-check-interval[Update check days]:days:' \\
                         '--dry-run[Toggle dry run]:choice:(enable disable)' \\
                         '--autostart[Toggle auto-start]:choice:(enable disable)' \\
-                        '--context-menu[Toggle context menu]:choice:(enable disable)'
+                        '--context-menu[Toggle context menu]:choice:(enable disable)' \\
+                        '--ocr[Toggle OCR text layer]:choice:(enable disable)' \\
+                        '--ocr-menu[Toggle searchable context menu]:choice:(enable disable)'
+                    ;;
+                ocr-backfill)
+                    _arguments \\
+                        '--dry-run[List OCR candidates only]' \\
+                        '--limit[Maximum PDFs]:count:' \\
+                        '--language[Tesseract language]:language:' \\
+                        '*:file:_files'
                     ;;
                 logs)
                     _arguments \\
@@ -159,7 +173,7 @@ _scansort() {
                 history)
                     _arguments \\
                         '(-n --limit)'{-n,--limit}'[Limit records]:count:' \\
-                        '--status[Filter status]:status:(SUCCESS DUPLICATE FAILED UNDONE COLLISION_RENAMED)' \\
+                        '--status[Filter status]:status:(SUCCESS DUPLICATE FAILED UNDONE COLLISION_RENAMED REVIEWED OCR_BACKFILLED)' \\
                         '(-q --search)'{-q,--search}'[Search query]:query:' \\
                         '--reverse[Oldest first]' \\
                         '--json[Output JSON]'
@@ -188,6 +202,7 @@ complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "watch
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "file" -d "Directly process and file specified document(s)"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "config" -d "Manage application settings and secrets"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "undo" -d "Reverse the last filed document move"
+complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "ocr-backfill" -d "Retrofit a searchable OCR text layer into filed PDFs"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "review" -d "Interactively review scans needing attention"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "rescan" -d "Rescan and display Documents folder taxonomy"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "check-update" -d "Check GitHub Releases for newer versions"
@@ -211,6 +226,10 @@ complete -c scansort -n "__fish_seen_subcommand_from watch" -l minimized -d "Sta
 complete -c scansort -n "__fish_seen_subcommand_from file" -s c -l copy -d "Preserve original file(s)"
 complete -c scansort -n "__fish_seen_subcommand_from file" -l dry-run -d "Simulate filing actions"
 
+complete -c scansort -n "__fish_seen_subcommand_from ocr-backfill" -l dry-run -d "List OCR candidates only"
+complete -c scansort -n "__fish_seen_subcommand_from ocr-backfill" -l limit -d "Maximum PDFs to process"
+complete -c scansort -n "__fish_seen_subcommand_from ocr-backfill" -l language -d "Tesseract language code"
+
 complete -c scansort -n "__fish_seen_subcommand_from config" -l show -d "Display current configuration"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l json -d "Output configuration as JSON"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l path -d "Print configuration path"
@@ -220,6 +239,8 @@ complete -c scansort -n "__fish_seen_subcommand_from config" -l set-key -d "Stor
 complete -c scansort -n "__fish_seen_subcommand_from config" -l gemini-model -a "gemini-3.1-flash-lite gemini-3.5-flash-lite" -d "Set Gemini model"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l autostart -a "enable disable" -d "Toggle auto-start on boot"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l context-menu -a "enable disable" -d "Toggle Windows Explorer context menu"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l ocr -a "enable disable" -d "Toggle OCR text layer embedding"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l ocr-menu -a "enable disable" -d "Toggle searchable context menu"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l watch-folder -a "(__fish_complete_directories)" -d "Set watch folder"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l documents-folder -a "(__fish_complete_directories)" -d "Set documents root"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l fallback-folder -d "Set fallback folder"
@@ -239,7 +260,7 @@ complete -c scansort -n "__fish_seen_subcommand_from logs" -l level -a "DEBUG IN
 complete -c scansort -n "__fish_seen_subcommand_from logs" -l clear -d "Clear log file"
 
 complete -c scansort -n "__fish_seen_subcommand_from history" -s n -l limit -d "Limit records"
-complete -c scansort -n "__fish_seen_subcommand_from history" -l status -a "SUCCESS DUPLICATE FAILED UNDONE COLLISION_RENAMED" -d "Filter by status"
+complete -c scansort -n "__fish_seen_subcommand_from history" -l status -a "SUCCESS DUPLICATE FAILED UNDONE COLLISION_RENAMED REVIEWED OCR_BACKFILLED" -d "Filter by status"
 complete -c scansort -n "__fish_seen_subcommand_from history" -s q -l search -d "Search query"
 complete -c scansort -n "__fish_seen_subcommand_from history" -l reverse -d "Reverse order"
 complete -c scansort -n "__fish_seen_subcommand_from history" -l json -d "Output JSON"
@@ -271,8 +292,11 @@ Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
     elseif ($elements -contains 'file') {
         $flags += @('--copy', '-c', '--dry-run')
     }
+    elseif ($elements -contains 'ocr-backfill') {
+        $flags += @('--dry-run', '--limit', '--language')
+    }
     elseif ($elements -contains 'config') {
-        $flags += @('--show', '--json', '--path', '--get', '--set', '--set-key', '--watch-folder', '--documents-folder', '--gemini-model', '--fallback-folder', '--max-depth', '--mirror-csv', '--auto-update', '--update-check-interval', '--dry-run', '--autostart', '--context-menu')
+        $flags += @('--show', '--json', '--path', '--get', '--set', '--set-key', '--watch-folder', '--documents-folder', '--gemini-model', '--fallback-folder', '--max-depth', '--mirror-csv', '--auto-update', '--update-check-interval', '--dry-run', '--autostart', '--context-menu', '--ocr', '--ocr-menu')
     }
     elseif ($elements -contains 'review') {
         $flags += @('--gui', '-g', '--cli', '-c', '--limit')

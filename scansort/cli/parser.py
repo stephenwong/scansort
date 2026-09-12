@@ -120,6 +120,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reverse the last filed document move",
     )
 
+    # ocr-backfill command
+    ocr_p = subparsers.add_parser(
+        "ocr-backfill",
+        parents=[verbose_parser],
+        help="Retrofit a searchable OCR text layer into filed PDFs",
+    )
+    ocr_p.add_argument(
+        "targets",
+        nargs="*",
+        type=Path,
+        help="PDF file(s) or a Documents root to scan (defaults to configured root)",
+    )
+    ocr_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="List OCR candidates without modifying files",
+    )
+    ocr_p.add_argument(
+        "--limit",
+        type=_bounded_int(1, 100000),
+        metavar="N",
+        help="Maximum number of PDFs to process",
+    )
+    ocr_p.add_argument(
+        "--language",
+        type=str,
+        help="Tesseract language code (defaults to configured ocr_language)",
+    )
+
     # review command
     review_p = subparsers.add_parser(
         "review",
@@ -344,6 +374,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--context-menu",
         choices=["enable", "disable"],
         help="Toggle Windows Explorer right-click 'File with ScanSort' context menu",
+    )
+    cfg_p.add_argument(
+        "--ocr",
+        choices=["enable", "disable"],
+        help="Toggle OCR text layer embedding for new scans",
+    )
+    cfg_p.add_argument(
+        "--ocr-menu",
+        choices=["enable", "disable"],
+        help="Toggle Windows Explorer right-click 'Make searchable with ScanSort' menu",
     )
 
     return parser

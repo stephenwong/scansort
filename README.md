@@ -78,6 +78,8 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 
 - 📝 **Standardised filenames** — Every document becomes `YYMMDD_Description.pdf` (e.g. `260901_Origin_Energy_Electricity_Bill.pdf`).
 - 🔎 **Windows Search indexing** — Embeds title, summary, and keywords as PDF metadata so documents appear in Windows Start Menu and Explorer searches.
+- 🔤 **Searchable OCR text layer** — Optionally embed an invisible text layer (`--ocr enable`) so every page is Ctrl+F-able, not just metadata-tagged. The standalone Windows build bundles Tesseract, so no extra installation is needed.
+- 🗄️ **OCR backfill for existing archives** — Retrofit text layers into already-filed PDFs in place with `scansort ocr-backfill`, preserving DocInfo and XMP metadata. Right-click any PDF in Explorer and choose **"Make searchable with ScanSort"**.
 - 🔄 **Auto page orientation** — Corrects sideways and upside-down pages automatically.
 - 🖼️ **Image support** — JPEGs, PNGs, and multi-page TIFFs are converted to searchable PDFs before filing.
 
@@ -96,11 +98,15 @@ flowchart TD
     F -- No --> H{"Image file?"}
     H -- Yes --> I["Convert to PDF"]
     H -- No --> J["Use original PDF"]
-    I --> K["Send to Gemini AI"]
+    I --> K["Stage in app temp dir"]
     J --> K
-    K --> L["Fix orientation · Embed metadata"]
-    L --> M["Move to destination folder"]
-    M --> N["Log to audit history · Notify"]
+    K --> K2{"OCR enabled?"}
+    K2 -- Yes --> K3["Embed invisible OCR text layer"]
+    K2 -- No --> L
+    K3 --> L["Send to Gemini AI"]
+    L --> M["Fix orientation · Embed metadata"]
+    M --> N["Move to destination folder"]
+    N --> O["Log to audit history · Notify"]
 ```
 
 ---
@@ -116,6 +122,7 @@ For the standalone Windows build (`ScanSort.exe`), that's all you need — no Py
 For running from source:
 - Python 3.14+
 - [Astral `uv`](https://docs.astral.sh/uv/)
+- (Optional) [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) — only needed for OCR text layers when running from source; the standalone Windows build bundles it.
 
 ### Install from Source
 
@@ -160,6 +167,8 @@ All settings can be changed via the **Settings dialog** (tray → Settings...) o
 | API key | `--set-key` | Stored in OS credential vault | — |
 | Auto-start | `--autostart enable/disable` | Launch on login | Disabled |
 | Context menu | `--context-menu enable/disable` | Windows Explorer right-click integration | Disabled |
+| OCR text layer | `--ocr enable/disable` | Embed a searchable text layer in new scans | Disabled |
+| OCR context menu | `--ocr-menu enable/disable` | Explorer right-click "Make searchable with ScanSort" (PDF only) | Disabled |
 | Dry-run | `--dry-run enable/disable` | Preview without moving files | Disabled |
 | Auto-update | `--auto-update enable/disable` | Check for updates on launch | Enabled |
 | Max folder depth | `--max-depth` | How deep to scan taxonomy (1–10) | 10 |
@@ -182,6 +191,12 @@ View current settings: `uv run scansort config --show`
 | `scansort config --show` | View current configuration |
 | `scansort config --set-key <KEY>` | Store API key securely |
 | `scansort config --context-menu enable` | Enable Explorer right-click "File with ScanSort" |
+| `scansort config --ocr enable` | Embed searchable OCR text layers in new scans |
+| `scansort config --ocr-menu enable` | Enable Explorer right-click "Make searchable with ScanSort" |
+| `scansort ocr-backfill` | Retrofit text layers into all filed PDFs (in place) |
+| `scansort ocr-backfill --dry-run` | List PDFs that would be made searchable |
+| `scansort ocr-backfill --limit 25` | Backfill at most 25 PDFs this run |
+| `scansort ocr-backfill path\to\file.pdf` | Make a single PDF searchable (used by the right-click menu) |
 | `scansort review` | Interactively review & file documents in `_Review_Needed` |
 | `scansort review --gui` | Open the graphical review dialog |
 | `scansort review --cli` | Review unfiled scans in the terminal |

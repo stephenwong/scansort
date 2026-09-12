@@ -319,6 +319,56 @@ def test_settings_dialog_context_menu_failure_toast(tk_root, tmp_path: Path):
     assert "could not be updated" in messages
 
 
+def test_settings_dialog_ocr_toggles(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    with (
+        patch("scansort.ui.settings.save_config") as mock_save,
+        patch("scansort.ui.settings.enable_ocr_menu") as mock_enable,
+        patch("scansort.ui.settings.is_ocr_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.is_context_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.disable_context_menu"),
+        patch("scansort.ui.settings.is_autorun_enabled", return_value=False),
+        patch("scansort.ui.settings.disable_autorun"),
+        patch("scansort.ui.settings.show_toast"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        dialog.ocr_var.set(True)
+        dialog.ocr_menu_var.set(True)
+        dialog.on_save()
+
+    mock_enable.assert_called_once()
+    assert mock_save.call_args.args[0].ocr_enabled is True
+
+
+def test_settings_dialog_ocr_menu_disable_when_enabled(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    with (
+        patch("scansort.ui.settings.save_config"),
+        patch("scansort.ui.settings.disable_ocr_menu") as mock_disable,
+        patch("scansort.ui.settings.is_ocr_menu_enabled", return_value=True),
+        patch("scansort.ui.settings.is_context_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.disable_context_menu"),
+        patch("scansort.ui.settings.is_autorun_enabled", return_value=False),
+        patch("scansort.ui.settings.disable_autorun"),
+        patch("scansort.ui.settings.show_toast"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        dialog.ocr_menu_var.set(False)
+        dialog.on_save()
+
+    mock_disable.assert_called_once()
+
+
 def test_settings_dialog_open_drop_zone(tk_root, tmp_path: Path):
     inbox = tmp_path / "Inbox"
     docs = tmp_path / "Docs"
