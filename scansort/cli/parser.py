@@ -70,6 +70,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start minimized to tray",
     )
 
+    # file command
+    file_p = subparsers.add_parser(
+        "file",
+        parents=[verbose_parser],
+        help="Directly process and file specified document(s)",
+    )
+    file_p.add_argument(
+        "files",
+        nargs="+",
+        type=Path,
+        help="Path(s) to document file(s) to file",
+    )
+    file_p.add_argument(
+        "--copy",
+        "-c",
+        action="store_true",
+        help="Preserve original file(s) instead of moving them",
+    )
+    file_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Simulate filing actions without moving files",
+    )
+
     # undo command
     subparsers.add_parser(
         "undo",
@@ -294,6 +319,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cfg_p.add_argument(
         "--autostart", choices=["enable", "disable"], help="Toggle auto-start on boot"
+    )
+    cfg_p.add_argument(
+        "--context-menu",
+        choices=["enable", "disable"],
+        help="Toggle Windows Explorer right-click 'File with ScanSort' context menu",
     )
 
     return parser

@@ -36,6 +36,7 @@ scansort/
 │   │   ├── __init__.py         # Package interface re-exports
 │   │   ├── completion.py       # Shell completion generator handler (bash, zsh, fish, powershell)
 │   │   ├── config.py           # Configuration viewing and editing handler
+│   │   ├── file_cmd.py         # Direct document filing handler (scansort file)
 │   │   ├── help.py             # Contextual subcommand and program help handler
 │   │   ├── history.py          # Filing history and audit trail inspection handler
 │   │   ├── logs.py             # Log viewing, filtering, tailing, and maintenance handler
@@ -77,12 +78,14 @@ scansort/
 │   │   ├── __init__.py         # Package interface re-exports
 │   │   ├── autorun.py          # Windows Registry (HKCU Run) & Linux autostart manager
 │   │   ├── console.py          # Windows GUI-subsystem console attachment (AttachConsole/stdout/stderr)
+│   │   ├── context_menu.py     # Windows Explorer (HKCU SystemFileAssociations) & Linux context menu manager
 │   │   ├── instance_guard.py   # Non-blocking single-instance lock (fcntl/msvcrt)
 │   │   ├── notifications.py    # Reusable filing-lifecycle toast messages (success/failure/stranded)
 │   │   ├── secrets.py          # OS credential vault, key masking, & regex log redaction
 │   │   └── toasts.py           # Windows native toast notifications (lazy optional 'windows' extra)
 │   ├── ui/                     # Desktop system tray and settings user interface
 │   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── drop_zone.py        # Tkinter quick-filing drop zone window
 │   │   ├── icon.py             # Procedural high-DPI Pillow icons (active & paused badge states)
 │   │   ├── review.py           # Tkinter review dialog with live suggestions & keyword hints
 │   │   ├── settings.py         # Tkinter settings modal dialog with treeview folder picker & hot-reload
@@ -96,13 +99,13 @@ scansort/
 │       └── state.py            # Update state persistence & check interval tracking
 ├── tests/                      # Pytest automated test suite (>=95% coverage enforced)
 │   ├── classification/         # Tests for client, hints, models, and taxonomy
-│   ├── cli/                    # Tests for modular CLI subcommands and parser
+│   ├── cli/                    # Tests for modular CLI subcommands (including file) and parser
 │   ├── core/                   # Tests for config, constants, and fs utilities
 │   ├── document/               # Tests for converter and metadata engines
 │   ├── logging/                # Tests for audit, setup, cost, and gemini_logger
 │   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, review, stabilizer, undo, watcher, worker
-│   ├── platform/               # Tests for autorun, console, instance_guard, notifications, secrets, toasts
-│   ├── ui/                     # Tests for tray application, procedural icon, review dialog, and settings dialog
+│   ├── platform/               # Tests for autorun, console, context_menu, instance_guard, notifications, secrets, toasts
+│   ├── ui/                     # Tests for tray application, procedural icon, review dialog, settings dialog, and drop zone
 │   ├── updater/                # Tests for downloader, feed, installer, process, and state
 │   └── conftest.py             # Global test isolation fixtures & hermetic mocks
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings
@@ -241,6 +244,23 @@ When modifying or extending ScanSort, you **MUST** uphold the following rules:
 - **Python 3.14 & PEP 758 Standard:** Python 3.14 officially introduced PEP 758 ("Allow unparenthesized except and except* blocks"), which allows omitting parentheses when catching multiple exceptions without an alias (`except TypeError, ValueError:`). When binding an alias (`as`), parentheses remain mandatory (`except (TypeError, ValueError) as exc:`).
 - **Ruff Formatter Canonicalization:** Because `requires-python = ">=3.14"`, the repository's formatter (`ruff format`) automatically canonicalizes unaliased exceptions to `except A, B:` without parentheses. CI strictly enforces `ruff format --check .`.
 - **Reviewer Instruction (Zero False Positives):** Code review agents and contributors **MUST NOT** flag unparenthesized `except A, B:` as a `SyntaxError` or Python 2 relic. It is the official Python 3.14+ standard and canonicalized by `ruff format`.
+
+### T. Digital Document Filing & Shell Context Menu Integration
+- **Direct CLI Filing (`scansort file`):** Files arbitrary digital documents (`.pdf`, `.jpg`, `.jpeg`, `.png`, `.tiff`, `.tif`) directly through the classification pipeline (`handle_file` in `scansort.cli.file_cmd`) without requiring them to be dropped into the physical scanner watch folder.
+  - Supports filing multiple files in a single invocation.
+  - Defaults to moving files (clearing `Downloads` like physical scanner workflows), but supports `--copy` (`-c`) to preserve source files.
+  - Supports `--dry-run` to classify and preview destination paths without moving or copying files.
+  - Rejects non-existent paths, directories, and unsupported extensions with clear diagnostics.
+- **Pipeline Source Preservation (`preserve_source`):** The pipeline coordinator (`ScanSortPipeline.process_file`) supports `preserve_source: bool = False`. When True, documents are copied (via `shutil.copy2`) rather than moved, ensuring digital downloads remain intact at their original location while still applying metadata, auto-rotation, and filing safely to destination or `_Review_Needed/`.
+- **Per-User Shell Context Menu (`scansort.platform.context_menu`):** Registers "File with ScanSort" under `HKCU\Software\Classes\SystemFileAssociations\<ext>\shell\ScanSort` on Windows.
+  - Operates strictly in user-space (`HKEY_CURRENT_USER`), eliminating UAC elevation requirements and preventing conflicts with default application associations or ProgIDs.
+  - Invokes the active executable: `"<exe>" file "%1"`.
+  - Cleans up registry keys on uninstallation or disabling without leaving orphaned entries.
+  - Provides cross-platform Linux Nautilus script integration (`~/.local/share/nautilus/scripts/File with ScanSort`).
+  - Toggleable via CLI (`scansort config --context-menu {enable,disable}`) and Settings UI checkbox.
+- **Desktop Quick-Filer & Drop Zone:**
+  - `DropZoneWindow` (`scansort.ui.drop_zone`) provides a lightweight, stay-on-top window for dragging files, pasting file paths from the clipboard, or browsing via file dialog, with a toggle for source preservation.
+  - The system tray menu exposes both "File Document(s)..." (direct file dialog picker) and "Drop Zone..." for rapid ad-hoc digital document filing.
 
 ---
 

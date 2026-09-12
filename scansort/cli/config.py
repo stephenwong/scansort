@@ -16,6 +16,11 @@ from scansort.platform.autorun import (
     enable_autorun,
     is_autorun_enabled,
 )
+from scansort.platform.context_menu import (
+    disable_context_menu,
+    enable_context_menu,
+    is_context_menu_enabled,
+)
 from scansort.platform.secrets import (
     get_api_key,
     mask_api_key,
@@ -236,11 +241,27 @@ def handle_config(parsed: argparse.Namespace) -> int:
             return 1
         print(f"Auto-start on boot: {status_str}")
 
+    if getattr(parsed, "context_menu", None):
+        has_mutation = True
+        enable = parsed.context_menu == "enable"
+        action_fn = enable_context_menu if enable else disable_context_menu
+        action_name = "enable" if enable else "disable"
+        status_str = "ENABLED" if enable else "DISABLED"
+
+        if not action_fn():
+            print(
+                f"Error: Failed to {action_name} Windows Explorer context menu.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Windows Explorer context menu: {status_str}")
+
     show_config = getattr(parsed, "show", False) or not has_mutation
     if show_config:
         api_key = get_api_key()
         masked = mask_api_key(api_key)
         autorun_status = "Enabled" if is_autorun_enabled() else "Disabled"
+        context_menu_status = "Enabled" if is_context_menu_enabled() else "Disabled"
 
         if getattr(parsed, "json", False):
             import json
@@ -253,6 +274,7 @@ def handle_config(parsed: argparse.Namespace) -> int:
                 "fallback_folder": cfg.fallback_folder,
                 "gemini_model": cfg.gemini_model,
                 "start_on_boot": is_autorun_enabled(),
+                "context_menu": is_context_menu_enabled(),
                 "dry_run": cfg.dry_run,
                 "max_folder_depth": cfg.max_folder_depth,
                 "mirror_log_to_documents": cfg.mirror_log_to_documents,
@@ -271,6 +293,7 @@ def handle_config(parsed: argparse.Namespace) -> int:
         print(f"Fallback Folder:   {cfg.fallback_folder}")
         print(f"Gemini Model:      {cfg.gemini_model}")
         print(f"Start on Boot:     {autorun_status}")
+        print(f"Context Menu:      {context_menu_status}")
         print(f"Dry Run Mode:      {cfg.dry_run}")
         auto_update = "Enabled" if cfg.auto_update else "Disabled"
         print(f"Auto Update:       {auto_update}")

@@ -50,7 +50,10 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 ### 🖥️ Desktop Integration
 
 - 🔲 **System tray app** — Runs quietly in your notification area. Pause/resume monitoring, undo moves, browse your folder taxonomy, open settings, and check for updates — all from the tray icon.
-- ⚙️ **Settings dialog** — A visual settings window to configure folders, pick your Gemini model, manage your API key securely, toggle auto-start, and explore your folder tree with a built-in folder picker. Changes apply instantly to the running watcher.
+- 🖱️ **Windows Explorer context menu** — Right-click any PDF or image in Windows Explorer $\rightarrow$ **"File with ScanSort"** to file digital downloads (Amazon invoices, flight tickets, emailed statements) directly without moving them into a scanner folder.
+- ⚡ **Direct CLI filing** — Run `scansort file <path>` to process documents in-place or preserve originals with `--copy`.
+- 🎯 **Drop Zone & Quick Filer** — Access a minimalist desktop Drop Zone from the system tray or settings window to drag, paste, or select documents for instant filing.
+- ⚙️ **Settings dialog** — A visual settings window to configure folders, pick your Gemini model, manage your API key securely, toggle auto-start and Explorer context menu, and explore your folder tree with a built-in folder picker. Changes apply instantly to the running watcher.
 - 🔔 **Windows notifications** — Native toast notifications tell you when a document is filed (click to open the folder), when something fails (with a "View Logs" button), or when an update is available.
 - 🚀 **Auto-start on login** — Optionally launches at boot via Windows Registry so your scans are always filed, even if you forget to open the app.
 
@@ -156,6 +159,7 @@ All settings can be changed via the **Settings dialog** (tray → Settings...) o
 | Gemini model | `--gemini-model` | AI model for classification | `gemini-3.1-flash-lite` |
 | API key | `--set-key` | Stored in OS credential vault | — |
 | Auto-start | `--autostart enable/disable` | Launch on login | Disabled |
+| Context menu | `--context-menu enable/disable` | Windows Explorer right-click integration | Disabled |
 | Dry-run | `--dry-run enable/disable` | Preview without moving files | Disabled |
 | Auto-update | `--auto-update enable/disable` | Check for updates on launch | Enabled |
 | Max folder depth | `--max-depth` | How deep to scan taxonomy (1–10) | 10 |
@@ -173,8 +177,11 @@ View current settings: `uv run scansort config --show`
 | `scansort watch` | Start monitoring with system tray |
 | `scansort watch --dry-run` | Preview classifications without moving files |
 | `scansort watch --minimized` | Start without banner output |
+| `scansort file <path...>` | File one or more digital documents directly |
+| `scansort file <path...> --copy` | File documents while preserving original source files |
 | `scansort config --show` | View current configuration |
 | `scansort config --set-key <KEY>` | Store API key securely |
+| `scansort config --context-menu enable` | Enable Explorer right-click "File with ScanSort" |
 | `scansort review` | Interactively review & file documents in `_Review_Needed` |
 | `scansort review --gui` | Open the graphical review dialog |
 | `scansort review --cli` | Review unfiled scans in the terminal |

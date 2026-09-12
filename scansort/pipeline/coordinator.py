@@ -161,6 +161,7 @@ class ScanSortPipeline:
         file_path: Path,
         file_hash: str,
         existing_record: dict[str, Any],
+        preserve_source: bool = False,
     ) -> Path:
         """Route a detected duplicate scan to the duplicates review folder."""
         logger.info(
@@ -189,7 +190,10 @@ class ScanSortPipeline:
             dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
             dup_dest_dir.mkdir(parents=True, exist_ok=True)
             try:
-                shutil.move(str(file_path), str(dup_dest))
+                if preserve_source:
+                    shutil.copy2(str(file_path), str(dup_dest))
+                else:
+                    shutil.move(str(file_path), str(dup_dest))
             except OSError:
                 dup_dest.unlink(missing_ok=True)
                 raise
@@ -240,6 +244,7 @@ class ScanSortPipeline:
         file_path: Path,
         classification: DocumentClassification,
         file_hash: str,
+        preserve_source: bool = False,
     ) -> Path:
         """Apply rotation, embed metadata, dispatch to destination, and write audit record."""
         keywords = [classification.document_type, classification.target_folder]
@@ -258,8 +263,12 @@ class ScanSortPipeline:
             lock_path=self.operations_lock,
         )
 
-        # Remove original file from drop folder (S3-14: don't let unlink error abort audit log)
-        if file_path.exists():
+        # Remove original file from drop folder if not preserving source
+        if (
+            not preserve_source
+            and file_path.exists()
+            and file_path.resolve() != final_dest.resolve()
+        ):
             try:
                 file_path.unlink()
             except OSError as e:
@@ -296,11 +305,14 @@ class ScanSortPipeline:
         )
         return final_dest
 
-    def process_file(self, file_path: Path) -> Path | None:
+    def process_file(
+        self, file_path: Path, preserve_source: bool = False
+    ) -> Path | None:
         """Process an incoming scan file through the full classification pipeline.
 
         Args:
             file_path: Absolute path to the incoming file.
+            preserve_source: If True, do not remove the original source file.
 
         Returns:
             Destination Path if filed successfully, or None if skipped/failed.
@@ -330,7 +342,12 @@ class ScanSortPipeline:
             file_hash = compute_file_sha256(file_path)
             existing_record = check_duplicate(file_hash, self.audit_logger.jsonl_path)
             if existing_record:
-                return self._route_duplicate(file_path, file_hash, existing_record)
+                return self._route_duplicate(
+                    file_path,
+                    file_hash,
+                    existing_record,
+                    preserve_source=preserve_source,
+                )
 
             # 3. Stage incoming scan into isolated app temporary directory upfront (Rule 3.H)
             staging_pdf = self._stage_to_temp(file_path)
@@ -375,11 +392,14 @@ class ScanSortPipeline:
                 file_path=file_path,
                 classification=classification,
                 file_hash=file_hash,
+                preserve_source=preserve_source,
             )
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing
             logger.error("Failed to process scan %s: %s", file_path.name, e)
-            self._route_failed_to_review(file_path, reason=str(e))
+            self._route_failed_to_review(
+                file_path, reason=str(e), preserve_source=preserve_source
+            )
             return None
 
         finally:
@@ -388,7 +408,10 @@ class ScanSortPipeline:
                 staging_pdf.unlink(missing_ok=True)
 
     def _route_failed_to_review(
-        self, file_path: Path, reason: str | None = None
+        self,
+        file_path: Path,
+        reason: str | None = None,
+        preserve_source: bool = False,
     ) -> None:
         """Best-effort relocation of an unprocessable inbox file to the review folder.
 
@@ -405,7 +428,10 @@ class ScanSortPipeline:
             )
             review_dir.mkdir(parents=True, exist_ok=True)
             review_dest = resolve_collision(review_dir, file_path.name)
-            shutil.move(str(file_path), str(review_dest))
+            if preserve_source:
+                shutil.copy2(str(file_path), str(review_dest))
+            else:
+                shutil.move(str(file_path), str(review_dest))
             resolved_docs = self.config.documents_root.resolve()
             folder_str = str(review_dir.relative_to(resolved_docs)).replace("\\", "/")
             self.audit_logger.log_scan(

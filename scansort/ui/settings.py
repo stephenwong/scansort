@@ -16,6 +16,11 @@ from scansort.platform.autorun import (
     enable_autorun,
     is_autorun_enabled,
 )
+from scansort.platform.context_menu import (
+    disable_context_menu,
+    enable_context_menu,
+    is_context_menu_enabled,
+)
 from scansort.platform.secrets import (
     get_api_key,
     mask_api_key,
@@ -89,6 +94,7 @@ class SettingsDialog(tk.Toplevel):
         self.fallback_var = tk.StringVar(value=self.config.fallback_folder)
         self.dry_run_var = tk.BooleanVar(value=self.config.dry_run)
         self.autorun_var = tk.BooleanVar(value=is_autorun_enabled())
+        self.context_menu_var = tk.BooleanVar(value=is_context_menu_enabled())
 
         self._build_ui()
         self.refresh_taxonomy_tree()
@@ -215,9 +221,19 @@ class SettingsDialog(tk.Toplevel):
         ).pack(anchor=tk.W, pady=2)
         ttk.Checkbutton(
             opts_frame,
+            text="Enable 'File with ScanSort' in Explorer context menu",
+            variable=self.context_menu_var,
+        ).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(
+            opts_frame,
             text="Dry-Run Mode (simulate filing without moving files)",
             variable=self.dry_run_var,
         ).pack(anchor=tk.W, pady=2)
+        ttk.Button(
+            opts_frame,
+            text="Open Quick File / Drop Zone...",
+            command=self._open_drop_zone,
+        ).pack(anchor=tk.W, pady=(6, 2))
 
         # 5. Buttons
         btn_bar = ttk.Frame(container)
@@ -340,6 +356,17 @@ class SettingsDialog(tk.Toplevel):
         except OSError as e:
             logger.warning("Could not update autorun setting: %s", e)
 
+        try:
+            if self.context_menu_var.get():
+                context_menu_ok = enable_context_menu()
+            else:
+                context_menu_ok = disable_context_menu()
+            if not context_menu_ok:
+                logger.warning("Could not update context menu setting.")
+        except OSError as e:
+            logger.warning("Could not update context menu setting: %s", e)
+            context_menu_ok = False
+
         self.config = new_cfg
         if self.on_applied is not None:
             try:
@@ -347,8 +374,19 @@ class SettingsDialog(tk.Toplevel):
             except Exception as e:  # noqa: BLE001
                 logger.error("Error in on_applied callback: %s", e)
 
-        show_toast("ScanSort Settings", "Settings saved and applied successfully.")
+        if context_menu_ok:
+            show_toast("ScanSort Settings", "Settings saved and applied successfully.")
+        else:
+            show_toast(
+                "ScanSort Settings",
+                "Settings saved, but the context menu could not be updated.",
+            )
         self.destroy()
+
+    def _open_drop_zone(self) -> None:
+        from scansort.ui.drop_zone import open_drop_zone_window
+
+        open_drop_zone_window(master=self, config=self.config)
 
     def destroy(self) -> None:
         global _ACTIVE_DIALOG_INSTANCE

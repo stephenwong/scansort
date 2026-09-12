@@ -277,3 +277,52 @@ def test_tray_app_menu_shows_version_in_status_item(tmp_path: Path):
     menu_paused = app._build_menu()
     status_item_paused = menu_paused.items[0]
     assert f"ScanSort {__version__}: Monitoring Paused" == status_item_paused.text
+
+
+def test_tray_app_menu_contains_file_and_drop_zone(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    menu = app._build_menu()
+    menu_texts = [getattr(item, "text", "") for item in menu.items]
+    assert "File Document(s)..." in menu_texts
+    assert "Drop Zone..." in menu_texts
+
+
+def test_tray_app_file_documents_dialog(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    test_pdf = tmp_path / "test.pdf"
+    test_pdf.write_bytes(b"%PDF-1.4")
+    mock_pipeline.process_file.return_value = tmp_path / "Documents" / "test.pdf"
+
+    with (
+        patch("tkinter.filedialog.askopenfilenames", return_value=[str(test_pdf)]),
+        patch("tkinter.Tk"),
+        patch("scansort.ui.tray.show_toast") as mock_toast,
+    ):
+        app.file_documents_dialog(async_task=False)
+        mock_pipeline.process_file.assert_called_once_with(
+            test_pdf.resolve(), preserve_source=False
+        )
+        assert mock_toast.call_count >= 1
+
+    # Empty selection test
+    with (
+        patch("tkinter.filedialog.askopenfilenames", return_value=[]),
+        patch("tkinter.Tk"),
+    ):
+        mock_pipeline.reset_mock()
+        app.file_documents_dialog(async_task=False)
+        mock_pipeline.process_file.assert_not_called()
+
+
+def test_tray_app_open_drop_zone(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    mock_dialog = MagicMock()
+    mock_dialog._owns_root = True
+    mock_dialog._mainloop_running = False
+
+    with patch(
+        "scansort.ui.drop_zone.open_drop_zone_window", return_value=mock_dialog
+    ) as mock_open:
+        app.open_drop_zone(async_task=False)
+        mock_open.assert_called_once()
+        mock_dialog.mainloop.assert_called_once()

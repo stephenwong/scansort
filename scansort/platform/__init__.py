@@ -6,6 +6,11 @@ from scansort.platform.autorun import (
     is_autorun_enabled,
 )
 from scansort.platform.console import attach_parent_console
+from scansort.platform.context_menu import (
+    disable_context_menu,
+    enable_context_menu,
+    is_context_menu_enabled,
+)
 from scansort.platform.instance_guard import instance_guard
 from scansort.platform.notifications import (
     file_filed_message,
@@ -28,6 +33,9 @@ __all__ = [
     "disable_autorun",
     "enable_autorun",
     "is_autorun_enabled",
+    "disable_context_menu",
+    "enable_context_menu",
+    "is_context_menu_enabled",
     "attach_parent_console",
     "instance_guard",
     "delete_api_key",

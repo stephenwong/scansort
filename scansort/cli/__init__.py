@@ -1,5 +1,6 @@
 from scansort.cli.completion import handle_completion
 from scansort.cli.config import handle_config
+from scansort.cli.file_cmd import handle_file
 from scansort.cli.help import handle_help
 from scansort.cli.history import handle_history
 from scansort.cli.logs import handle_logs
@@ -16,6 +17,7 @@ __all__ = [
     "main_cli",
     "build_parser",
     "handle_watch",
+    "handle_file",
     "handle_config",
     "handle_undo",
     "handle_review",

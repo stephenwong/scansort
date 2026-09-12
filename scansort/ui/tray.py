@@ -125,6 +125,10 @@ class SystemTrayApp:
         return pystray.Menu(
             pystray.MenuItem(status_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "File Document(s)...", lambda icon, item: self.file_documents_dialog()
+            ),
+            pystray.MenuItem("Drop Zone...", lambda icon, item: self.open_drop_zone()),
             pystray.MenuItem(pause_action_text, lambda icon, item: self.toggle_pause()),
             pystray.MenuItem(review_text, lambda icon, item: self.open_review()),
             pystray.MenuItem("Undo Last Move", lambda icon, item: self.undo_last()),
@@ -289,6 +293,89 @@ class SystemTrayApp:
             target=_task,
             daemon=True,
         )
+        t.start()
+        return t
+
+    def file_documents_dialog(self, async_task: bool = True) -> threading.Thread | None:
+        """Prompt user with native file picker and file selected documents."""
+
+        def _task():
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                chosen = filedialog.askopenfilenames(
+                    title="Select Documents to File",
+                    filetypes=[
+                        (
+                            "Supported Documents",
+                            "*.pdf;*.jpg;*.jpeg;*.png;*.tiff;*.tif",
+                        ),
+                        ("All Files", "*.*"),
+                    ],
+                )
+            finally:
+                root.destroy()
+
+            if not chosen:
+                return
+
+            paths = [Path(p) for p in chosen]
+            show_toast("ScanSort", f"Filing {len(paths)} document(s)...")
+            success = 0
+            if self.pipeline is not None:
+                for p in paths:
+                    try:
+                        dest = self.pipeline.process_file(
+                            p.resolve(), preserve_source=False
+                        )
+                        if dest is not None:
+                            success += 1
+                    except Exception as e:  # noqa: BLE001
+                        logger.error("Error filing document %s: %s", p.name, e)
+
+            show_toast("ScanSort", f"Filed {success} of {len(paths)} document(s).")
+            with self._lock:
+                if self.icon is not None:
+                    self.icon.menu = self._build_menu()
+
+        if not async_task:
+            _task()
+            return None
+        t = threading.Thread(target=_task, daemon=True)
+        t.start()
+        return t
+
+    def open_drop_zone(self, async_task: bool = True) -> threading.Thread | None:
+        """Display the Tkinter quick-filing Drop Zone window."""
+
+        def _task():
+            from scansort.ui.drop_zone import open_drop_zone_window
+
+            def _on_filed(_dest: Path) -> None:
+                with self._lock:
+                    if self.icon is not None:
+                        self.icon.menu = self._build_menu()
+
+            dialog = open_drop_zone_window(
+                config=self.config,
+                pipeline=self.pipeline,
+                on_filed=_on_filed,
+            )
+            if (
+                dialog is not None
+                and getattr(dialog, "_owns_root", False)
+                and not getattr(dialog, "_mainloop_running", False)
+            ):
+                with contextlib.suppress(Exception):
+                    dialog.mainloop()
+
+        if not async_task:
+            _task()
+            return None
+        t = threading.Thread(target=_task, daemon=True)
         t.start()
         return t
 

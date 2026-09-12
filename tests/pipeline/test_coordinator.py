@@ -841,3 +841,103 @@ def test_pipeline_update_config(tmp_path: Path):
     assert pipeline.classifier.model == "gemini-3.5-flash-lite"
     assert pipeline.audit_logger.mirror_csv_path == cfg2.mirror_csv_path
     assert pipeline.audit_logger.mirror_csv_path is not None
+
+
+def test_pipeline_preserve_source_successful_filing(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Taxes").mkdir(parents=True)
+
+    log_dir = tmp_path / "appdata"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260415",
+        description="Tax_Return",
+        target_folder="Taxes",
+        confidence=0.98,
+        orientation_correction=0,
+        document_type="Tax_Form",
+        summary="Annual tax return",
+    )
+
+    pipeline = ScanSortPipeline(config=cfg, app_dir=log_dir, classifier=mock_classifier)
+    scan_file = inbox / "w2.jpg"
+    _create_sample_scan(scan_file)
+
+    dest_file = pipeline.process_file(scan_file, preserve_source=True)
+
+    assert dest_file is not None
+    assert dest_file.exists()
+    assert dest_file.name == "260415_Tax_Return.pdf"
+    # Source file MUST be preserved!
+    assert scan_file.exists()
+
+
+def test_pipeline_preserve_source_duplicate(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Finance").mkdir(parents=True)
+
+    log_dir = tmp_path / "appdata"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260101",
+        description="Receipt",
+        target_folder="Finance",
+        confidence=0.95,
+        orientation_correction=0,
+        document_type="Receipt",
+        summary="Receipt summary",
+    )
+
+    pipeline = ScanSortPipeline(config=cfg, app_dir=log_dir, classifier=mock_classifier)
+    scan_file = inbox / "receipt.jpg"
+    _create_sample_scan(scan_file)
+
+    # First filing (move)
+    first_dest = pipeline.process_file(scan_file, preserve_source=False)
+    assert first_dest is not None
+    assert not scan_file.exists()
+
+    # Re-create same file
+    _create_sample_scan(scan_file)
+
+    # Second filing with preserve_source=True (duplicate)
+    dup_dest = pipeline.process_file(scan_file, preserve_source=True)
+    assert dup_dest is not None
+    assert "Duplicates" in str(dup_dest)
+    assert dup_dest.exists()
+    # Source file MUST be preserved!
+    assert scan_file.exists()
+
+
+def test_pipeline_preserve_source_failure(tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+
+    log_dir = tmp_path / "appdata"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+
+    mock_classifier = MagicMock()
+    mock_classifier.classify_document.side_effect = APIError(
+        500, "Simulated upstream 500 error"
+    )
+
+    pipeline = ScanSortPipeline(config=cfg, app_dir=log_dir, classifier=mock_classifier)
+    scan_file = inbox / "broken.jpg"
+    _create_sample_scan(scan_file)
+
+    dest = pipeline.process_file(scan_file, preserve_source=True)
+    assert dest is None
+    # Source file MUST be preserved!
+    assert scan_file.exists()
+    # Failed copy should be in _Review_Needed
+    review_dir = docs_root / "_Review_Needed"
+    assert (review_dir / "broken.jpg").exists()

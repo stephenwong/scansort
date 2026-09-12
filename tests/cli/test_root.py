@@ -133,6 +133,7 @@ def test_main_cli_verbose_sets_debug_logging(monkeypatch):
 
 def test_main_cli_routes_all_subcommands():
     subcommand_handlers = [
+        ("file", "scansort.cli.root.handle_file"),
         ("logs", "scansort.cli.root.handle_logs"),
         ("history", "scansort.cli.root.handle_history"),
         ("stats", "scansort.cli.root.handle_stats"),
@@ -141,6 +142,10 @@ def test_main_cli_routes_all_subcommands():
     ]
     for subcmd, handler_path in subcommand_handlers:
         with patch(handler_path, return_value=0) as mock_handler:
-            extra_args = ["bash"] if subcmd == "completion" else []
+            extra_args = (
+                ["test.pdf"]
+                if subcmd == "file"
+                else (["bash"] if subcmd == "completion" else [])
+            )
             assert main_cli([subcmd, *extra_args]) == 0
             assert mock_handler.called

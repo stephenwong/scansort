@@ -381,3 +381,38 @@ def test_cli_config_set_save_failure(capsys):
             main_cli(["config", "--set", "gemini_model", "gemini-3.5-flash-lite"]) == 1
         )
         assert "Error saving configuration" in capsys.readouterr().err
+
+
+def test_cli_config_context_menu_toggle(capsys):
+    with patch("scansort.cli.config.enable_context_menu", return_value=True) as mock_en:
+        assert main_cli(["config", "--context-menu", "enable"]) == 0
+        assert mock_en.called
+        assert "Windows Explorer context menu: ENABLED" in capsys.readouterr().out
+
+    with patch(
+        "scansort.cli.config.disable_context_menu", return_value=True
+    ) as mock_dis:
+        assert main_cli(["config", "--context-menu", "disable"]) == 0
+        assert mock_dis.called
+        assert "Windows Explorer context menu: DISABLED" in capsys.readouterr().out
+
+
+def test_cli_config_context_menu_failure(capsys):
+    with patch("scansort.cli.config.enable_context_menu", return_value=False):
+        assert main_cli(["config", "--context-menu", "enable"]) == 1
+        assert (
+            "Failed to enable Windows Explorer context menu" in capsys.readouterr().err
+        )
+
+
+def test_cli_config_show_context_menu(capsys):
+    with (
+        patch("scansort.cli.config.get_api_key", return_value="AIzaSyTest1234567890"),
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.is_context_menu_enabled", return_value=True),
+    ):
+        assert main_cli(["config", "--show"]) == 0
+        assert "Context Menu:      Enabled" in capsys.readouterr().out
+
+        assert main_cli(["config", "--json"]) == 0
+        assert '"context_menu": true' in capsys.readouterr().out

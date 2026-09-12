@@ -44,6 +44,7 @@ def test_settings_dialog_initialization(tk_root, tmp_path: Path):
             return_value="AIzaSyDummyKey1234567890abcdef",
         ),
         patch("scansort.ui.settings.is_autorun_enabled", return_value=True),
+        patch("scansort.ui.settings.is_context_menu_enabled", return_value=True),
     ):
         dialog = SettingsDialog(master=tk_root, config=cfg)
 
@@ -53,6 +54,7 @@ def test_settings_dialog_initialization(tk_root, tmp_path: Path):
         assert dialog.fallback_var.get() == "_Review_Needed"
         assert dialog.dry_run_var.get() is True
         assert dialog.autorun_var.get() is True
+        assert dialog.context_menu_var.get() is True
         dialog.destroy()
 
 
@@ -248,4 +250,67 @@ def test_settings_dialog_rejects_empty_paths(tk_root, tmp_path: Path):
         dialog.on_save()
         mock_error.assert_called_once()
         assert "Documents Destination Root" in mock_error.call_args[0][1]
+    dialog.destroy()
+
+
+def test_settings_dialog_context_menu_toggle(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    with (
+        patch("scansort.ui.settings.save_config"),
+        patch("scansort.ui.settings.enable_context_menu") as mock_enable,
+        patch("scansort.ui.settings.disable_context_menu") as mock_disable,
+        patch("scansort.ui.settings.show_toast"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+
+        # Enable context menu
+        dialog.context_menu_var.set(True)
+        dialog.on_save()
+        mock_enable.assert_called_once()
+
+        # Disable context menu
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        dialog.context_menu_var.set(False)
+        dialog.on_save()
+        mock_disable.assert_called_once()
+
+
+def test_settings_dialog_context_menu_failure_toast(tk_root, tmp_path: Path):
+    """A failed context-menu toggle surfaces to the user instead of a plain success toast."""
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    with (
+        patch("scansort.ui.settings.save_config"),
+        patch("scansort.ui.settings.enable_context_menu", return_value=False),
+        patch("scansort.ui.settings.show_toast") as mock_toast,
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        dialog.context_menu_var.set(True)
+        dialog.on_save()
+        dialog.destroy()
+
+    messages = " | ".join(str(c.args[1]) for c in mock_toast.call_args_list)
+    assert "context menu could not be updated" in messages
+
+
+def test_settings_dialog_open_drop_zone(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+    with patch("scansort.ui.drop_zone.open_drop_zone_window") as mock_open:
+        dialog._open_drop_zone()
+        mock_open.assert_called_once_with(master=dialog, config=dialog.config)
     dialog.destroy()
