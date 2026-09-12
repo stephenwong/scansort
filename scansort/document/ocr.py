@@ -45,14 +45,23 @@ _TESSERACT_ERRORS: tuple[type[BaseException], ...] = (pytesseract.TesseractError
 
 
 def _bundled_tesseract_path() -> Path | None:
-    """Return the tesseract binary shipped alongside a frozen ScanSort build."""
+    """Return the tesseract binary shipped alongside a frozen ScanSort build.
+
+    PyInstaller 6 one-folder builds place bundled binaries under ``_internal``
+    (``sys._MEIPASS``), so check there before the executable's own directory.
+    """
     if not getattr(sys, "frozen", False):
         return None
-    exe_dir = Path(sys.executable).parent
-    for name in ("tesseract.exe", "tesseract"):
-        candidate = exe_dir / "tesseract" / name
-        if candidate.is_file():
-            return candidate
+    search_dirs: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        search_dirs.append(Path(meipass))
+    search_dirs.append(Path(sys.executable).parent)
+    for base_dir in search_dirs:
+        for name in ("tesseract.exe", "tesseract"):
+            candidate = base_dir / "tesseract" / name
+            if candidate.is_file():
+                return candidate
     return None
 
 

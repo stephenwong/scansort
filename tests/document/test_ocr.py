@@ -422,6 +422,25 @@ def test_bundled_tesseract_path_returns_none_when_absent(tmp_path: Path, monkeyp
     assert _bundled_tesseract_path() is None
 
 
+def test_bundled_tesseract_path_uses_pyinstaller_internal_dir(
+    tmp_path: Path, monkeypatch
+):
+    """PyInstaller 6 bundles files under _internal (sys._MEIPASS)."""
+    import sys
+
+    from scansort.document.ocr import _bundled_tesseract_path
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "ScanSort.exe"))
+    meipass = tmp_path / "_internal"
+    bundled = meipass / "tesseract" / "tesseract.exe"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(b"exe")
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+
+    assert _bundled_tesseract_path() == bundled
+
+
 def test_needs_ocr_missing_file_raises(tmp_path: Path):
     with pytest.raises(OcrError, match="not found"):
         needs_ocr(tmp_path / "ghost.pdf")

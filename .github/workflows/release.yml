@@ -49,9 +49,19 @@ jobs:
       - name: Verify bundled OCR engine
         shell: pwsh
         run: |
-          if (-not (Test-Path dist\ScanSort\tesseract\tesseract.exe)) { throw "bundled tesseract missing" }
-          if (-not (Test-Path dist\ScanSort\tesseract\tessdata\eng.traineddata)) { throw "bundled eng.traineddata missing" }
-          dist\ScanSort\tesseract\tesseract.exe --version
+          $exeCandidates = @(
+            "dist\ScanSort\_internal\tesseract\tesseract.exe",
+            "dist\ScanSort\tesseract\tesseract.exe"
+          )
+          $exe = $exeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { throw "bundled tesseract missing" }
+          $langCandidates = @(
+            "dist\ScanSort\_internal\tesseract\tessdata\eng.traineddata",
+            "dist\ScanSort\tesseract\tessdata\eng.traineddata"
+          )
+          $lang = $langCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $lang) { throw "bundled eng.traineddata missing" }
+          & $exe --version
 
       - name: Test compiled binary
         shell: pwsh
