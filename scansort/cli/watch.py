@@ -6,6 +6,7 @@ import queue
 import sys
 import threading
 
+from scansort.cli.args import CliArgs
 from scansort.cli.config import _load_config_or_exit, _with_overrides
 from scansort.cli.update import (
     announce_applied_update,
@@ -75,20 +76,15 @@ def _run_monitor(cfg: AppConfig, start_tray: bool = True) -> int:
 
 def handle_watch(parsed: argparse.Namespace) -> int:
     """Handle 'watch' command to start monitoring the drop folder."""
+    args = CliArgs.from_namespace(parsed)
     cfg = _load_config_or_exit()
     if cfg is None:
         return 1
-    new_watch = (
-        parsed.watch_folder.resolve()
-        if getattr(parsed, "watch_folder", None)
-        else cfg.watch_folder
-    )
+    new_watch = args.watch_folder.resolve() if args.watch_folder else cfg.watch_folder
     new_docs = (
-        parsed.documents_root.resolve()
-        if getattr(parsed, "documents_root", None)
-        else cfg.documents_root
+        args.documents_root.resolve() if args.documents_root else cfg.documents_root
     )
-    dry_run = getattr(parsed, "dry_run", False) or cfg.dry_run
+    dry_run = args.dry_run or cfg.dry_run
 
     new_cfg = _with_overrides(
         cfg, watch_folder=new_watch, documents_root=new_docs, dry_run=dry_run
@@ -103,7 +99,7 @@ def handle_watch(parsed: argparse.Namespace) -> int:
         print(f"Error preparing directories: {e}", file=sys.stderr)
         return 1
 
-    if not getattr(parsed, "minimized", False):
+    if not args.minimized:
         print(f"Starting ScanSort monitor on: {cfg.watch_folder}")
         print(f"Destination Documents root: {cfg.documents_root}")
         if cfg.dry_run:

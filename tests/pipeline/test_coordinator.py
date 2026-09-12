@@ -14,7 +14,16 @@ from PIL import Image
 
 from scansort.classification.models import DocumentClassification
 from scansort.core.config import AppConfig
+from scansort.core.constants import DEFAULT_GEMINI_MODEL
 from scansort.pipeline.coordinator import ScanSortPipeline
+
+
+def _make_classifier() -> MagicMock:
+    """MagicMock classifier carrying the real attribute contract the pipeline reads."""
+    classifier = MagicMock()
+    classifier.model = DEFAULT_GEMINI_MODEL
+    classifier._client = None
+    return classifier
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +61,7 @@ def test_pipeline_e2e_successful_flow(tmp_path: Path):
     )
 
     # Mock classifier
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260901",
         description="Origin_Energy_Bill",
@@ -99,7 +108,7 @@ def test_pipeline_e2e_duplicate_detection(tmp_path: Path):
     log_dir = tmp_path / "appdata"
     cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260901",
         description="Electricity_Bill",
@@ -147,7 +156,7 @@ def test_pipeline_e2e_dry_run_mode(tmp_path: Path):
         dry_run=True,
     )
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260901",
         description="ATO_Notice",
@@ -233,7 +242,7 @@ def test_coordinator_handles_api_error_and_routes_to_review(tmp_path: Path):
     docs = tmp_path / "docs"
     docs.mkdir()
     cfg = AppConfig(watch_folder=inbox, documents_root=docs)
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.side_effect = APIError(
         429, {"error": {"message": "Quota exceeded"}}
     )
@@ -599,7 +608,7 @@ def test_pipeline_filed_toast_fired_with_destination(tmp_path: Path):
     docs_root = tmp_path / "Documents"
     (docs_root / "Utilities" / "Electricity").mkdir(parents=True)
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260901",
         description="Origin_Energy_Bill",
@@ -631,7 +640,7 @@ def test_pipeline_failure_toast_when_routed_to_review(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
     docs_root = tmp_path / "Documents"
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.side_effect = RuntimeError("rate limited 429")
     pipeline = ScanSortPipeline(
         config=AppConfig(watch_folder=inbox, documents_root=docs_root),
@@ -659,7 +668,7 @@ def test_pipeline_stranded_toast_when_review_routing_fails(tmp_path: Path, monke
     inbox = tmp_path / "Inbox"
     inbox.mkdir()
     docs_root = tmp_path / "Documents"
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.side_effect = RuntimeError("boom")
     pipeline = ScanSortPipeline(
         config=AppConfig(watch_folder=inbox, documents_root=docs_root),
@@ -828,7 +837,7 @@ def test_pipeline_records_resolved_destination_folder_when_redirected(tmp_path: 
     app_dir.mkdir()
 
     cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     # Model returns path traversal folder attempt
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260906",
@@ -903,7 +912,7 @@ def test_pipeline_preserve_source_successful_filing(tmp_path: Path):
     log_dir = tmp_path / "appdata"
     cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260415",
         description="Tax_Return",
@@ -936,7 +945,7 @@ def test_pipeline_preserve_source_duplicate(tmp_path: Path):
     log_dir = tmp_path / "appdata"
     cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260101",
         description="Receipt",
@@ -976,7 +985,7 @@ def test_pipeline_preserve_source_failure(tmp_path: Path):
     log_dir = tmp_path / "appdata"
     cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.side_effect = APIError(
         500, "Simulated upstream 500 error"
     )
@@ -1002,7 +1011,7 @@ def test_duplicate_race_detected_inside_dispatch_lock(tmp_path: Path):
     (docs_root / "Utilities").mkdir(parents=True)
     cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
 
-    mock_classifier = MagicMock()
+    mock_classifier = _make_classifier()
     mock_classifier.classify_document.return_value = DocumentClassification(
         document_date="260901",
         description="Race_Doc",

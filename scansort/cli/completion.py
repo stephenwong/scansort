@@ -3,6 +3,8 @@
 import argparse
 import sys
 
+from scansort.cli.args import CliArgs
+
 # Canonical subcommand inventory shared by every generated completion script.
 _SUBCOMMANDS: tuple[str, ...] = (
     "watch",
@@ -309,7 +311,7 @@ _SHELL_TEMPLATES = {
 
 def handle_completion(parsed: argparse.Namespace) -> int:
     """Generate shell completion script for the requested shell."""
-    shell = getattr(parsed, "shell", "bash").lower()
+    shell = CliArgs.from_namespace(parsed).shell.lower()
     template = _SHELL_TEMPLATES.get(shell)
     if not template:
         print(

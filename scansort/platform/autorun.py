@@ -6,7 +6,11 @@ import sys
 from pathlib import Path
 
 from scansort.platform._commands import build_executable_invocation
-from scansort.platform._linux import remove_xdg_file, write_xdg_file
+from scansort.platform._linux import (
+    remove_xdg_file,
+    write_xdg_file,
+    xdg_file_has_markers,
+)
 from scansort.platform._winreg_seam import load_winreg
 
 logger = logging.getLogger(__name__)
@@ -48,14 +52,8 @@ def is_autorun_enabled() -> bool:
 
     if sys.platform.startswith("linux"):
         desktop_file = _get_linux_autostart_path()
-        if not desktop_file.exists():
-            return False
-        try:
-            content = desktop_file.read_text(encoding="utf-8")
-        except OSError:
-            return False
         # A truncated/stale file must not report "Enabled".
-        return "Type=Application" in content and "Exec=" in content
+        return xdg_file_has_markers(desktop_file, "Type=Application", "Exec=")
 
     return False
 

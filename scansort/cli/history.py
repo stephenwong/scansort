@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from scansort.cli.args import CliArgs
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HISTORY_JSONL_NAME
 
@@ -51,6 +52,7 @@ def _truncate_column(value: str, width: int) -> str:
 
 def handle_history(parsed: argparse.Namespace) -> int:
     """Handle 'history' command to view, filter, or export filing records."""
+    args = CliArgs.from_namespace(parsed)
     app_dir = get_default_app_dir()
     history_file = app_dir / HISTORY_JSONL_NAME
 
@@ -60,7 +62,7 @@ def handle_history(parsed: argparse.Namespace) -> int:
         return 0
 
     # Filter by status
-    status_filter = getattr(parsed, "status", None)
+    status_filter = args.status
     if status_filter:
         clean_status = status_filter.strip().upper()
         records = [
@@ -68,7 +70,7 @@ def handle_history(parsed: argparse.Namespace) -> int:
         ]
 
     # Filter by search term
-    search_term = getattr(parsed, "search", None)
+    search_term = args.search
     if search_term:
         q = search_term.strip().lower()
         records = [
@@ -81,16 +83,16 @@ def handle_history(parsed: argparse.Namespace) -> int:
         ]
 
     # Ordering: default newest-first unless --reverse is passed
-    reverse = getattr(parsed, "reverse", False)
+    reverse = args.reverse
     if not reverse:
         records = list(reversed(records))
 
     # Apply limit
-    limit = getattr(parsed, "limit", 20)
+    limit = args.limit if args.limit is not None else 20
     if limit is not None and limit > 0:
         records = records[:limit]
 
-    if getattr(parsed, "json", False):
+    if args.json:
         print(json.dumps(records, indent=2))
         return 0
 

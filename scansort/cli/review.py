@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 
+from scansort.cli.args import CliArgs
 from scansort.cli.config import _load_config_or_exit
 from scansort.core.config import AppConfig, get_default_app_dir
 from scansort.core.constants import (
@@ -201,8 +202,9 @@ def _run_cli_review(
     return 0
 
 
-def handle_review(args: argparse.Namespace) -> int:
+def handle_review(parsed: argparse.Namespace) -> int:
     """Handle review subcommand execution."""
+    args = CliArgs.from_namespace(parsed)
     config = _load_config_or_exit()
     if config is None:
         return 1
@@ -211,13 +213,13 @@ def handle_review(args: argparse.Namespace) -> int:
         print(f"No documents currently require review in '{config.fallback_folder}'.")
         return 0
 
-    use_gui = getattr(args, "gui", False)
-    use_cli = getattr(args, "cli", False)
+    use_gui = args.gui
+    use_cli = args.cli
 
     if use_gui or (not use_cli and _has_gui_display()):
         from scansort.ui.review import open_review_dialog
 
-        limit = getattr(args, "limit", None)
+        limit = args.limit
         if limit:
             print(
                 "Note: --limit applies to the CLI review session only; "
@@ -228,4 +230,4 @@ def handle_review(args: argparse.Namespace) -> int:
         dialog.mainloop()
         return 0
 
-    return _run_cli_review(items, config, limit=getattr(args, "limit", None))
+    return _run_cli_review(items, config, limit=args.limit)

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from scansort import __version__
+from scansort.cli.args import CliArgs
 from scansort.core.config import (
     AppConfig,
     get_default_config_path,
@@ -50,12 +51,10 @@ _MUTATION_FLAGS = (
 )
 
 
-def _has_other_mutations(
-    parsed: argparse.Namespace, exclude: str | None = None
-) -> bool:
+def _has_other_mutations(args: CliArgs, exclude: str | None = None) -> bool:
     """Return True when a mutation flag other than ``exclude`` is present."""
     return any(
-        attr != exclude and getattr(parsed, attr, None) is not None
+        attr != exclude and getattr(args, attr, None) is not None
         for attr in _MUTATION_FLAGS
     )
 
@@ -88,17 +87,17 @@ def _with_overrides(cfg: AppConfig, **overrides: Any) -> AppConfig | None:
         return None
 
 
-def _handle_get(parsed: argparse.Namespace, cfg: AppConfig) -> int | None:
+def _handle_get(args: CliArgs, cfg: AppConfig) -> int | None:
     """Handle the ``--get`` query; returns None when it was not requested."""
-    if not getattr(parsed, "get", None):
+    if not args.get:
         return None
-    if _has_other_mutations(parsed):
+    if _has_other_mutations(args):
         print(
             "Error: --get cannot be combined with mutation flags.",
             file=sys.stderr,
         )
         return 1
-    field_query = parsed.get.strip().lower()
+    field_query = args.get.strip().lower()
     if field_query in ("gemini_key", "api_key", "gemini_api_key"):
         api_key = get_api_key()
         print(mask_api_key(api_key))
@@ -106,20 +105,20 @@ def _handle_get(parsed: argparse.Namespace, cfg: AppConfig) -> int | None:
     if field_query in AppConfig.model_fields:
         print(getattr(cfg, field_query))
         return 0
-    print(f"Unknown configuration field: {parsed.get}", file=sys.stderr)
+    print(f"Unknown configuration field: {args.get}", file=sys.stderr)
     return 1
 
 
-def _handle_set(parsed: argparse.Namespace, cfg: AppConfig) -> int | None:
+def _handle_set(args: CliArgs, cfg: AppConfig) -> int | None:
     """Handle the ``--set FIELD VALUE`` mutation; returns None when not requested."""
-    if not getattr(parsed, "set", None):
+    if not args.set:
         return None
-    field_name = parsed.set[0].strip().lower()
-    raw_val = parsed.set[1].strip()
+    field_name = args.set[0].strip().lower()
+    raw_val = args.set[1].strip()
     if field_name not in AppConfig.model_fields:
-        print(f"Unknown configuration field: {parsed.set[0]}", file=sys.stderr)
+        print(f"Unknown configuration field: {args.set[0]}", file=sys.stderr)
         return 1
-    if _has_other_mutations(parsed):
+    if _has_other_mutations(args):
         print(
             "Error: --set cannot be combined with other mutation flags.",
             file=sys.stderr,
@@ -164,7 +163,7 @@ def _handle_set(parsed: argparse.Namespace, cfg: AppConfig) -> int | None:
 
 
 def _apply_mutations(
-    parsed: argparse.Namespace, cfg: AppConfig
+    args: CliArgs, cfg: AppConfig
 ) -> tuple[AppConfig, bool, int | None]:
     """Apply set-key, direct-field, and platform-toggle mutations.
 
@@ -173,13 +172,13 @@ def _apply_mutations(
     """
     has_mutation = False
 
-    if getattr(parsed, "set_key", None) is not None:
+    if args.set_key is not None:
         has_mutation = True
         try:
-            set_api_key(parsed.set_key)
+            set_api_key(args.set_key)
             print("Successfully saved Gemini API key to secure OS credential vault.")
         except (ValueError, OSError) as e:
-            redacted = redact_secrets_from_text(str(e), parsed.set_key)
+            redacted = redact_secrets_from_text(str(e), args.set_key)
             print(f"Error saving Gemini API key: {redacted}", file=sys.stderr)
             return cfg, has_mutation, 1
 
@@ -187,29 +186,27 @@ def _apply_mutations(
     direct_fields_changed = False
     updated_dict = cfg.model_dump()
 
-    if getattr(parsed, "watch_folder", None) or getattr(
-        parsed, "documents_folder", None
-    ):
+    if args.watch_folder or args.documents_folder:
         has_mutation = True
         direct_fields_changed = True
         new_watch = (
-            parsed.watch_folder.resolve() if parsed.watch_folder else cfg.watch_folder
+            args.watch_folder.resolve() if args.watch_folder else cfg.watch_folder
         )
         new_docs = (
-            parsed.documents_folder.resolve()
-            if parsed.documents_folder
+            args.documents_folder.resolve()
+            if args.documents_folder
             else cfg.documents_root
         )
 
-        if parsed.watch_folder and parsed.watch_folder.resolve().is_file():
+        if args.watch_folder and args.watch_folder.resolve().is_file():
             print(
-                f"Error: Watch folder cannot be a regular file: {parsed.watch_folder.resolve()}",
+                f"Error: Watch folder cannot be a regular file: {args.watch_folder.resolve()}",
                 file=sys.stderr,
             )
             return cfg, has_mutation, 1
-        if parsed.documents_folder and parsed.documents_folder.resolve().is_file():
+        if args.documents_folder and args.documents_folder.resolve().is_file():
             print(
-                f"Error: Documents folder cannot be a regular file: {parsed.documents_folder.resolve()}",
+                f"Error: Documents folder cannot be a regular file: {args.documents_folder.resolve()}",
                 file=sys.stderr,
             )
             return cfg, has_mutation, 1
@@ -222,40 +219,40 @@ def _apply_mutations(
         updated_dict["watch_folder"] = new_watch
         updated_dict["documents_root"] = new_docs
 
-    if getattr(parsed, "gemini_model", None):
+    if args.gemini_model:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["gemini_model"] = parsed.gemini_model
+        updated_dict["gemini_model"] = args.gemini_model
 
-    if getattr(parsed, "fallback_folder", None):
+    if args.fallback_folder:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["fallback_folder"] = parsed.fallback_folder
+        updated_dict["fallback_folder"] = args.fallback_folder
 
-    if getattr(parsed, "max_depth", None) is not None:
+    if args.max_depth is not None:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["max_folder_depth"] = parsed.max_depth
+        updated_dict["max_folder_depth"] = args.max_depth
 
-    if getattr(parsed, "mirror_csv", None):
+    if args.mirror_csv:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["mirror_log_to_documents"] = parsed.mirror_csv == "enable"
+        updated_dict["mirror_log_to_documents"] = args.mirror_csv == "enable"
 
-    if getattr(parsed, "auto_update", None):
+    if args.auto_update:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["auto_update"] = parsed.auto_update == "enable"
+        updated_dict["auto_update"] = args.auto_update == "enable"
 
-    if getattr(parsed, "update_check_interval", None) is not None:
+    if args.update_check_interval is not None:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["update_check_interval_days"] = parsed.update_check_interval
+        updated_dict["update_check_interval_days"] = args.update_check_interval
 
-    if getattr(parsed, "dry_run", None):
+    if args.dry_run:
         has_mutation = True
         direct_fields_changed = True
-        updated_dict["dry_run"] = parsed.dry_run == "enable"
+        updated_dict["dry_run"] = args.dry_run == "enable"
 
     if direct_fields_changed:
         new_cfg = _with_overrides(cfg, **updated_dict)
@@ -265,28 +262,28 @@ def _apply_mutations(
         if not _try_save_config(cfg):
             return cfg, has_mutation, 1
 
-        if getattr(parsed, "watch_folder", None):
+        if args.watch_folder:
             print(f"Updated watch folder to: {cfg.watch_folder}")
-        if getattr(parsed, "documents_folder", None):
+        if args.documents_folder:
             print(f"Updated documents folder to: {cfg.documents_root}")
-        if getattr(parsed, "gemini_model", None):
+        if args.gemini_model:
             print(f"Updated Gemini model to: {cfg.gemini_model}")
-        if getattr(parsed, "fallback_folder", None):
+        if args.fallback_folder:
             print(f"Updated fallback folder to: {cfg.fallback_folder}")
-        if getattr(parsed, "max_depth", None) is not None:
+        if args.max_depth is not None:
             print(f"Updated max folder depth to: {cfg.max_folder_depth}")
-        if getattr(parsed, "mirror_csv", None):
+        if args.mirror_csv:
             print(f"Mirror history CSV to Documents: {cfg.mirror_log_to_documents}")
-        if getattr(parsed, "auto_update", None):
+        if args.auto_update:
             print(f"Auto-update: {cfg.auto_update}")
-        if getattr(parsed, "update_check_interval", None) is not None:
+        if args.update_check_interval is not None:
             print(f"Update check interval: {cfg.update_check_interval_days} day(s)")
-        if getattr(parsed, "dry_run", None):
+        if args.dry_run:
             print(f"Dry run mode: {cfg.dry_run}")
 
-    if getattr(parsed, "autostart", None):
+    if args.autostart:
         has_mutation = True
-        enable = parsed.autostart == "enable"
+        enable = args.autostart == "enable"
         action_fn = enable_autorun if enable else disable_autorun
         action_name = "enable" if enable else "disable"
         status_str = "ENABLED" if enable else "DISABLED"
@@ -301,9 +298,9 @@ def _apply_mutations(
             return cfg, has_mutation, 1
         print(f"Auto-start on boot: {status_str}")
 
-    if getattr(parsed, "context_menu", None):
+    if args.context_menu:
         has_mutation = True
-        enable = parsed.context_menu == "enable"
+        enable = args.context_menu == "enable"
         action_fn = enable_context_menu if enable else disable_context_menu
         action_name = "enable" if enable else "disable"
         status_str = "ENABLED" if enable else "DISABLED"
@@ -339,11 +336,11 @@ def _config_display_payload(cfg: AppConfig) -> dict[str, object]:
     }
 
 
-def _show_config(parsed: argparse.Namespace, cfg: AppConfig) -> None:
+def _show_config(args: CliArgs, cfg: AppConfig) -> None:
     """Render the full configuration as JSON or a human-readable panel."""
     payload = _config_display_payload(cfg)
 
-    if getattr(parsed, "json", False):
+    if args.json:
         import json
 
         print(json.dumps(payload, indent=2))
@@ -371,7 +368,8 @@ def _show_config(parsed: argparse.Namespace, cfg: AppConfig) -> None:
 
 def handle_config(parsed: argparse.Namespace) -> int:
     """Handle 'config' command to view or modify settings."""
-    if getattr(parsed, "path", False):
+    args = CliArgs.from_namespace(parsed)
+    if args.path:
         print(get_default_config_path())
         return 0
 
@@ -379,19 +377,19 @@ def handle_config(parsed: argparse.Namespace) -> int:
     if cfg is None:
         return 1
 
-    get_code = _handle_get(parsed, cfg)
+    get_code = _handle_get(args, cfg)
     if get_code is not None:
         return get_code
 
-    set_code = _handle_set(parsed, cfg)
+    set_code = _handle_set(args, cfg)
     if set_code is not None:
         return set_code
 
-    cfg, has_mutation, mutation_code = _apply_mutations(parsed, cfg)
+    cfg, has_mutation, mutation_code = _apply_mutations(args, cfg)
     if mutation_code is not None:
         return mutation_code
 
-    if getattr(parsed, "show", False) or not has_mutation:
-        _show_config(parsed, cfg)
+    if args.show or not has_mutation:
+        _show_config(args, cfg)
 
     return 0

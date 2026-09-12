@@ -2,6 +2,7 @@
 
 import logging
 
+from scansort.cli.args import CliArgs
 from scansort.cli.completion import handle_completion
 from scansort.cli.config import handle_config
 from scansort.cli.file_cmd import handle_file
@@ -27,13 +28,14 @@ def main_cli(args: list[str] | None = None) -> int:
     attach_parent_console()
     parser = build_parser()
     parsed = parser.parse_args(args)
-    log_level = logging.DEBUG if getattr(parsed, "verbose", False) else logging.INFO
+    cli_args = CliArgs.from_namespace(parsed)
+    log_level = logging.DEBUG if cli_args.verbose else logging.INFO
     configure_file_logging(level=log_level)
 
-    if getattr(parsed, "self_update", None):
-        return handle_self_update(parsed.self_update)
+    if cli_args.self_update:
+        return handle_self_update(cli_args.self_update)
 
-    command = parsed.command or "watch"
+    command = cli_args.command or "watch"
     if command == "help":
         return handle_help(parsed, parser=parser)
 

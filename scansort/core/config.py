@@ -89,7 +89,7 @@ class AppConfig(BaseModel):
         if v is None or not str(v).strip():
             return DEFAULT_GEMINI_MODEL
         clean = str(v).strip()
-        if not any(clean.startswith(prefix) for prefix in SUPPORTED_GEMINI_MODELS):
+        if clean not in SUPPORTED_GEMINI_MODELS:
             raise ValueError(
                 f"gemini_model must be one of {SUPPORTED_GEMINI_MODELS}, got '{clean}'"
             )

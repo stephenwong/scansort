@@ -34,6 +34,7 @@ scansort/
 │   │   └── taxonomy.py         # Recursive taxonomy scanner with noise filtering & caching
 │   ├── cli/                    # Modular CLI subcommands and entrypoint router
 │   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── args.py             # Typed, default-complete view over the argparse namespace
 │   │   ├── completion.py       # Shell completion generator handler (bash, zsh, fish, powershell)
 │   │   ├── config.py           # Configuration viewing and editing handler
 │   │   ├── file_cmd.py         # Direct document filing handler (scansort file)
@@ -92,6 +93,7 @@ scansort/
 │   │   ├── icon.py             # Procedural high-DPI Pillow icons (active & paused badge states)
 │   │   ├── review.py           # Tkinter review dialog with live suggestions & keyword hints
 │   │   ├── settings.py         # Tkinter settings modal dialog with treeview folder picker & hot-reload
+│   │   ├── singleton_window.py # Shared singleton Toplevel lifecycle (root ownership, mainloop guard)
 │   │   └── tray.py             # Pystray background system tray application & menu actions
 │   └── updater/                # Modular GitHub Releases self-update engine
 │       ├── __init__.py         # Package interface re-exports
@@ -108,7 +110,7 @@ scansort/
 │   ├── logging/                # Tests for audit, setup, cost, and gemini_logger
 │   ├── pipeline/               # Tests for coordinator, dispatcher, hasher, review, stabilizer, undo, watcher, worker
 │   ├── platform/               # Tests for autorun, console, context_menu, instance_guard, notifications, secrets, toasts
-│   ├── ui/                     # Tests for tray application, procedural icon, review dialog, settings dialog, and drop zone
+│   ├── ui/                     # Tests for tray application, procedural icon, review/settings/drop-zone dialogs, and singleton window
 │   ├── updater/                # Tests for downloader, feed, installer, process, and state
 │   └── conftest.py             # Global test isolation fixtures & hermetic mocks
 ├── pyproject.toml              # Astral uv project config, ruff, & pytest-cov settings

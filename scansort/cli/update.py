@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from scansort import __version__
+from scansort.cli.args import CliArgs
 from scansort.core.config import AppConfig, get_default_app_dir
 from scansort.core.constants import UPDATE_STATE_FILENAME
 from scansort.platform.toasts import show_toast
@@ -122,7 +123,7 @@ def handle_self_update(values: list[str]) -> int:
 
 def handle_check_update(parsed: argparse.Namespace) -> int:
     """Check GitHub Releases for newer ScanSort versions and display findings."""
-    is_json = getattr(parsed, "json", False)
+    is_json = CliArgs.from_namespace(parsed).json
     if not is_json:
         print(f"Checking for updates (current version: {__version__})...")
     app_dir = get_default_app_dir()

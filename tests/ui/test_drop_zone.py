@@ -252,6 +252,30 @@ def test_open_drop_zone_window_singleton(tk_root, tmp_path: Path):
     win3.destroy()
 
 
+def test_drop_zone_destroy_releases_owned_root(tmp_path: Path):
+    """A Drop Zone window that created its own root must tear that root down."""
+    try:
+        probe = tk.Tk()
+        probe.withdraw()
+        probe.destroy()
+    except tk.TclError:
+        pytest.skip("Tkinter display not available")
+
+    cfg = AppConfig(
+        watch_folder=tmp_path / "Inbox",
+        documents_root=tmp_path / "Documents",
+    )
+    window = DropZoneWindow(config=cfg)
+    assert window._owns_root is True
+    owned_root = window.master
+    original_destroy = owned_root.destroy
+    with patch.object(owned_root, "destroy") as mock_destroy:
+        window.destroy()
+    mock_destroy.assert_called_once()
+    with contextlib.suppress(tk.TclError):
+        original_destroy()
+
+
 def test_open_drop_zone_window_after_dead_instance(tk_root, tmp_path: Path):
     """A stale singleton whose Tcl interpreter is gone must not raise; a fresh window opens."""
     cfg = AppConfig(

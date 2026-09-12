@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from scansort import __version__
 from scansort.core.config import AppConfig
+from scansort.pipeline.undo import UndoResult
 from scansort.ui.tray import SystemTrayApp
 from scansort.updater.feed import (
     WINDOWS_ASSET_PREFIX,
@@ -74,7 +75,7 @@ def test_tray_app_undo_action(tmp_path: Path):
     with (
         patch(
             "scansort.ui.tray.run_undo",
-            return_value=(True, "Restored scan.pdf", Path("/inbox/scan.pdf")),
+            return_value=UndoResult(True, "Restored scan.pdf", Path("/inbox/scan.pdf")),
         ) as mock_undo,
         patch("scansort.ui.tray.show_toast") as mock_toast,
     ):

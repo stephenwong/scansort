@@ -385,11 +385,11 @@ def test_run_undo_success(tmp_path: Path):
         patch("scansort.pipeline.undo.get_default_app_dir", return_value=app_dir),
         patch("scansort.pipeline.undo.load_config", return_value=cfg),
     ):
-        success, msg, restored = run_undo(cfg)
-        assert success is True
-        assert restored == inbox / "_undone_scan001.pdf"
-        assert "Successfully reversed move" in msg
-        assert restored.exists()
+        result = run_undo(cfg)
+        assert result.success is True
+        assert result.restored == inbox / "_undone_scan001.pdf"
+        assert "Successfully reversed move" in result.message
+        assert result.restored.exists()
 
 
 def test_run_undo_no_action(tmp_path: Path):
@@ -399,10 +399,11 @@ def test_run_undo_no_action(tmp_path: Path):
         watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Documents"
     )
     with patch("scansort.pipeline.undo.get_default_app_dir", return_value=app_dir):
-        success, msg, restored = run_undo(cfg)
-        assert success is False
-        assert restored is None
-        assert "No reversible document filing action found" in msg
+        result = run_undo(cfg)
+        assert result.success is False
+        assert result.restored is None
+        assert result.no_action is True
+        assert "No reversible document filing action found" in result.message
 
 
 def test_run_undo_os_error(tmp_path: Path):
@@ -417,17 +418,18 @@ def test_run_undo_os_error(tmp_path: Path):
             "scansort.pipeline.undo.undo_last_move", side_effect=OSError("Disk failed")
         ),
     ):
-        success, msg, restored = run_undo(cfg)
-        assert success is False
-        assert restored is None
-        assert "Error reversing last move" in msg
+        result = run_undo(cfg)
+        assert result.success is False
+        assert result.restored is None
+        assert result.no_action is False
+        assert "Error reversing last move" in result.message
 
 
 def test_run_undo_cfg_none_config_error():
     with patch(
         "scansort.pipeline.undo.load_config", side_effect=ValueError("corrupt config")
     ):
-        success, msg, restored = run_undo(None)
-        assert success is False
-        assert "Configuration error: corrupt config" in msg
-        assert restored is None
+        result = run_undo(None)
+        assert result.success is False
+        assert "Configuration error: corrupt config" in result.message
+        assert result.restored is None

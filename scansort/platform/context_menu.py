@@ -7,7 +7,11 @@ from pathlib import Path
 
 from scansort.core.constants import SUPPORTED_EXTENSIONS
 from scansort.platform._commands import build_executable_invocation
-from scansort.platform._linux import remove_xdg_file, write_xdg_file
+from scansort.platform._linux import (
+    remove_xdg_file,
+    write_xdg_file,
+    xdg_file_has_markers,
+)
 from scansort.platform._winreg_seam import load_winreg
 
 logger = logging.getLogger(__name__)
@@ -65,13 +69,7 @@ def is_context_menu_enabled() -> bool:
 
     if sys.platform.startswith("linux"):
         script_file = _get_linux_nautilus_script_path()
-        if not script_file.exists():
-            return False
-        try:
-            content = script_file.read_text(encoding="utf-8")
-            return "scansort file" in content
-        except OSError:
-            return False
+        return xdg_file_has_markers(script_file, "scansort file")
 
     return False
 

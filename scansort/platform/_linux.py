@@ -33,3 +33,17 @@ def remove_xdg_file(path: Path, *, description: str) -> bool:
     except OSError as e:
         logger.warning("Failed to remove Linux %s: %s", description, e)
         return False
+
+
+def xdg_file_has_markers(path: Path, *markers: str) -> bool:
+    """Return True when *path* exists, is readable, and contains every marker.
+
+    A truncated or stale file must never report the integration as enabled.
+    """
+    if not path.exists():
+        return False
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return all(marker in content for marker in markers)

@@ -22,23 +22,10 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "OPERATIONS_LOCK_FILENAME",
     "dispatch_file",
-    "generate_target_filename",
     "resolve_collision",
     "resolve_destination_dir",
     "resolve_duplicates_dir",
 ]
-
-
-def generate_target_filename(classification: DocumentClassification) -> str:
-    """Generate the uniform YYMMDD_<Description>.pdf filename.
-
-    Args:
-        classification: Extracted document classification.
-
-    Returns:
-        Standardized filename string.
-    """
-    return classification.target_filename
 
 
 def _resolve_safe_subfolder(
@@ -150,7 +137,7 @@ def dispatch_file(
     dest_dir = resolve_destination_dir(docs_root, classification.target_folder)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    target_filename = generate_target_filename(classification)
+    target_filename = classification.target_filename
 
     with interprocess_file_lock(lock_path) if lock_path else nullcontext():
         dest_path = resolve_collision(dest_dir, target_filename)

@@ -8,19 +8,9 @@ import pytest
 from scansort.classification.models import DocumentClassification
 from scansort.pipeline.dispatcher import (
     dispatch_file,
-    generate_target_filename,
     resolve_destination_dir,
     resolve_duplicates_dir,
 )
-
-
-def test_generate_target_filename():
-    meta = DocumentClassification(
-        document_date="260901",
-        description="Origin_Energy_Bill",
-        target_folder="Utilities",
-    )
-    assert generate_target_filename(meta) == "260901_Origin_Energy_Bill.pdf"
 
 
 def test_resolve_destination_dir_valid_and_review_fallback(tmp_path: Path):

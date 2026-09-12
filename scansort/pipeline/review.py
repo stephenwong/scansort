@@ -211,6 +211,30 @@ def get_review_queue(
     return items
 
 
+def _build_review_audit_entry(
+    item: ReviewItem,
+    *,
+    status: str,
+    sha256: str,
+    new_filename: str,
+    destination_folder: str,
+    destination_path: str,
+) -> dict[str, Any]:
+    """Build the audit entry for a review-folder filing or dismissal."""
+    return {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "sha256": sha256,
+        "original_filename": item.filename,
+        "original_path": str(item.file_path),
+        "new_filename": new_filename,
+        "destination_folder": destination_folder,
+        "destination_path": destination_path,
+        "summary": item.summary,
+        "document_type": item.document_type,
+        "status": status,
+    }
+
+
 def _convert_review_source_to_pdf(item: ReviewItem) -> tuple[Path, Path | None]:
     """Return ``(filing_source, converted_pdf)`` for a review item.
 
@@ -335,19 +359,16 @@ def file_reviewed_item(
             mirror_csv_path=config.mirror_csv_path,
         )
 
-        entry: dict[str, Any] = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "sha256": file_hash,
-            "original_filename": item.filename,
-            "original_path": str(item.file_path),
-            "new_filename": dest_path.name,
-            "destination_folder": normalized_folder,
-            "destination_path": str(dest_path),
-            "summary": item.summary,
-            "document_type": item.document_type,
-            "status": "REVIEWED",
-        }
-        audit_logger.log_scan(entry)
+        audit_logger.log_scan(
+            _build_review_audit_entry(
+                item,
+                status="REVIEWED",
+                sha256=file_hash,
+                new_filename=dest_path.name,
+                destination_folder=normalized_folder,
+                destination_path=str(dest_path),
+            )
+        )
 
         # Save keyword hint if requested (best-effort: a hint failure must not
         # misreport an already-completed filing as failed).
@@ -404,17 +425,14 @@ def dismiss_review_item(
             csv_path=history_csv or (app_dir / HISTORY_CSV_NAME),
             mirror_csv_path=mirror_csv_path,
         )
-        entry: dict[str, Any] = {
-            "timestamp": datetime.now(UTC).isoformat(),
-            "sha256": item.sha256 or "UNKNOWN",
-            "original_filename": item.filename,
-            "original_path": str(item.file_path),
-            "new_filename": "",
-            "destination_folder": "",
-            "destination_path": "",
-            "summary": item.summary,
-            "document_type": item.document_type,
-            "status": "DISMISSED",
-        }
-        audit_logger.log_scan(entry)
+        audit_logger.log_scan(
+            _build_review_audit_entry(
+                item,
+                status="DISMISSED",
+                sha256=item.sha256 or "UNKNOWN",
+                new_filename="",
+                destination_folder="",
+                destination_path="",
+            )
+        )
     logger.info("Dismissed and deleted unneeded scan: %s", item.filename)

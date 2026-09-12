@@ -7,6 +7,7 @@ from scansort.classification.taxonomy import (
     render_taxonomy_tree,
     run_rescan,
 )
+from scansort.cli.args import CliArgs
 from scansort.cli.config import _load_config_or_exit
 
 
@@ -17,7 +18,7 @@ def handle_rescan(parsed: argparse.Namespace) -> int:
         return 1
     taxonomy = run_rescan(cfg, mapper_cls=FolderMapper)
 
-    if getattr(parsed, "json", False):
+    if CliArgs.from_namespace(parsed).json:
         import json
 
         print(json.dumps(taxonomy, indent=2))

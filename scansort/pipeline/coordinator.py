@@ -33,7 +33,6 @@ from scansort.logging import AuditLogger
 from scansort.pipeline.dispatcher import (
     OPERATIONS_LOCK_FILENAME,
     dispatch_file,
-    generate_target_filename,
     resolve_collision,
     resolve_destination_dir,
     resolve_duplicates_dir,
@@ -135,37 +134,26 @@ class ScanSortPipeline:
             "status": status,
         }
         if classification is not None:
-            model_val = getattr(self.classifier, "model", None)
-            if isinstance(model_val, str):
-                entry["gemini_model"] = model_val
-            if isinstance(classification.confidence, (int, float)):
-                entry["confidence"] = float(classification.confidence)
-            if isinstance(classification.document_type, str):
-                entry["document_type"] = classification.document_type
-            reason = getattr(classification, "folder_reasoning", None)
-            if isinstance(reason, str) and reason.strip():
-                entry["folder_reasoning"] = reason.strip()
-            suggested = getattr(classification, "suggested_folder", None)
-            if isinstance(suggested, str) and suggested.strip():
-                entry["suggested_folder"] = suggested.strip()
-            rationale = getattr(classification, "routing_rationale", None)
-            if isinstance(rationale, str) and rationale.strip():
-                entry["routing_rationale"] = rationale.strip()
-            prompt_tokens = getattr(classification, "prompt_tokens", 0)
-            candidates_tokens = getattr(classification, "candidates_tokens", 0)
-            if (
-                isinstance(prompt_tokens, int)
-                and isinstance(candidates_tokens, int)
-                and (prompt_tokens or candidates_tokens)
-            ):
+            entry["gemini_model"] = self.classifier.model
+            entry["confidence"] = float(classification.confidence)
+            entry["document_type"] = classification.document_type
+            if classification.folder_reasoning.strip():
+                entry["folder_reasoning"] = classification.folder_reasoning.strip()
+            if classification.suggested_folder.strip():
+                entry["suggested_folder"] = classification.suggested_folder.strip()
+            if classification.routing_rationale.strip():
+                entry["routing_rationale"] = classification.routing_rationale.strip()
+            if classification.prompt_tokens or classification.candidates_tokens:
                 entry["tokens"] = {
-                    "prompt": prompt_tokens,
-                    "candidates": candidates_tokens,
-                    "total": prompt_tokens + candidates_tokens,
+                    "prompt": classification.prompt_tokens,
+                    "candidates": classification.candidates_tokens,
+                    "total": classification.prompt_tokens
+                    + classification.candidates_tokens,
                 }
-            cost_val = getattr(classification, "estimated_cost_usd", None)
-            if isinstance(cost_val, (int, float)):
-                entry["estimated_cost_usd"] = float(cost_val)
+            # estimated_cost_usd may be a preformatted cost string; only numeric
+            # values are recorded in the machine-readable audit entry.
+            if isinstance(classification.estimated_cost_usd, (int, float)):
+                entry["estimated_cost_usd"] = float(classification.estimated_cost_usd)
         return entry
 
     def _route_duplicate(
@@ -366,7 +354,7 @@ class ScanSortPipeline:
                 target_dir = resolve_destination_dir(
                     self.config.documents_root, classification.target_folder
                 )
-                desired_name = generate_target_filename(classification)
+                desired_name = classification.target_filename
                 simulated_dest = resolve_collision(target_dir, desired_name)
                 logger.info(
                     "[DRY RUN] Would file %s -> %s", file_path.name, simulated_dest

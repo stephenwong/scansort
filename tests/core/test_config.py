@@ -132,10 +132,8 @@ def test_config_gemini_model_validation():
         AppConfig(gemini_model="gemini-3.5-flash-lite").gemini_model
         == "gemini-3.5-flash-lite"
     )
-    assert (
-        AppConfig(gemini_model="gemini-3.1-flash-lite-001").gemini_model
-        == "gemini-3.1-flash-lite-001"
-    )
+    with pytest.raises(ValueError, match="gemini_model must be one of"):
+        AppConfig(gemini_model="gemini-3.1-flash-lite-001")
 
     with pytest.raises(ValueError, match="gemini_model must be one of"):
         AppConfig(gemini_model="gemini-2.5-flash")

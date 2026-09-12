@@ -5,6 +5,7 @@ import collections
 import json
 from typing import Any
 
+from scansort.cli.args import CliArgs
 from scansort.cli.history import load_history_records, safe_str
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HISTORY_JSONL_NAME, REVIEW_NEEDED_DIR
@@ -94,7 +95,7 @@ def handle_stats(parsed: argparse.Namespace) -> int:
 
     metrics = _calculate_metrics(records)
 
-    if getattr(parsed, "json", False):
+    if CliArgs.from_namespace(parsed).json:
         print(json.dumps(metrics, indent=2))
         return 0
 

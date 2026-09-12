@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from scansort.core.config import get_default_app_dir, load_config
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "UndoResult",
     "run_undo",
     "undo_last_move",
 ]
@@ -151,7 +153,17 @@ def undo_last_move(
     return restore_path
 
 
-def run_undo(cfg=None, undo_fn=None, app_dir=None) -> tuple[bool, str, Path | None]:
+@dataclass(frozen=True)
+class UndoResult:
+    """Outcome of a run_undo attempt, distinguishing no-op from failure."""
+
+    success: bool
+    message: str
+    restored: Path | None = None
+    no_action: bool = False
+
+
+def run_undo(cfg=None, undo_fn=None, app_dir=None) -> UndoResult:
     """Execute an undo operation on the most recent filing action.
 
     Args:
@@ -160,14 +172,14 @@ def run_undo(cfg=None, undo_fn=None, app_dir=None) -> tuple[bool, str, Path | No
         app_dir: Optional application directory path (defaults to get_default_app_dir()).
 
     Returns:
-        tuple[bool, str, Path | None]: (success, message, restored_path)
+        UndoResult describing success, failure, or a nothing-to-undo no-op.
     """
     active_cfg = cfg
     if active_cfg is None:
         try:
             active_cfg = load_config()
         except ValueError as e:
-            return False, f"Configuration error: {e}", None
+            return UndoResult(False, f"Configuration error: {e}")
 
     active_app_dir = app_dir or get_default_app_dir()
     jsonl_path = active_app_dir / HISTORY_JSONL_NAME
@@ -177,11 +189,15 @@ def run_undo(cfg=None, undo_fn=None, app_dir=None) -> tuple[bool, str, Path | No
         mirror_csv = active_cfg.mirror_csv_path if active_cfg else None
         restored = executor(jsonl_path, mirror_csv_path=mirror_csv)
         if restored:
-            return (
+            return UndoResult(
                 True,
                 f"Successfully reversed move. File restored to: {restored}",
                 restored,
             )
-        return False, "No reversible document filing action found in history.", None
+        return UndoResult(
+            False,
+            "No reversible document filing action found in history.",
+            no_action=True,
+        )
     except (OSError, UnicodeError) as e:
-        return False, f"Error reversing last move: {e}", None
+        return UndoResult(False, f"Error reversing last move: {e}")

@@ -28,6 +28,7 @@ from scansort.platform.secrets import (
     set_api_key,
 )
 from scansort.platform.toasts import show_toast
+from scansort.ui.singleton_window import SingletonToplevel
 
 logger = logging.getLogger(__name__)
 
@@ -46,43 +47,31 @@ def open_settings_dialog(
     Thread-safe via ``_DIALOG_LOCK``; returns the existing open instance if one
     is already active, or instantiates a new one.
     """
-    global _ACTIVE_DIALOG_INSTANCE
-    with _DIALOG_LOCK:
-        existing = _ACTIVE_DIALOG_INSTANCE
-        alive = False
-        if existing is not None:
-            with contextlib.suppress(tk.TclError):
-                alive = existing.winfo_exists()
-        if alive:
-            existing.deiconify()
-            existing.lift()
-            existing.focus_force()
-            return existing
+    existing = SettingsDialog.focus_existing()
+    if existing is not None:
+        return existing
 
     # Construct outside the lock: __init__ performs keyring/registry I/O and a
     # recursive taxonomy scan, which must not block other tray interactions.
     dialog = SettingsDialog(config=config, on_applied=on_applied)
-
-    with _DIALOG_LOCK:
-        existing = _ACTIVE_DIALOG_INSTANCE
-        alive = False
-        if existing is not None:
-            with contextlib.suppress(tk.TclError):
-                alive = existing.winfo_exists()
-        if alive:
-            # Another thread won the race; discard ours.
-            with contextlib.suppress(tk.TclError):
-                dialog.destroy()
-            existing.deiconify()
-            existing.lift()
-            existing.focus_force()
-            return existing
-        _ACTIVE_DIALOG_INSTANCE = dialog
-        return dialog
+    return SettingsDialog.register_or_existing(dialog)
 
 
-class SettingsDialog(tk.Toplevel):
+class SettingsDialog(SingletonToplevel):
     """Tkinter modal window for configuring ScanSort paths, models, and options."""
+
+    @classmethod
+    def _instance(cls) -> "SettingsDialog | None":
+        return _ACTIVE_DIALOG_INSTANCE
+
+    @classmethod
+    def _set_instance(cls, value: "SettingsDialog | None") -> None:
+        global _ACTIVE_DIALOG_INSTANCE
+        _ACTIVE_DIALOG_INSTANCE = value
+
+    @classmethod
+    def _lock(cls) -> threading.Lock:
+        return _DIALOG_LOCK
 
     def __init__(
         self,
@@ -90,15 +79,7 @@ class SettingsDialog(tk.Toplevel):
         config: AppConfig | None = None,
         on_applied: Callable[[AppConfig], None] | None = None,
     ) -> None:
-        self._owns_root = False
-        self._mainloop_running = False
-        if master is None:
-            root = tk.Tk()
-            root.withdraw()
-            super().__init__(root)
-            self._owns_root = True
-        else:
-            super().__init__(master)
+        super().__init__(master)
 
         self.title("ScanSort Settings")
         self.resizable(True, True)
@@ -120,18 +101,6 @@ class SettingsDialog(tk.Toplevel):
 
         self._build_ui()
         self.refresh_taxonomy_tree()
-
-    def mainloop(self, n: int = 0) -> None:
-        """Run Tkinter mainloop safely, ignoring redundant concurrent calls."""
-        with _DIALOG_LOCK:
-            if self._mainloop_running:
-                return
-            self._mainloop_running = True
-        try:
-            super().mainloop(n)
-        finally:
-            with _DIALOG_LOCK:
-                self._mainloop_running = False
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding="16 16 16 16")
@@ -454,14 +423,3 @@ class SettingsDialog(tk.Toplevel):
         from scansort.ui.drop_zone import open_drop_zone_window
 
         open_drop_zone_window(master=self, config=self.app_config)
-
-    def destroy(self) -> None:
-        global _ACTIVE_DIALOG_INSTANCE
-        with _DIALOG_LOCK:
-            if _ACTIVE_DIALOG_INSTANCE is self:
-                _ACTIVE_DIALOG_INSTANCE = None
-        with contextlib.suppress(tk.TclError):
-            super().destroy()
-        if self._owns_root and self.master:
-            with contextlib.suppress(tk.TclError):
-                self.master.destroy()

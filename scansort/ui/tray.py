@@ -218,8 +218,8 @@ class SystemTrayApp:
         """Reverse the most recent filing move and notify the user."""
 
         def _task():
-            success, msg, _ = run_undo(self.config)
-            show_toast("ScanSort Undo", msg)
+            result = run_undo(self.config)
+            show_toast("ScanSort Undo", result.message)
 
         return self._offload(_task, async_task)
 

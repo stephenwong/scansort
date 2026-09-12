@@ -3,6 +3,8 @@
 import argparse
 import sys
 
+from scansort.cli.args import CliArgs
+
 
 def _get_subparsers_action(
     parser: argparse.ArgumentParser,
@@ -37,7 +39,7 @@ def handle_help(
 
         parser = build_parser()
 
-    cmd_name = getattr(parsed, "command_name", None)
+    cmd_name = CliArgs.from_namespace(parsed).command_name
     if not cmd_name:
         parser.print_help()
         return 0

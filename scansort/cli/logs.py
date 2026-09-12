@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 
+from scansort.cli.args import CliArgs
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import LOG_FILENAME
 
@@ -95,10 +96,11 @@ def _follow_log(log_file: Path, min_severity: int | None) -> None:
 
 def handle_logs(parsed: argparse.Namespace) -> int:
     """Handle 'logs' command to view, filter, tail, or clear scansort.log."""
+    args = CliArgs.from_namespace(parsed)
     app_dir = get_default_app_dir()
     log_file = app_dir / LOG_FILENAME
 
-    if getattr(parsed, "clear", False):
+    if args.clear:
         if not log_file.exists():
             print(f"Log file does not exist: {log_file}")
             return 0
@@ -115,12 +117,12 @@ def handle_logs(parsed: argparse.Namespace) -> int:
         print(f"No log file found at: {log_file}")
         return 0
 
-    target_level_str = getattr(parsed, "level", None)
+    target_level_str = args.level
     min_severity = (
         _LEVEL_SEVERITY.get(target_level_str.upper()) if target_level_str else None
     )
 
-    if getattr(parsed, "follow", False):
+    if args.follow:
         try:
             _follow_log(log_file, min_severity)
         except KeyboardInterrupt:
@@ -145,7 +147,7 @@ def handle_logs(parsed: argparse.Namespace) -> int:
                 filtered.append(line)
         lines = filtered
 
-    count = getattr(parsed, "lines", 50)
+    count = args.lines
     display_lines = lines[-count:] if count > 0 else []
     for line in display_lines:
         print(line, end="")

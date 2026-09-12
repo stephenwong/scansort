@@ -13,6 +13,7 @@ from scansort.core.config import AppConfig, load_config
 from scansort.core.constants import SUPPORTED_EXTENSIONS
 from scansort.pipeline.coordinator import ScanSortPipeline
 from scansort.platform.toasts import show_toast
+from scansort.ui.singleton_window import SingletonToplevel
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +33,15 @@ def open_drop_zone_window(
     on_filed: Callable[[Path], None] | None = None,
 ) -> "DropZoneWindow":
     """Open or focus the singleton Drop Zone window."""
-    global _ACTIVE_DROP_ZONE_INSTANCE
     with _DROP_ZONE_LOCK:
-        existing = _ACTIVE_DROP_ZONE_INSTANCE
-        alive = False
+        existing = DropZoneWindow._instance()
         if existing is not None:
             with contextlib.suppress(tk.TclError):
-                alive = existing.winfo_exists()
-        if alive:
-            existing.deiconify()
-            existing.lift()
-            existing.focus_force()
-            return existing
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return existing
 
         dialog = DropZoneWindow(
             master=master,
@@ -51,12 +49,25 @@ def open_drop_zone_window(
             pipeline=pipeline,
             on_filed=on_filed,
         )
-        _ACTIVE_DROP_ZONE_INSTANCE = dialog
+        DropZoneWindow._set_instance(dialog)
         return dialog
 
 
-class DropZoneWindow(tk.Toplevel):
+class DropZoneWindow(SingletonToplevel):
     """Tkinter window providing a quick-filing drop target and file picker."""
+
+    @classmethod
+    def _instance(cls) -> "DropZoneWindow | None":
+        return _ACTIVE_DROP_ZONE_INSTANCE
+
+    @classmethod
+    def _set_instance(cls, value: "DropZoneWindow | None") -> None:
+        global _ACTIVE_DROP_ZONE_INSTANCE
+        _ACTIVE_DROP_ZONE_INSTANCE = value
+
+    @classmethod
+    def _lock(cls) -> threading.Lock:
+        return _DROP_ZONE_LOCK
 
     def __init__(
         self,
@@ -65,15 +76,7 @@ class DropZoneWindow(tk.Toplevel):
         pipeline: Any = None,
         on_filed: Callable[[Path], None] | None = None,
     ) -> None:
-        self._owns_root = False
-        self._mainloop_running = False
-        if master is None:
-            root = tk.Tk()
-            root.withdraw()
-            super().__init__(root)
-            self._owns_root = True
-        else:
-            super().__init__(master)
+        super().__init__(master)
 
         self.title("ScanSort Quick File & Drop Zone")
         self.resizable(True, True)
@@ -90,27 +93,6 @@ class DropZoneWindow(tk.Toplevel):
         self.status_var = tk.StringVar(value="Ready to file documents.")
 
         self._build_ui()
-
-    def mainloop(self, n: int = 0) -> None:
-        """Run Tkinter mainloop safely, ignoring redundant concurrent calls."""
-        with _DROP_ZONE_LOCK:
-            if self._mainloop_running:
-                return
-            self._mainloop_running = True
-        try:
-            super().mainloop(n)
-        finally:
-            with _DROP_ZONE_LOCK:
-                self._mainloop_running = False
-
-    def destroy(self) -> None:
-        """Destroy the window and release the singleton registration."""
-        global _ACTIVE_DROP_ZONE_INSTANCE
-        with contextlib.suppress(tk.TclError):
-            super().destroy()
-        with _DROP_ZONE_LOCK:
-            if _ACTIVE_DROP_ZONE_INSTANCE is self:
-                _ACTIVE_DROP_ZONE_INSTANCE = None
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding="16 16 16 16")

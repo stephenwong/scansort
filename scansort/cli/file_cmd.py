@@ -5,6 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
+from scansort.cli.args import CliArgs
 from scansort.cli.config import _load_config_or_exit, _with_overrides
 from scansort.core.constants import SUPPORTED_EXTENSIONS
 from scansort.pipeline.coordinator import ScanSortPipeline
@@ -30,6 +31,7 @@ def _validate_file_target(resolved: Path, display_name: str) -> str | None:
 
 def handle_file(parsed: argparse.Namespace) -> int:
     """Handle 'file' command to process and file specified document(s) directly."""
+    args = CliArgs.from_namespace(parsed)
     cfg = _load_config_or_exit()
     if cfg is None:
         return 1
@@ -42,15 +44,15 @@ def handle_file(parsed: argparse.Namespace) -> int:
         )
         return 1
 
-    dry_run = getattr(parsed, "dry_run", False) or cfg.dry_run
+    dry_run = args.dry_run or cfg.dry_run
     if dry_run != cfg.dry_run:
         new_cfg = _with_overrides(cfg, dry_run=dry_run)
         if new_cfg is None:
             return 1
         cfg = new_cfg
 
-    copy_source = getattr(parsed, "copy", False)
-    files: list[Path] = getattr(parsed, "files", [])
+    copy_source = args.copy
+    files: list[Path] = args.files
     if not files:
         print("Error: No files specified to file.", file=sys.stderr)
         return 1

@@ -4,7 +4,6 @@ from scansort.pipeline.coordinator import ScanSortPipeline
 from scansort.pipeline.dispatcher import (
     OPERATIONS_LOCK_FILENAME,
     dispatch_file,
-    generate_target_filename,
     resolve_collision,
     resolve_destination_dir,
     resolve_duplicates_dir,
@@ -25,7 +24,6 @@ __all__ = [
     "ScanSortPipeline",
     "run_pipeline_worker",
     "dispatch_file",
-    "generate_target_filename",
     "resolve_collision",
     "resolve_destination_dir",
     "resolve_duplicates_dir",

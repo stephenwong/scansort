@@ -228,6 +228,23 @@ def test_open_settings_dialog_singleton(tmp_path: Path):
     assert settings_mod._ACTIVE_DIALOG_INSTANCE is None
 
 
+def test_register_or_existing_discards_racing_loser(tk_root, tmp_path: Path):
+    """A dialog constructed during a race is discarded for the live instance."""
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Docs"
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+
+    winner = SettingsDialog(master=tk_root, config=cfg)
+    SettingsDialog._set_instance(winner)
+    loser = SettingsDialog(master=tk_root, config=cfg)
+
+    result = SettingsDialog.register_or_existing(loser)
+
+    assert result is winner
+    assert not loser.winfo_exists()
+    winner.destroy()
+
+
 def test_settings_dialog_rejects_empty_paths(tk_root, tmp_path: Path):
     inbox = tmp_path / "Inbox"
     docs = tmp_path / "Docs"
