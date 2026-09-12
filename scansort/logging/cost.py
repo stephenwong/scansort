@@ -11,14 +11,17 @@ class ModelPricing:
     output_per_m: float
 
 
-# Default rates for supported Flash Lite models (prompts <= 128k context)
+# Flash Lite tier pricing (prompts <= 128k context), shared by all Lite models.
+_FLASH_LITE_PRICING = ModelPricing(input_per_m=0.075, output_per_m=0.30)
+
+# Rates for supported Flash Lite models
 _MODEL_PRICING_TABLE: dict[str, ModelPricing] = {
-    "gemini-3.1-flash-lite": ModelPricing(input_per_m=0.075, output_per_m=0.30),
-    "gemini-3.5-flash-lite": ModelPricing(input_per_m=0.075, output_per_m=0.30),
+    "gemini-3.1-flash-lite": _FLASH_LITE_PRICING,
+    "gemini-3.5-flash-lite": _FLASH_LITE_PRICING,
 }
 
 # Standard default rate for unrecognized models (uses Flash Lite tier pricing)
-_DEFAULT_PRICING = ModelPricing(input_per_m=0.075, output_per_m=0.30)
+_DEFAULT_PRICING = _FLASH_LITE_PRICING
 
 
 def get_model_pricing(model: str) -> ModelPricing:

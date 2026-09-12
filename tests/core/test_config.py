@@ -349,13 +349,9 @@ def test_config_backward_compatible_without_update_fields(tmp_path: Path):
 def test_version_single_source_of_truth():
     import scansort
     import scansort.core
-    import scansort.core.constants
 
     assert scansort.__version__ is not None
     assert scansort.core.__version__ == scansort.__version__
-    assert scansort.__version__ == scansort.core.VERSION
-    assert scansort.core.constants.__version__ == scansort.__version__
-    assert scansort.__version__ == scansort.core.constants.VERSION
 
 
 def test_load_config_warns_on_unknown_keys(tmp_path, caplog):

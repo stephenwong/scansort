@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from scansort import __version__
+from scansort.core.constants import FILING_STATUSES, SUPPORTED_GEMINI_MODELS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -196,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hist_p.add_argument(
         "--status",
-        choices=["SUCCESS", "DUPLICATE", "FAILED", "UNDONE", "COLLISION_RENAMED"],
+        choices=list(FILING_STATUSES),
         help="Filter records by filing status",
     )
     hist_p.add_argument(
@@ -290,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cfg_p.add_argument(
         "--gemini-model",
-        choices=["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"],
+        choices=list(SUPPORTED_GEMINI_MODELS),
         help="Set default Gemini classification model",
     )
     cfg_p.add_argument(

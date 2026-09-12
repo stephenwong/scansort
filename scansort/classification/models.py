@@ -69,25 +69,27 @@ def sanitize_date(date_str: object) -> str:
     """
     if date_str is not None:
         clean = str(date_str).strip().replace("-", "").replace("/", "")
-        if (
-            len(clean) == 6
-            and clean.isdigit()
-            and _is_valid_calendar_date(
-                int(clean[0:2]), int(clean[2:4]), int(clean[4:6])
-            )
-        ):
-            return clean
-        if (
-            len(clean) == 8
-            and clean.isdigit()
-            and _is_valid_calendar_date(
-                int(clean[0:4]), int(clean[4:6]), int(clean[6:8])
-            )
-        ):
-            # YYYYMMDD -> YYMMDD
-            return clean[2:]
+        result = _valid_yymmdd(clean)
+        if result is not None:
+            return result
 
     return sydney_now().strftime("%y%m%d")
+
+
+def _valid_yymmdd(clean: str) -> str | None:
+    """Return the YYMMDD form for a 6- or 8-digit real date, or None if invalid."""
+    if not clean.isdigit():
+        return None
+    if len(clean) == 6 and _is_valid_calendar_date(
+        int(clean[0:2]), int(clean[2:4]), int(clean[4:6])
+    ):
+        return clean
+    if len(clean) == 8 and _is_valid_calendar_date(
+        int(clean[0:4]), int(clean[4:6]), int(clean[6:8])
+    ):
+        # YYYYMMDD -> YYMMDD
+        return clean[2:]
+    return None
 
 
 def _is_valid_calendar_date(year: int, month: int, day: int) -> bool:

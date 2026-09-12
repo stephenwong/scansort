@@ -19,6 +19,7 @@ from scansort.updater.installer import (
     EXECUTABLE_NAME,
     UpdateError,
     cleanup_stale_updates,
+    stage_dir_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,27 +53,28 @@ def download_release(
     )
     total = 0
     try:
-        with (
-            opener(request, timeout=timeout) as response,
-            dest_path.open("wb") as out_file,
-        ):
-            while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
-                out_file.write(chunk)
-                total += len(chunk)
-    except (OSError, http.client.HTTPException, ValueError) as e:
-        dest_path.unlink(missing_ok=True)
-        raise UpdateError(f"Download failed: {e}") from e
+        try:
+            with (
+                opener(request, timeout=timeout) as response,
+                dest_path.open("wb") as out_file,
+            ):
+                while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
+                    out_file.write(chunk)
+                    total += len(chunk)
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            raise UpdateError(f"Download failed: {e}") from e
 
-    if info.size_bytes is not None and total != info.size_bytes:
+        if info.size_bytes is not None and total != info.size_bytes:
+            raise UpdateError(
+                f"Downloaded file size mismatch: expected {info.size_bytes}, got {total}."
+            )
+        if info.sha256:
+            actual = compute_file_sha256(dest_path)
+            if actual != info.sha256:
+                raise UpdateError("Downloaded file checksum mismatch.")
+    except UpdateError:
         dest_path.unlink(missing_ok=True)
-        raise UpdateError(
-            f"Downloaded file size mismatch: expected {info.size_bytes}, got {total}."
-        )
-    if info.sha256:
-        actual = compute_file_sha256(dest_path)
-        if actual != info.sha256:
-            dest_path.unlink(missing_ok=True)
-            raise UpdateError("Downloaded file checksum mismatch.")
+        raise
     logger.info(
         "Downloaded release asset %s (%d bytes) successfully.", info.asset_name, total
     )
@@ -125,10 +127,6 @@ def extract_bundle(zip_path: Path, dest_dir: Path) -> Path:
     return dest_dir
 
 
-def _stage_dir_for(install_dir: Path, version: str) -> Path:
-    return install_dir.parent / f"{install_dir.name}.stage-{version}"
-
-
 def _prune_old_archives(tmp_dir: Path, keep_name: str) -> None:
     """Remove cached release zips for versions other than ``keep_name``."""
     for entry in tmp_dir.glob(_ARCHIVE_GLOB):
@@ -157,7 +155,7 @@ def download_and_stage(
     tmp_dir.mkdir(parents=True, exist_ok=True)
     install_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    stage_dir = _stage_dir_for(install_dir, info.version)
+    stage_dir = stage_dir_for(install_dir, info.version)
     logger.info("Staging update %s into %s...", info.version, stage_dir)
     cleanup_stale_updates(install_dir, keep=stage_dir)
 
@@ -177,10 +175,9 @@ def download_and_stage(
 
     if stage_dir.exists():
         try:
-            shutil.rmtree(stage_dir)
+            shutil.rmtree(stage_dir, ignore_errors=True)
         except OSError as e:
             logger.warning("Could not reset stale staging dir %s: %s", stage_dir, e)
-            shutil.rmtree(stage_dir, ignore_errors=True)
     try:
         extract_bundle(zip_path, stage_dir)
     except Exception:

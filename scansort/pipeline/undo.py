@@ -13,6 +13,7 @@ from pathlib import Path
 
 from scansort.core.config import get_default_app_dir, load_config
 from scansort.core.constants import (
+    HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
     OPERATIONS_LOCK_FILENAME,
     REVERSIBLE_STATUSES,
@@ -126,7 +127,7 @@ def undo_last_move(
         try:
             restore_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(dest_path), str(restore_path))
-        except (PermissionError, OSError) as e:
+        except OSError as e:
             logger.error("Failed to restore file %s: %s", dest_path, e)
             # Remove any partially restored copy (e.g. cross-device copy failure).
             restore_path.unlink(missing_ok=True)
@@ -142,7 +143,7 @@ def undo_last_move(
 
         AuditLogger(
             jsonl_path=jsonl_path,
-            csv_path=csv_path or jsonl_path.with_suffix(".csv"),
+            csv_path=csv_path or jsonl_path.parent / HISTORY_CSV_NAME,
             mirror_csv_path=mirror_csv_path,
         ).log_scan(undo_record)
 

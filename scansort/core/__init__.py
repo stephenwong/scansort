@@ -1,5 +1,6 @@
 """Core configuration, filesystem, timezone, and domain constants."""
 
+from scansort import __version__
 from scansort.core.config import (
     AppConfig,
     get_default_app_dir,
@@ -41,8 +42,6 @@ from scansort.core.constants import (
     UNDONE_PREFIX,
     UPDATE_LOCK_FILENAME,
     UPDATE_STATE_FILENAME,
-    VERSION,
-    __version__,
 )
 from scansort.core.fs import (
     atomic_write,
@@ -94,7 +93,6 @@ __all__ = [
     "UNDONE_PREFIX",
     "UPDATE_LOCK_FILENAME",
     "UPDATE_STATE_FILENAME",
-    "VERSION",
     "__version__",
     "atomic_write",
     "interprocess_file_lock",

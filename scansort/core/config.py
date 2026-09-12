@@ -139,6 +139,21 @@ class AppConfig(BaseModel):
         (self.documents_root / self.fallback_folder).mkdir(parents=True, exist_ok=True)
 
 
+def _format_validation_errors(error: ValidationError) -> str:
+    """Summarize pydantic validation errors as a field list or validator messages."""
+    invalid_fields = sorted(
+        {str(err.get("loc", ())[0]) for err in error.errors() if err.get("loc")}
+    )
+    if invalid_fields:
+        return ", ".join(invalid_fields)
+    # Model-level (mode="after") validators have no loc, but their message names
+    # the offending fields.
+    return (
+        "; ".join(str(err.get("msg", "invalid value")) for err in error.errors())
+        or "invalid values"
+    )
+
+
 def load_config(config_path: Path | None = None) -> AppConfig:
     """Load configuration from a JSON file, returning defaults if file doesn't exist.
 
@@ -180,20 +195,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     try:
         return AppConfig(**clean_data)
     except ValidationError as e:
-        invalid_fields = sorted(
-            {str(error.get("loc", ())[0]) for error in e.errors() if error.get("loc")}
-        )
-        if invalid_fields:
-            details = ", ".join(invalid_fields)
-        else:
-            # Model-level (mode="after") validators have no loc, but their
-            # message names the offending fields.
-            details = (
-                "; ".join(
-                    str(error.get("msg", "invalid value")) for error in e.errors()
-                )
-                or "invalid values"
-            )
+        details = _format_validation_errors(e)
         logger.error("Config file %s has invalid settings: %s", path, details)
         raise ValueError(
             f"Config file {path} contains invalid settings ({details}). "

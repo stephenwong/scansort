@@ -4,22 +4,28 @@ import argparse
 import sys
 
 
+def _get_subparsers_action(
+    parser: argparse.ArgumentParser,
+) -> argparse._SubParsersAction | None:
+    """Return the parser's subparsers action, if it has one."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
+
+
 def _find_subparser(
     parser: argparse.ArgumentParser, command_name: str
 ) -> argparse.ArgumentParser | None:
     """Find the specific subparser associated with command_name."""
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return action.choices.get(command_name)
-    return None
+    action = _get_subparsers_action(parser)
+    return action.choices.get(command_name) if action is not None else None
 
 
 def _get_subcommand_names(parser: argparse.ArgumentParser) -> list[str]:
     """Return all registered subcommand names."""
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return sorted(action.choices.keys())
-    return []
+    action = _get_subparsers_action(parser)
+    return sorted(action.choices.keys()) if action is not None else []
 
 
 def handle_help(

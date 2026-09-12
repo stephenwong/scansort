@@ -10,7 +10,7 @@ from scansort.core.config import get_default_app_dir
 from scansort.core.constants import HISTORY_JSONL_NAME
 
 
-def _load_history_records(history_path: Path) -> list[dict[str, Any]]:
+def load_history_records(history_path: Path) -> list[dict[str, Any]]:
     """Load and parse JSONL records, tolerating empty files or malformed lines."""
     records: list[dict[str, Any]] = []
     try:
@@ -36,7 +36,7 @@ def _load_history_records(history_path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _safe_str(val: Any, default: str = "") -> str:
+def safe_str(val: Any, default: str = "") -> str:
     """Return string representation or default if val is None or empty."""
     if val is None:
         return default
@@ -44,12 +44,17 @@ def _safe_str(val: Any, default: str = "") -> str:
     return s if s else default
 
 
+def _truncate_column(value: str, width: int) -> str:
+    """Ellipsis-truncate *value* so it fits within *width* characters."""
+    return value[: width - 3] + "..." if len(value) > width else value
+
+
 def handle_history(parsed: argparse.Namespace) -> int:
     """Handle 'history' command to view, filter, or export filing records."""
     app_dir = get_default_app_dir()
     history_file = app_dir / HISTORY_JSONL_NAME
 
-    records = _load_history_records(history_file)
+    records = load_history_records(history_file)
     if not records:
         print("No filing history found.")
         return 0
@@ -59,7 +64,7 @@ def handle_history(parsed: argparse.Namespace) -> int:
     if status_filter:
         clean_status = status_filter.strip().upper()
         records = [
-            r for r in records if _safe_str(r.get("status")).upper() == clean_status
+            r for r in records if safe_str(r.get("status")).upper() == clean_status
         ]
 
     # Filter by search term
@@ -69,10 +74,10 @@ def handle_history(parsed: argparse.Namespace) -> int:
         records = [
             r
             for r in records
-            if q in _safe_str(r.get("original_filename")).lower()
-            or q in _safe_str(r.get("new_filename")).lower()
-            or q in _safe_str(r.get("summary")).lower()
-            or q in _safe_str(r.get("destination_folder")).lower()
+            if q in safe_str(r.get("original_filename")).lower()
+            or q in safe_str(r.get("new_filename")).lower()
+            or q in safe_str(r.get("summary")).lower()
+            or q in safe_str(r.get("destination_folder")).lower()
         ]
 
     # Ordering: default newest-first unless --reverse is passed
@@ -102,25 +107,24 @@ def handle_history(parsed: argparse.Namespace) -> int:
 
     for r in records:
         time_str = (
-            _safe_str(r.get("local_time")) or _safe_str(r.get("timestamp")) or "Unknown"
+            safe_str(r.get("local_time")) or safe_str(r.get("timestamp")) or "Unknown"
         )
         if len(time_str) > 19:
             time_str = time_str[:19]
-        status_str = _safe_str(r.get("status"), default="UNKNOWN")
-        orig = _safe_str(r.get("original_filename"), default="Unknown")
-        if len(orig) > 20:
-            orig = orig[:17] + "..."
-        dest = (
-            _safe_str(r.get("new_filename"))
-            or _safe_str(r.get("destination_folder"))
-            or "Unknown"
+        status_str = safe_str(r.get("status"), default="UNKNOWN")
+        orig = _truncate_column(
+            safe_str(r.get("original_filename"), default="Unknown"), 20
         )
-        if len(dest) > 34:
-            dest = dest[:31] + "..."
+        dest = _truncate_column(
+            safe_str(r.get("new_filename"))
+            or safe_str(r.get("destination_folder"))
+            or "Unknown",
+            34,
+        )
 
         row = f"{time_str:<20} {status_str:<12} {orig:<22} {dest:<35}"
         print(row)
-        summary = _safe_str(r.get("summary"))
+        summary = safe_str(r.get("summary"))
         if summary and status_str != "SUCCESS":
             print(f"  └─ Note: {summary}")
 

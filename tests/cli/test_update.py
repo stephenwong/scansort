@@ -10,8 +10,8 @@ import scansort.updater as updater
 from scansort import __version__
 from scansort.cli.root import main_cli
 from scansort.cli.update import (
-    _announce_applied_update,
-    _maybe_apply_auto_update,
+    announce_applied_update,
+    maybe_apply_auto_update,
 )
 from scansort.core.config import AppConfig
 from scansort.updater import ReleaseInfo, UpdateError
@@ -35,7 +35,7 @@ def test_cli_self_update_dispatches_to_updater():
 def test_maybe_apply_auto_update_inert_in_development(tmp_path: Path):
     cfg = AppConfig(watch_folder=tmp_path / "Inbox", documents_root=tmp_path / "Docs")
     with patch("scansort.cli.update.fetch_latest_release") as mock_fetch:
-        assert _maybe_apply_auto_update(cfg, tmp_path / "appdata") is False
+        assert maybe_apply_auto_update(cfg, tmp_path / "appdata") is False
         mock_fetch.assert_not_called()
 
 
@@ -49,7 +49,7 @@ def test_maybe_apply_auto_update_disabled_by_config(tmp_path: Path, monkeypatch)
         auto_update=False,
     )
     with patch("scansort.cli.update.fetch_latest_release") as mock_fetch:
-        assert _maybe_apply_auto_update(cfg, tmp_path / "appdata") is False
+        assert maybe_apply_auto_update(cfg, tmp_path / "appdata") is False
         mock_fetch.assert_not_called()
 
 
@@ -66,7 +66,7 @@ def test_maybe_apply_auto_update_skips_within_interval(tmp_path: Path, monkeypat
     app_dir.mkdir()
     updater.record_update_check(app_dir / "update_state.json")
     with patch("scansort.cli.update.fetch_latest_release") as mock_fetch:
-        assert _maybe_apply_auto_update(cfg, app_dir) is False
+        assert maybe_apply_auto_update(cfg, app_dir) is False
         mock_fetch.assert_not_called()
 
 
@@ -101,7 +101,7 @@ def test_maybe_apply_auto_update_installs_when_release_found(
         patch("scansort.cli.update.spawn_update_helper") as mock_spawn,
         patch("scansort.cli.update.show_toast") as mock_toast,
     ):
-        applied = _maybe_apply_auto_update(cfg, app_dir)
+        applied = maybe_apply_auto_update(cfg, app_dir)
     assert applied is True
     mock_spawn.assert_called_once()
     args = mock_spawn.call_args[0]
@@ -144,7 +144,7 @@ def test_maybe_apply_auto_update_tolerates_chdir_failure(tmp_path: Path, monkeyp
         patch("scansort.cli.update.spawn_update_helper"),
         patch("scansort.cli.update.show_toast"),
     ):
-        assert _maybe_apply_auto_update(cfg, app_dir) is True
+        assert maybe_apply_auto_update(cfg, app_dir) is True
 
 
 def test_maybe_apply_auto_update_no_release_records_check(tmp_path: Path, monkeypatch):
@@ -157,7 +157,7 @@ def test_maybe_apply_auto_update_no_release_records_check(tmp_path: Path, monkey
         "scansort.cli.update.fetch_latest_release",
         return_value={"tag_name": f"v{__version__}"},
     ):
-        assert _maybe_apply_auto_update(cfg, app_dir) is False
+        assert maybe_apply_auto_update(cfg, app_dir) is False
     assert (app_dir / "update_state.json").exists()
 
 
@@ -173,7 +173,7 @@ def test_maybe_apply_auto_update_recovers_from_check_errors(
         "scansort.cli.update.fetch_latest_release",
         side_effect=UpdateError("offline"),
     ):
-        assert _maybe_apply_auto_update(cfg, app_dir) is False
+        assert maybe_apply_auto_update(cfg, app_dir) is False
     assert not (app_dir / "update_state.json").exists()
 
 
@@ -207,7 +207,7 @@ def test_maybe_apply_auto_update_recovers_from_spawn_failure(
             side_effect=UpdateError("launch denied"),
         ),
     ):
-        assert _maybe_apply_auto_update(cfg, app_dir) is False
+        assert maybe_apply_auto_update(cfg, app_dir) is False
 
 
 def test_announce_applied_update_shows_once_then_clears(tmp_path: Path, monkeypatch):
@@ -217,7 +217,7 @@ def test_announce_applied_update_shows_once_then_clears(tmp_path: Path, monkeypa
     app_dir.mkdir()
     updater.record_applied_update(app_dir / "update_state.json", __version__)
     with patch("scansort.cli.update.show_toast") as mock_toast:
-        _announce_applied_update(app_dir)
+        announce_applied_update(app_dir)
     mock_toast.assert_called_once()
     title, body = mock_toast.call_args[0]
     assert title == "ScanSort updated"
@@ -230,7 +230,7 @@ def test_announce_applied_update_noop_without_marker(tmp_path: Path):
     app_dir = tmp_path / "appdata"
     app_dir.mkdir()
     with patch("scansort.cli.update.show_toast") as mock_toast:
-        _announce_applied_update(app_dir)
+        announce_applied_update(app_dir)
     mock_toast.assert_not_called()
 
 
@@ -250,7 +250,7 @@ def test_announce_applied_update_cleans_stale_update_dirs(tmp_path: Path, monkey
 
     monkeypatch.setattr("sys.executable", str(install_dir / "ScanSort.exe"))
     with patch("scansort.cli.update.show_toast"):
-        _announce_applied_update(app_dir, install_dir=install_dir)
+        announce_applied_update(app_dir, install_dir=install_dir)
 
     assert not helper_dir.exists()
 

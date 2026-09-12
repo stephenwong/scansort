@@ -6,6 +6,7 @@ in %APPDATA%/ScanSort/update_state.json.
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -33,14 +34,30 @@ def _save_state(state_path: Path, state: dict) -> None:
     atomic_write(state_path, json.dumps(state, indent=2))
 
 
-def record_update_check(state_path: Path, when: datetime | None = None) -> None:
-    """Persist the timestamp of a completed update check (best effort)."""
+def _mutate_state(
+    state_path: Path, mutate: Callable[[dict], bool], warning: str
+) -> None:
+    """Load state, apply *mutate*, and best-effort persist.
+
+    ``mutate`` returns False to suppress the save when nothing changed.
+    """
     state = load_state(state_path)
-    state["checked_at"] = (when or datetime.now(UTC)).isoformat()
+    if not mutate(state):
+        return
     try:
         _save_state(state_path, state)
     except OSError as e:
-        logger.warning("Could not record update check time: %s", e)
+        logger.warning("%s: %s", warning, e)
+
+
+def record_update_check(state_path: Path, when: datetime | None = None) -> None:
+    """Persist the timestamp of a completed update check (best effort)."""
+
+    def _apply(state: dict) -> bool:
+        state["checked_at"] = (when or datetime.now(UTC)).isoformat()
+        return True
+
+    _mutate_state(state_path, _apply, "Could not record update check time")
 
 
 def update_is_due(state_path: Path, interval_days: int) -> bool:
@@ -69,26 +86,26 @@ def record_applied_update(
     state_path: Path, version: str, when: datetime | None = None
 ) -> None:
     """Mark a release as installed and arm the post-install toast marker."""
-    state = load_state(state_path)
-    state["applied_version"] = version
-    state["applied_at"] = (when or datetime.now(UTC)).isoformat()
-    state["just_installed"] = True
-    try:
-        _save_state(state_path, state)
-    except OSError as e:
-        logger.warning("Could not record applied update: %s", e)
+
+    def _apply(state: dict) -> bool:
+        state["applied_version"] = version
+        state["applied_at"] = (when or datetime.now(UTC)).isoformat()
+        state["just_installed"] = True
+        return True
+
+    _mutate_state(state_path, _apply, "Could not record applied update")
 
 
 def clear_applied_notification(state_path: Path) -> None:
     """Disarm the post-install toast marker after it has been shown."""
-    state = load_state(state_path)
-    if "just_installed" not in state:
-        return
-    state["just_installed"] = False
-    try:
-        _save_state(state_path, state)
-    except OSError as e:
-        logger.warning("Could not clear update notification marker: %s", e)
+
+    def _apply(state: dict) -> bool:
+        if "just_installed" not in state:
+            return False
+        state["just_installed"] = False
+        return True
+
+    _mutate_state(state_path, _apply, "Could not clear update notification marker")
 
 
 def applied_version(state_path: Path) -> str | None:

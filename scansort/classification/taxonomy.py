@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from scansort.classification.hints import load_folder_hints, normalize_folder_key
 from scansort.core.config import get_default_app_dir
@@ -275,15 +276,7 @@ class FolderMapper:
                 ):
                     folders = data.get("folders", [])
                     if isinstance(folders, list):
-                        # Drop cached entries whose folders no longer exist, or
-                        # that became symlinks/junctions/hidden, so a deleted or
-                        # escaped folder is never advertised or re-created.
-                        existing = [
-                            str(f)
-                            for f in folders
-                            if self._entry_is_discoverable(self.docs_root / str(f))
-                        ]
-                        self._cached_folders = existing
+                        self._cached_folders = self._prune_discoverable(folders)
                         self._cache_mtime = self.cache_path.stat().st_mtime
                         return self._cached_folders
         except OSError, ValueError, TypeError:
@@ -299,6 +292,14 @@ class FolderMapper:
         except OSError:
             return False
 
+    def _prune_discoverable(self, folders: list[Any]) -> list[str]:
+        """Drop cached entries that no longer exist or became symlinks/hidden."""
+        return [
+            str(f)
+            for f in folders
+            if self._entry_is_discoverable(self.docs_root / str(f))
+        ]
+
     def get_taxonomy(self) -> list[str]:
         """Return the current taxonomy, re-scanning when the cache is stale.
 
@@ -312,11 +313,7 @@ class FolderMapper:
                 # Snapshot and prune: a folder deleted after the last scan must
                 # not be advertised (and re-created by the dispatcher) within
                 # the TTL window.
-                pruned = [
-                    str(f)
-                    for f in cached
-                    if self._entry_is_discoverable(self.docs_root / str(f))
-                ]
+                pruned = self._prune_discoverable(cached)
                 self._cached_folders = pruned
                 return list(pruned)
         disk_folders = self._load_from_disk_cache()

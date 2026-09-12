@@ -22,30 +22,33 @@ def _ensure_pdf_unlocked(reader: PdfReader, filename: str) -> None:
         )
 
 
+def _normalize_keywords(keywords: list[str] | str | None) -> list[str]:
+    """Return cleaned, sorted keyword strings from a list/tuple/set or bare string."""
+    if not keywords:
+        return []
+    if isinstance(keywords, (list, tuple, set)):
+        return sorted(str(k).strip() for k in keywords if str(k).strip())
+    text = str(keywords).strip()
+    return [text] if text else []
+
+
 def _build_xmp_packet(
-    existing_xmp: XmpInformation | bytes | None,
+    existing_xmp: XmpInformation | None,
     title: str | None,
     subject: str | None,
     keywords: list[str] | str | None,
-) -> XmpInformation | bytes:
+) -> XmpInformation:
     """Merge metadata into an existing XMP packet, or generate a minimal one."""
-    if isinstance(existing_xmp, XmpInformation):
-        xmp = existing_xmp
-    elif existing_xmp is not None:
-        return existing_xmp
-    else:
+    xmp = existing_xmp if isinstance(existing_xmp, XmpInformation) else None
+    if xmp is None:
         xmp = XmpInformation.create()
     if title and title.strip():
         xmp.dc_title = {"x-default": title.strip()}
     if subject and subject.strip():
         xmp.dc_description = {"x-default": subject.strip()}
-    if keywords:
-        if isinstance(keywords, (list, tuple, set)):
-            cleaned = sorted(str(k).strip() for k in keywords if str(k).strip())
-        else:
-            cleaned = [str(keywords).strip()] if str(keywords).strip() else []
-        if cleaned:
-            xmp.pdf_keywords = ", ".join(cleaned)
+    cleaned = _normalize_keywords(keywords)
+    if cleaned:
+        xmp.pdf_keywords = ", ".join(cleaned)
     return xmp
 
 
@@ -67,13 +70,9 @@ def _build_docinfo_metadata(
         metadata["/Title"] = title.strip()
     if subject and subject.strip():
         metadata["/Subject"] = subject.strip()
-    if keywords:
-        if isinstance(keywords, (list, tuple, set)):
-            cleaned = sorted(str(k).strip() for k in keywords if str(k).strip())
-            if cleaned:
-                metadata["/Keywords"] = ", ".join(cleaned)
-        elif str(keywords).strip():
-            metadata["/Keywords"] = str(keywords).strip()
+    cleaned = _normalize_keywords(keywords)
+    if cleaned:
+        metadata["/Keywords"] = ", ".join(cleaned)
     if author and author.strip():
         metadata["/Author"] = author.strip()
     metadata["/Creator"] = DEFAULT_CREATOR
@@ -116,7 +115,7 @@ def process_pdf_metadata_and_rotation(
 
     _ensure_pdf_unlocked(reader, pdf_path.name)
 
-    existing_xmp: XmpInformation | bytes | None = None
+    existing_xmp: XmpInformation | None = None
     try:
         existing_xmp = reader.xmp_metadata
     except AttributeError, OSError, PyPdfError:

@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 _ACTIVE_DIALOG_INSTANCE: "SettingsDialog | None" = None
 _DIALOG_LOCK = threading.Lock()
 
+_FOOTNOTE_FONT = ("TkDefaultFont", 8, "italic")
+
 
 def open_settings_dialog(
     config: AppConfig | None = None,
@@ -210,7 +212,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(
             gemini_frame,
             text="Leave blank to retain current key stored in OS Credential Vault.",
-            font=("TkDefaultFont", 8, "italic"),
+            font=_FOOTNOTE_FONT,
         ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 6))
 
         ttk.Label(gemini_frame, text="Gemini Model:").grid(
@@ -267,26 +269,33 @@ class SettingsDialog(tk.Toplevel):
     def _toggle_show_key(self) -> None:
         self.key_entry.config(show="" if self.show_key_var.get() else "*")
 
-    def _browse_watch_folder(self) -> None:
+    def _browse_folder(
+        self,
+        var: tk.StringVar,
+        title: str,
+        on_choose: Callable[[], None] | None = None,
+    ) -> None:
+        """Prompt for a directory and store its resolved path in *var*."""
         chosen = filedialog.askdirectory(
             parent=self,
-            title="Select Scanner Drop Folder",
-            initialdir=self.watch_var.get(),
+            title=title,
+            initialdir=var.get(),
             mustexist=True,
         )
         if chosen:
-            self.watch_var.set(str(Path(chosen).resolve()))
+            var.set(str(Path(chosen).resolve()))
+            if on_choose is not None:
+                on_choose()
+
+    def _browse_watch_folder(self) -> None:
+        self._browse_folder(self.watch_var, "Select Scanner Drop Folder")
 
     def _browse_docs_folder(self) -> None:
-        chosen = filedialog.askdirectory(
-            parent=self,
-            title="Select Documents Destination Root",
-            initialdir=self.docs_var.get(),
-            mustexist=True,
+        self._browse_folder(
+            self.docs_var,
+            "Select Documents Destination Root",
+            on_choose=self.refresh_taxonomy_tree,
         )
-        if chosen:
-            self.docs_var.set(str(Path(chosen).resolve()))
-            self.refresh_taxonomy_tree()
 
     def refresh_taxonomy_tree(self) -> None:
         """Scan current documents folder and populate treeview."""
@@ -311,8 +320,8 @@ class SettingsDialog(tk.Toplevel):
 
         _insert_nodes("", tree_dict)
 
-    def on_save(self) -> None:
-        """Validate inputs, save configuration and credentials, and notify."""
+    def _resolve_new_config(self) -> AppConfig | None:
+        """Validate dialog inputs and build the updated config, or None on error."""
         watch_raw = self.watch_var.get().strip()
         docs_raw = self.docs_var.get().strip()
         model_val = self.model_var.get().strip()
@@ -324,18 +333,17 @@ class SettingsDialog(tk.Toplevel):
                 "Scanner Drop Folder cannot be empty.",
                 parent=self,
             )
-            return
+            return None
         if not docs_raw:
             messagebox.showerror(
                 "Configuration Error",
                 "Documents Destination Root cannot be empty.",
                 parent=self,
             )
-            return
+            return None
 
         watch_path = Path(watch_raw).resolve()
         docs_path = Path(docs_raw).resolve()
-
         try:
             updated_dict = self.app_config.model_dump()
             updated_dict["watch_folder"] = watch_path
@@ -348,22 +356,16 @@ class SettingsDialog(tk.Toplevel):
             new_cfg.ensure_directories()
         except (ValueError, OSError) as e:
             messagebox.showerror("Configuration Error", str(e), parent=self)
-            return
+            return None
+        return new_cfg
 
-        new_key = self.api_key_var.get().strip()
-        prior_key: str | None = None
-        if new_key:
-            prior_key = get_api_key()
-            try:
-                set_api_key(new_key)
-            except (ValueError, OSError) as e:
-                messagebox.showerror(
-                    "API Key Error", f"Failed to save API key: {e}", parent=self
-                )
-                return
-
+    def _persist_config_with_key_rollback(
+        self, new_cfg: AppConfig, new_key: str, prior_key: str | None
+    ) -> bool:
+        """Persist *new_cfg*, rolling back the saved credential on failure."""
         try:
             save_config(new_cfg)
+            return True
         except OSError as e:
             # Roll back the credential so the vault does not disagree with the
             # config that failed to persist.
@@ -376,8 +378,10 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showerror(
                 "Save Error", f"Failed to save config file: {e}", parent=self
             )
-            return
+            return False
 
+    def _apply_system_integrations(self, new_cfg: AppConfig) -> tuple[bool, bool]:
+        """Reconcile autorun and context-menu OS state; returns (autorun_ok, menu_ok)."""
         autorun_ok = True
         try:
             if self.autorun_var.get():
@@ -405,6 +409,30 @@ class SettingsDialog(tk.Toplevel):
         except OSError as e:
             logger.warning("Could not update context menu setting: %s", e)
             context_menu_ok = False
+        return autorun_ok, context_menu_ok
+
+    def on_save(self) -> None:
+        """Validate inputs, save configuration and credentials, and notify."""
+        new_cfg = self._resolve_new_config()
+        if new_cfg is None:
+            return
+
+        new_key = self.api_key_var.get().strip()
+        prior_key: str | None = None
+        if new_key:
+            prior_key = get_api_key()
+            try:
+                set_api_key(new_key)
+            except (ValueError, OSError) as e:
+                messagebox.showerror(
+                    "API Key Error", f"Failed to save API key: {e}", parent=self
+                )
+                return
+
+        if not self._persist_config_with_key_rollback(new_cfg, new_key, prior_key):
+            return
+
+        autorun_ok, context_menu_ok = self._apply_system_integrations(new_cfg)
 
         self.app_config = new_cfg
         if self.on_applied is not None:

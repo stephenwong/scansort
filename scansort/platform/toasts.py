@@ -17,6 +17,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# App User Model ID registered with the Windows toast backend.
+TOASTER_AUM_ID = "ScanSort"
+# Bounded retention so WinRT activation callbacks survive garbage collection.
+_RECENT_TOAST_LIMIT = 20
+
 _backend = None
 _backend_lock = threading.Lock()
 
@@ -68,13 +73,13 @@ class WindowsToastBackend:
                 "Neither InteractableWindowsToaster nor WindowsToaster found"
             )
 
-        self._toaster = toaster_cls("ScanSort")
+        self._toaster = toaster_cls(TOASTER_AUM_ID)
         toast_cls = getattr(windows_toasts, "Toast", None)
         if toast_cls is None:
             raise ImportError("windows_toasts.Toast not found")
         self._toast_class = toast_cls
         self._toast_button_class = getattr(windows_toasts, "ToastButton", None)
-        self._recent_toasts: deque[Any] = deque(maxlen=20)
+        self._recent_toasts: deque[Any] = deque(maxlen=_RECENT_TOAST_LIMIT)
 
     def show(
         self,

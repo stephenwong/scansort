@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from scansort.core.constants import DEFAULT_RATE_LIMIT_DELAY_S
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,7 +16,7 @@ def run_pipeline_worker(
     process_fn: Callable[[Path], Any],
     file_queue: queue.Queue,
     stop_event: threading.Event,
-    rate_limit_delay: float = 1.0,
+    rate_limit_delay: float = DEFAULT_RATE_LIMIT_DELAY_S,
 ) -> None:
     """Sequential background worker processing items from the queue with rate-limiting.
 

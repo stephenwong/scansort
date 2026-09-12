@@ -668,6 +668,48 @@ def test_file_reviewed_item_converts_non_pdf_to_pdf(tmp_path: Path):
     assert reader.metadata.get("/Title") == "Holiday_Receipt"
 
 
+def test_file_reviewed_item_conversion_failure_falls_back_to_original(tmp_path: Path):
+    """A failed image-to-PDF conversion still files with the original extension."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    source_img = review_dir / "scan001.jpg"
+    source_img.write_bytes(b"not-a-real-jpeg")
+
+    app_dir = tmp_path / "app_data"
+    app_dir.mkdir(parents=True)
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+    item = ReviewItem(
+        file_path=source_img,
+        filename=source_img.name,
+        file_size_bytes=source_img.stat().st_size,
+        modified_time=source_img.stat().st_mtime,
+        sha256="c" * 64,
+        summary="Holiday receipt",
+        document_type="Receipt",
+    )
+
+    with patch(
+        "scansort.pipeline.review.convert_to_pdf",
+        side_effect=ValueError("cannot convert"),
+    ):
+        dest = file_reviewed_item(
+            item=item,
+            target_folder="Travel",
+            document_date="260901",
+            description="Holiday_Receipt",
+            config=cfg,
+            history_jsonl=app_dir / HISTORY_JSONL_NAME,
+            history_csv=app_dir / HISTORY_CSV_NAME,
+            lock_path=app_dir / "operations.lock",
+        )
+
+    assert dest.suffix == ".jpg"
+    assert dest.name == "260901_Holiday_Receipt.jpg"
+    assert dest.exists()
+    assert not source_img.exists()
+
+
 def test_dismiss_review_item_mirrors_to_documents_csv(tmp_path: Path):
     docs = tmp_path / "Documents"
     review_dir = docs / "_Review_Needed"

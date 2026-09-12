@@ -28,6 +28,29 @@ def _has_gui_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def _print_review_item(item: ReviewItem, idx: int, total: int) -> None:
+    """Print the diagnostic card for a single review item."""
+    print("=" * 64)
+    print(f"[{idx}/{total}] {item.filename} ({item.file_size_bytes / 1024:.1f} KB)")
+    if item.summary:
+        print(f"Summary: {item.summary}")
+    if item.confidence:
+        print(f"Type: {item.document_type} | Confidence: {int(item.confidence * 100)}%")
+    if item.suggested_folder:
+        print(f"AI Suggestion: {item.suggested_folder}")
+    if item.folder_reasoning:
+        print(f"Reasoning: {item.folder_reasoning}")
+    print("=" * 64)
+
+
+def _input_or_cancel(prompt: str) -> str | None:
+    """Read a line of input, returning None when the user cancels (EOF/interrupt)."""
+    try:
+        return input(prompt)
+    except EOFError, KeyboardInterrupt:
+        return None
+
+
 def _run_cli_review(
     items: list[ReviewItem],
     config: AppConfig,
@@ -46,19 +69,7 @@ def _run_cli_review(
     )
 
     for idx, item in enumerate(queue, start=1):
-        print("=" * 64)
-        print(f"[{idx}/{total}] {item.filename} ({item.file_size_bytes / 1024:.1f} KB)")
-        if item.summary:
-            print(f"Summary: {item.summary}")
-        if item.confidence:
-            print(
-                f"Type: {item.document_type} | Confidence: {int(item.confidence * 100)}%"
-            )
-        if item.suggested_folder:
-            print(f"AI Suggestion: {item.suggested_folder}")
-        if item.folder_reasoning:
-            print(f"Reasoning: {item.folder_reasoning}")
-        print("=" * 64)
+        _print_review_item(item, idx, total)
 
         while True:
             print("Actions:")
@@ -73,11 +84,11 @@ def _run_cli_review(
             print("  [q] Quit review")
 
             default_choice = "1" if item.suggested_folder else "2"
-            try:
-                choice = input(f"Choice [{default_choice}]: ").strip() or default_choice
-            except EOFError, KeyboardInterrupt:
+            raw_choice = _input_or_cancel(f"Choice [{default_choice}]: ")
+            if raw_choice is None:
                 print("\nReview session cancelled.")
                 return 0
+            choice = raw_choice.strip() or default_choice
 
             if choice.lower() == "q":
                 print("\nReview session ended.")
@@ -97,11 +108,10 @@ def _run_cli_review(
                 break
 
             if choice == "5":
-                try:
-                    confirm = input(f"Delete {item.filename}? [y/N]: ").strip().lower()
-                except EOFError, KeyboardInterrupt:
+                raw_confirm = _input_or_cancel(f"Delete {item.filename}? [y/N]: ")
+                if raw_confirm is None:
                     return 0
-                if confirm == "y":
+                if raw_confirm.strip().lower() == "y":
                     try:
                         dismiss_review_item(
                             item,
@@ -122,19 +132,19 @@ def _run_cli_review(
                 if item.suggested_folder:
                     target_folder = item.suggested_folder
                 else:
-                    try:
-                        target_folder = input(
-                            "Target folder (e.g. Utilities/Electricity): "
-                        ).strip()
-                    except EOFError, KeyboardInterrupt:
-                        return 0
-            elif choice == "2":
-                try:
-                    target_folder = input(
+                    raw_target = _input_or_cancel(
                         "Target folder (e.g. Utilities/Electricity): "
-                    ).strip()
-                except EOFError, KeyboardInterrupt:
+                    )
+                    if raw_target is None:
+                        return 0
+                    target_folder = raw_target.strip()
+            elif choice == "2":
+                raw_target = _input_or_cancel(
+                    "Target folder (e.g. Utilities/Electricity): "
+                )
+                if raw_target is None:
                     return 0
+                target_folder = raw_target.strip()
             else:
                 print(
                     f"Error: Invalid choice '{choice}'. Please select a valid option.\n"
@@ -145,20 +155,30 @@ def _run_cli_review(
                 print("Error: Target folder cannot be empty.\n")
                 continue
 
+            raw_date = _input_or_cancel(f"Document date [{item.document_date}]: ")
+            if raw_date is None:
+                print("\nReview session cancelled.")
+                return 0
+            in_date = raw_date.strip() or item.document_date
+
+            raw_desc = _input_or_cancel(f"Description [{item.description}]: ")
+            if raw_desc is None:
+                print("\nReview session cancelled.")
+                return 0
+            in_desc = raw_desc.strip() or item.description
+
+            suggested_kw = item.description.replace("_", " ").lower()
+            hint_prompt = f"Add keyword hint for '{target_folder}'? [{suggested_kw}] (Enter to accept, type custom, or 'n' to skip): "
+            raw_hint = _input_or_cancel(hint_prompt)
+            if raw_hint is None:
+                print("\nReview session cancelled.")
+                return 0
+            in_hint = raw_hint.strip()
+            hint_to_save: str | None = None
+            if in_hint.lower() != "n":
+                hint_to_save = in_hint or suggested_kw
+
             try:
-                date_prompt = f"Document date [{item.document_date}]: "
-                in_date = input(date_prompt).strip() or item.document_date
-
-                desc_prompt = f"Description [{item.description}]: "
-                in_desc = input(desc_prompt).strip() or item.description
-
-                suggested_kw = item.description.replace("_", " ").lower()
-                hint_prompt = f"Add keyword hint for '{target_folder}'? [{suggested_kw}] (Enter to accept, type custom, or 'n' to skip): "
-                in_hint = input(hint_prompt).strip()
-                hint_to_save: str | None = None
-                if in_hint.lower() != "n":
-                    hint_to_save = in_hint or suggested_kw
-
                 dest = file_reviewed_item(
                     item=item,
                     target_folder=target_folder,
@@ -173,9 +193,6 @@ def _run_cli_review(
                 )
                 print(f"Successfully filed to {dest.name} in '{target_folder}'.\n")
                 break
-            except EOFError, KeyboardInterrupt:
-                print("\nReview session cancelled.")
-                return 0
             except (OSError, ValueError) as e:
                 print(f"Error filing document: {e}\n")
                 continue

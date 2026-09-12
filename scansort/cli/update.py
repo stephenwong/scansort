@@ -52,9 +52,6 @@ def announce_applied_update(app_dir: Path, install_dir: Path | None = None) -> N
     clear_applied_notification(state_path)
 
 
-_announce_applied_update = announce_applied_update
-
-
 def maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
     """Download and hand off a newer release, returning True when applied.
 
@@ -113,9 +110,6 @@ def maybe_apply_auto_update(cfg: AppConfig, app_dir: Path) -> bool:
         return False
 
 
-_maybe_apply_auto_update = maybe_apply_auto_update
-
-
 def handle_self_update(values: list[str]) -> int:
     """Handle the hidden '--self-update' helper invocation from a staged build."""
     try:
@@ -137,58 +131,45 @@ def handle_check_update(parsed: argparse.Namespace) -> int:
         fetch_fn=fetch_latest_release,
         available_fn=available_update,
     )
+    result: dict[str, object] = {
+        "update_available": False,
+        "current_version": __version__,
+    }
+
     if error is not None:
+        result["error"] = error
         if is_json:
-            print(
-                json.dumps(
-                    {
-                        "update_available": False,
-                        "current_version": __version__,
-                        "error": error,
-                    },
-                    indent=2,
-                )
-            )
-            return 1
-        print(f"Update check failed: {error}", file=sys.stderr)
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Update check failed: {error}", file=sys.stderr)
         return 1
 
     if release is None:
+        result["latest_version"] = __version__
         if is_json:
+            print(json.dumps(result, indent=2))
+        else:
             print(
-                json.dumps(
-                    {
-                        "update_available": False,
-                        "current_version": __version__,
-                        "latest_version": __version__,
-                    },
-                    indent=2,
-                )
+                f"ScanSort is up to date (version {__version__}). No new updates available."
             )
-            return 0
-        print(
-            f"ScanSort is up to date (version {__version__}). No new updates available."
-        )
-    else:
-        if is_json:
-            print(
-                json.dumps(
-                    {
-                        "update_available": True,
-                        "current_version": __version__,
-                        "latest_version": release.version,
-                        "asset_name": release.asset_name,
-                        "download_url": release.download_url,
-                        "size_bytes": release.size_bytes,
-                        "published_at": release.published_at,
-                    },
-                    indent=2,
-                )
-            )
-            return 0
-        print(f"Update available: version {release.version} (current: {__version__})")
-        print(f"Release asset:  {release.asset_name}")
-        print(f"Download URL:   {release.download_url}")
-        if release.size_bytes:
-            print(f"Asset size:     {release.size_bytes:,} bytes")
+        return 0
+
+    result.update(
+        {
+            "update_available": True,
+            "latest_version": release.version,
+            "asset_name": release.asset_name,
+            "download_url": release.download_url,
+            "size_bytes": release.size_bytes,
+            "published_at": release.published_at,
+        }
+    )
+    if is_json:
+        print(json.dumps(result, indent=2))
+        return 0
+    print(f"Update available: version {release.version} (current: {__version__})")
+    print(f"Release asset:  {release.asset_name}")
+    print(f"Download URL:   {release.download_url}")
+    if release.size_bytes:
+        print(f"Asset size:     {release.size_bytes:,} bytes")
     return 0

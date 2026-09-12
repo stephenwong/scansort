@@ -16,7 +16,6 @@ from scansort.core.fs import (
     relative_folder_is_safe,
     resolve_collision,
 )
-from scansort.pipeline.undo import undo_last_move
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,6 @@ __all__ = [
     "resolve_collision",
     "resolve_destination_dir",
     "resolve_duplicates_dir",
-    "undo_last_move",
 ]
 
 

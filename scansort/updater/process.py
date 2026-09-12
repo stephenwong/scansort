@@ -22,7 +22,9 @@ from scansort.updater.installer import (
     EXECUTABLE_NAME,
     UpdateError,
     cleanup_stale_updates,
+    helper_dir_for,
     replace_install_dir,
+    require_exe,
 )
 from scansort.updater.state import record_applied_update
 
@@ -85,7 +87,7 @@ def _wait_windows_process(pid: int, timeout: float) -> bool:
             finally:
                 kernel32.CloseHandle(handle)
 
-        err = ctypes.get_last_error() if hasattr(ctypes, "get_last_error") else 0
+        err = ctypes.get_last_error()
         if err == error_invalid_parameter:
             # ERROR_INVALID_PARAMETER (87): the PID does not exist.
             return True
@@ -150,11 +152,9 @@ def spawn_update_helper(
     """
     install_dir = Path(install_dir)
     staged_dir = Path(staged_dir)
-    staged_exe = staged_dir / EXECUTABLE_NAME
-    if not staged_exe.is_file():
-        raise UpdateError("Staged update does not contain ScanSort.exe.")
+    require_exe(staged_dir, "Staged update does not contain ScanSort.exe.")
 
-    helper_dir = install_dir.parent / f"{install_dir.name}.helper-{version}"
+    helper_dir = helper_dir_for(install_dir, version)
     if helper_dir.exists():
         shutil.rmtree(helper_dir, ignore_errors=True)
     try:
@@ -162,9 +162,8 @@ def spawn_update_helper(
     except OSError as e:
         raise UpdateError(f"Could not prepare self-update helper directory: {e}") from e
 
+    require_exe(helper_dir, "Prepared helper directory does not contain ScanSort.exe.")
     helper_exe = helper_dir / EXECUTABLE_NAME
-    if not helper_exe.is_file():
-        raise UpdateError("Prepared helper directory does not contain ScanSort.exe.")
 
     logger.info(
         "Spawning self-update helper (PID: %d, version: %s)...", parent_pid, version
@@ -184,9 +183,8 @@ def spawn_update_helper(
 
 def launch_installed_app(install_dir: Path, args: list[str] | None = None) -> None:
     """Relaunch the freshly installed executable in background watch mode."""
+    require_exe(Path(install_dir), "Installed ScanSort.exe not found.")
     executable = Path(install_dir) / EXECUTABLE_NAME
-    if not executable.is_file():
-        raise UpdateError("Installed ScanSort.exe not found.")
     argv = [str(executable), *(args if args is not None else ["watch", "--minimized"])]
     _popen_detached(argv)
 
@@ -222,10 +220,8 @@ def perform_self_update(
             raise UpdateError(
                 "The --self-update helper requires a frozen Windows build."
             )
-        if not (staged_dir / EXECUTABLE_NAME).is_file():
-            raise UpdateError("Staged update does not contain ScanSort.exe.")
-        if not (install_dir / EXECUTABLE_NAME).is_file():
-            raise UpdateError("Installed ScanSort.exe not found.")
+        require_exe(staged_dir, "Staged update does not contain ScanSort.exe.")
+        require_exe(install_dir, "Installed ScanSort.exe not found.")
 
         app_dir = Path(app_dir) if app_dir is not None else get_default_app_dir()
         app_dir.mkdir(parents=True, exist_ok=True)

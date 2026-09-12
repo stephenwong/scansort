@@ -5,9 +5,9 @@ import collections
 import json
 from typing import Any
 
-from scansort.cli.history import _load_history_records, _safe_str
+from scansort.cli.history import load_history_records, safe_str
 from scansort.core.config import get_default_app_dir
-from scansort.core.constants import HISTORY_JSONL_NAME
+from scansort.core.constants import HISTORY_JSONL_NAME, REVIEW_NEEDED_DIR
 from scansort.logging.cost import calculate_gemini_cost
 
 
@@ -23,11 +23,11 @@ def _calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     total_cost_usd = 0.0
 
     for r in records:
-        status = _safe_str(r.get("status"), "UNKNOWN").upper()
+        status = safe_str(r.get("status"), "UNKNOWN").upper()
         status_counts[status] += 1
 
         folder = r.get("destination_folder")
-        if folder and not folder.startswith("_Review_Needed"):
+        if folder and not folder.startswith(REVIEW_NEEDED_DIR):
             folder_counts[folder] += 1
 
         doc_type = r.get("document_type")
@@ -87,7 +87,7 @@ def handle_stats(parsed: argparse.Namespace) -> int:
     app_dir = get_default_app_dir()
     history_file = app_dir / HISTORY_JSONL_NAME
 
-    records = _load_history_records(history_file)
+    records = load_history_records(history_file)
     if not records:
         print("No filing history found.")
         return 0

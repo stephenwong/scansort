@@ -14,6 +14,7 @@ from scansort.platform.toasts import show_toast
 logger = logging.getLogger(__name__)
 
 MAX_REASON_CHARS = 140
+NOTIFICATION_TITLE = "ScanSort"
 
 
 def _clean_reason(reason: str) -> str:
@@ -29,7 +30,7 @@ def _clean_reason(reason: str) -> str:
 
 def file_filed_message(filed_name: str, folder: str) -> tuple[str, str]:
     """Return (title, body) announcing a successfully filed document."""
-    return ("ScanSort", f"{filed_name} → {folder}")
+    return (NOTIFICATION_TITLE, f"{filed_name} → {folder}")
 
 
 def filing_failed_message(
@@ -41,13 +42,13 @@ def filing_failed_message(
         cleaned = _clean_reason(reason)
         if cleaned:
             body = f"{body}\nReason: {cleaned}"
-    return ("ScanSort", body)
+    return (NOTIFICATION_TITLE, body)
 
 
 def scan_stranded_message(source_name: str, folder: str) -> tuple[str, str]:
     """Return (title, body) announcing a scan that could not be routed."""
     return (
-        "ScanSort",
+        NOTIFICATION_TITLE,
         f"Attention needed: {source_name} could not be processed or moved to {folder}.\n"
         "Please check your drop folder.",
     )

@@ -53,6 +53,11 @@ def parse_version(value: str) -> tuple[int, int, int] | None:
     return tuple(numbers)  # type: ignore[return-value]
 
 
+def _format_version(parts: tuple[int, int, int]) -> str:
+    """Render a parsed version tuple back to ``MAJOR.MINOR.PATCH``."""
+    return ".".join(str(part) for part in parts)
+
+
 def installed_version() -> tuple[int, int, int] | None:
     """Parse the embedded package version as a comparable tuple."""
     from scansort import __version__  # imported lazily so tests can patch it
@@ -142,7 +147,7 @@ def available_update(
     if current_version is not None and tag_version <= current_version:
         logger.info(
             "ScanSort is up to date (installed: %s, latest release: %s).",
-            ".".join(str(part) for part in current_version),
+            _format_version(current_version),
             tag_name,
         )
         return None
@@ -162,7 +167,7 @@ def available_update(
     size_bytes = size if isinstance(size, int) and size > 0 else None
     published_at = payload.get("published_at")
     rel_info = ReleaseInfo(
-        version=".".join(str(part) for part in tag_version),
+        version=_format_version(tag_version),
         tag_name=tag_name,
         asset_name=expected_name,
         download_url=download_url,
@@ -173,7 +178,7 @@ def available_update(
     logger.info(
         "Update available: %s (installed: %s). Asset: %s (%s bytes).",
         tag_name,
-        ".".join(str(p) for p in current_version) if current_version else "unknown",
+        _format_version(current_version) if current_version else "unknown",
         expected_name,
         size_bytes or "unknown",
     )

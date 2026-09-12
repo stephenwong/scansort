@@ -61,19 +61,12 @@ class AuditLogger:
         try:
             with interprocess_file_lock(lock_path):
                 path.parent.mkdir(parents=True, exist_ok=True)
-                if path.exists():
-                    if path.stat().st_size > 0:
-                        return
-                    with open(path, "a", newline="", encoding="utf-8") as f:
-                        if os.fstat(f.fileno()).st_size == 0:
-                            csv.writer(f).writerow(CSV_HEADERS)
-                            f.flush()
-                    return
-                with open(path, "x", newline="", encoding="utf-8") as f:
-                    csv.writer(f).writerow(CSV_HEADERS)
-                    f.flush()
-        except FileExistsError:
-            pass  # A concurrent process created the file first; never truncate.
+                # Append-only open never truncates a file another process
+                # populated; the added row is only written for an empty file.
+                with open(path, "a", newline="", encoding="utf-8") as f:
+                    if os.fstat(f.fileno()).st_size == 0:
+                        csv.writer(f).writerow(CSV_HEADERS)
+                        f.flush()
         except OSError as e:
             logger.error("Failed to initialize CSV header at %s: %s", path, e)
 

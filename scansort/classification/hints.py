@@ -21,6 +21,11 @@ def get_default_hints_path() -> Path:
     return get_default_app_dir() / HINTS_FILENAME
 
 
+def _normalize_keywords(keywords) -> list[str]:
+    """Return cleaned, lowercased keyword strings from an iterable."""
+    return [kw.strip().lower() for kw in keywords if isinstance(kw, str) and kw.strip()]
+
+
 def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
     """Load user keyword hints mapping folder paths to relevant search terms.
 
@@ -47,11 +52,7 @@ def load_folder_hints(hints_path: Path | None = None) -> dict[str, list[str]]:
             if not norm_folder:
                 continue
             if isinstance(keywords, list):
-                clean_keywords = [
-                    kw.strip().lower()
-                    for kw in keywords
-                    if isinstance(kw, str) and kw.strip()
-                ]
+                clean_keywords = _normalize_keywords(keywords)
                 if clean_keywords:
                     normalized[norm_folder] = clean_keywords
 
@@ -102,11 +103,9 @@ def add_folder_hint(
     kw_list = [keywords] if isinstance(keywords, str) else list(keywords)
     existing_kws = current.get(norm_folder, [])
     updated_kws = list(existing_kws)
-    for kw in kw_list:
-        if isinstance(kw, str):
-            clean_kw = kw.strip().lower()
-            if clean_kw and clean_kw not in updated_kws:
-                updated_kws.append(clean_kw)
+    for clean_kw in _normalize_keywords(kw_list):
+        if clean_kw not in updated_kws:
+            updated_kws.append(clean_kw)
 
     if updated_kws != existing_kws:
         current[norm_folder] = updated_kws

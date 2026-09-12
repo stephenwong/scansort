@@ -19,6 +19,9 @@ from scansort.core.constants import (
     HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
     LOG_FILENAME,
+    SCAN_STABILITY_POLL_INTERVAL_S,
+    SCAN_STABILITY_TIMEOUT_S,
+    SCAN_STABLE_COUNT,
     STATUS_DUPLICATE,
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -85,21 +88,30 @@ class ScanSortPipeline:
         self.folder_mapper.docs_root = new_config.documents_root
         self.folder_mapper.max_depth = new_config.max_folder_depth
         self.folder_mapper.fallback_folder = new_config.fallback_folder
-        if hasattr(self.folder_mapper, "refresh"):
-            self.folder_mapper.refresh()
-        else:
-            self.folder_mapper._cached_folders = None
+        self.folder_mapper.refresh()
 
-        if (
-            hasattr(self.classifier, "model")
-            and self.classifier.model != new_config.gemini_model
-        ):
+        if self.classifier.model != new_config.gemini_model:
             self.classifier.model = new_config.gemini_model
-            if hasattr(self.classifier, "_client"):
-                self.classifier._client = None
+            self.classifier._client = None
 
-        if hasattr(self.audit_logger, "mirror_csv_path"):
-            self.audit_logger.mirror_csv_path = new_config.mirror_csv_path
+        self.audit_logger.mirror_csv_path = new_config.mirror_csv_path
+
+    def _relative_posix_folder(self, path: Path) -> str:
+        """Return *path* relative to the documents root as a POSIX-style string."""
+        return str(path.relative_to(self.config.documents_root.resolve())).replace(
+            "\\", "/"
+        )
+
+    def _transfer_file(self, source: Path, dest: Path, preserve_source: bool) -> None:
+        """Move (or copy) *source* to *dest*, discarding a partial destination on failure."""
+        try:
+            if preserve_source:
+                shutil.copy2(str(source), str(dest))
+            else:
+                shutil.move(str(source), str(dest))
+        except OSError:
+            dest.unlink(missing_ok=True)
+            raise
 
     def _build_audit_entry(
         self,
@@ -170,7 +182,6 @@ class ScanSortPipeline:
             file_hash[:8],
         )
         clean_fallback = self.config.fallback_folder.strip("/\\")
-        resolved_docs = self.config.documents_root.resolve()
         dup_dest_dir = resolve_duplicates_dir(
             self.config.documents_root, clean_fallback
         )
@@ -189,16 +200,9 @@ class ScanSortPipeline:
         with interprocess_file_lock(self.operations_lock):
             dup_dest = resolve_collision(dup_dest_dir, desired_dup_name)
             dup_dest_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                if preserve_source:
-                    shutil.copy2(str(file_path), str(dup_dest))
-                else:
-                    shutil.move(str(file_path), str(dup_dest))
-            except OSError:
-                dup_dest.unlink(missing_ok=True)
-                raise
+            self._transfer_file(file_path, dup_dest, preserve_source)
 
-        folder_str = str(dup_dest_dir.relative_to(resolved_docs)).replace("\\", "/")
+        folder_str = self._relative_posix_folder(dup_dest_dir)
         summary_str = (
             f"Duplicate scan of {existing_record.get('new_filename', 'previous file')}"
         )
@@ -293,10 +297,7 @@ class ScanSortPipeline:
                 )
 
         # Derive destination folder relative to documents_root for accurate audit and notifications
-        resolved_docs = self.config.documents_root.resolve()
-        folder_str = str(final_dest.parent.relative_to(resolved_docs)).replace(
-            "\\", "/"
-        )
+        folder_str = self._relative_posix_folder(final_dest.parent)
 
         # Record audit log
         self.audit_logger.log_scan(
@@ -334,21 +335,10 @@ class ScanSortPipeline:
         # 1. Wait for file write stabilization (Rule 3.C). The quiet window is
         # ~1s: advisory lock probes cannot detect plain write()-based writers
         # (scanner drivers, SMB), so size quiescence is the effective guard.
-        if not wait_for_file_stability(
-            file_path, timeout=10.0, poll_interval=0.1, stable_count=10
-        ):
-            logger.warning("File %s did not stabilize. Skipping.", file_path.name)
+        snapshot = self._stabilize_and_snapshot(file_path)
+        if snapshot is None:
             return None
-
-        try:
-            source_stat = file_path.stat()
-        except OSError:
-            logger.warning(
-                "File %s vanished before processing. Skipping.", file_path.name
-            )
-            return None
-        source_size = source_stat.st_size
-        source_mtime_ns = source_stat.st_mtime_ns
+        source_size, source_mtime_ns = snapshot
 
         staging_pdf: Path | None = None
         try:
@@ -386,14 +376,9 @@ class ScanSortPipeline:
             # Re-verify the source is unchanged since stabilization before
             # dispatching; a writer that resumed mid-processing must not have
             # its partial snapshot filed.
-            try:
-                current_stat = file_path.stat()
-            except OSError:
-                current_stat = None
-            if current_stat is None or (
-                current_stat.st_size,
-                current_stat.st_mtime_ns,
-            ) != (source_size, source_mtime_ns):
+            if self._source_changed_since_snapshot(
+                file_path, source_size, source_mtime_ns
+            ):
                 logger.warning(
                     "File %s changed while processing. Deferring until stable.",
                     file_path.name,
@@ -421,6 +406,44 @@ class ScanSortPipeline:
             if staging_pdf is not None:
                 staging_pdf.unlink(missing_ok=True)
 
+    def _stabilize_and_snapshot(self, file_path: Path) -> tuple[int, int] | None:
+        """Wait for write stabilization and snapshot ``(size, mtime_ns)``.
+
+        Returns None when the file never stabilizes or vanishes before the
+        snapshot, mirroring the previous inline skip paths.
+        """
+        if not wait_for_file_stability(
+            file_path,
+            timeout=SCAN_STABILITY_TIMEOUT_S,
+            poll_interval=SCAN_STABILITY_POLL_INTERVAL_S,
+            stable_count=SCAN_STABLE_COUNT,
+        ):
+            logger.warning("File %s did not stabilize. Skipping.", file_path.name)
+            return None
+
+        try:
+            source_stat = file_path.stat()
+        except OSError:
+            logger.warning(
+                "File %s vanished before processing. Skipping.", file_path.name
+            )
+            return None
+        return source_stat.st_size, source_stat.st_mtime_ns
+
+    @staticmethod
+    def _source_changed_since_snapshot(
+        file_path: Path, source_size: int, source_mtime_ns: int
+    ) -> bool:
+        """Return True when the file changed since its stabilized snapshot."""
+        try:
+            current_stat = file_path.stat()
+        except OSError:
+            return True
+        return (current_stat.st_size, current_stat.st_mtime_ns) != (
+            source_size,
+            source_mtime_ns,
+        )
+
     def _route_failed_to_review(
         self,
         file_path: Path,
@@ -443,12 +466,8 @@ class ScanSortPipeline:
             with interprocess_file_lock(self.operations_lock):
                 review_dir.mkdir(parents=True, exist_ok=True)
                 review_dest = resolve_collision(review_dir, file_path.name)
-                if preserve_source:
-                    shutil.copy2(str(file_path), str(review_dest))
-                else:
-                    shutil.move(str(file_path), str(review_dest))
-            resolved_docs = self.config.documents_root.resolve()
-            folder_str = str(review_dir.relative_to(resolved_docs)).replace("\\", "/")
+                self._transfer_file(file_path, review_dest, preserve_source)
+            folder_str = self._relative_posix_folder(review_dir)
             self.audit_logger.log_scan(
                 self._build_audit_entry(
                     file_hash="UNKNOWN",

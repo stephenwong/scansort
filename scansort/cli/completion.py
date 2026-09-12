@@ -3,13 +3,32 @@
 import argparse
 import sys
 
+# Canonical subcommand inventory shared by every generated completion script.
+_SUBCOMMANDS: tuple[str, ...] = (
+    "watch",
+    "file",
+    "config",
+    "undo",
+    "rescan",
+    "review",
+    "check-update",
+    "logs",
+    "history",
+    "stats",
+    "help",
+    "completion",
+)
+
+_SUBCOMMANDS_SPACE = " ".join(_SUBCOMMANDS)
+_SUBCOMMANDS_PS = "(" + ", ".join(f"'{name}'" for name in _SUBCOMMANDS) + ")"
+
 _BASH_TEMPLATE = """# Bash completion for scansort
 _scansort_completion() {
     local cur prev opts subcommands
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    subcommands="watch file config undo rescan review check-update logs history stats help completion"
+    subcommands="__SCAN_SORT_SUBCOMMANDS__"
 
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=( $(compgen -W "$subcommands --version -V --help -v --verbose --dry-run --minimized" -- "$cur") )
@@ -161,7 +180,7 @@ _scansort "$@"
 """
 
 _FISH_TEMPLATE = """# Fish completion for scansort
-set -l commands watch file config undo rescan review check-update logs history stats help completion
+set -l commands __SCAN_SORT_SUBCOMMANDS__
 
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "watch" -d "Start background drop folder monitor"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "file" -d "Directly process and file specified document(s)"
@@ -233,7 +252,7 @@ _POWERSHELL_TEMPLATE = """# PowerShell completion for scansort
 Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
 
-    $subcommands = @('watch', 'file', 'config', 'undo', 'rescan', 'review', 'check-update', 'logs', 'history', 'stats', 'help', 'completion')
+    $subcommands = __SCAN_SORT_PS_SUBCOMMANDS__
     $elements = $commandAst.ToString().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
 
     if ($elements.Count -le 1 -or ($elements.Count -eq 2 -and $wordToComplete -ne '' -and -not $wordToComplete.StartsWith('-'))) {
@@ -272,11 +291,19 @@ Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
 }
 """
 
+
+def _render_template(template: str) -> str:
+    """Substitute the canonical subcommand inventory into a shell template."""
+    return template.replace("__SCAN_SORT_SUBCOMMANDS__", _SUBCOMMANDS_SPACE).replace(
+        "__SCAN_SORT_PS_SUBCOMMANDS__", _SUBCOMMANDS_PS
+    )
+
+
 _SHELL_TEMPLATES = {
-    "bash": _BASH_TEMPLATE,
-    "zsh": _ZSH_TEMPLATE,
-    "fish": _FISH_TEMPLATE,
-    "powershell": _POWERSHELL_TEMPLATE,
+    "bash": _render_template(_BASH_TEMPLATE),
+    "zsh": _render_template(_ZSH_TEMPLATE),
+    "fish": _render_template(_FISH_TEMPLATE),
+    "powershell": _render_template(_POWERSHELL_TEMPLATE),
 }
 
 

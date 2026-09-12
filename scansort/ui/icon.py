@@ -10,6 +10,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_ICON_SIZE: tuple[int, int] = (64, 64)
 
 
+def _draw_badge(
+    draw, w: int, h: int, doc_right: int, doc_bottom: int, radius_factor: float, fill
+) -> tuple[int, int, int]:
+    """Draw the corner status badge circle and return ``(cx, cy, radius)``."""
+    badge_radius = int(w * radius_factor)
+    badge_cx = min(doc_right, w - badge_radius - 1) - int(badge_radius * 0.4)
+    badge_cy = min(doc_bottom, h - badge_radius - 1) - int(badge_radius * 0.4)
+    badge_box = [
+        badge_cx - badge_radius,
+        badge_cy - badge_radius,
+        badge_cx + badge_radius,
+        badge_cy + badge_radius,
+    ]
+    draw.ellipse(badge_box, fill=fill, outline=(255, 255, 255, 255), width=2)
+    return badge_cx, badge_cy, badge_radius
+
+
 def get_tray_icon(
     paused: bool = False,
     size: tuple[int, int] = DEFAULT_ICON_SIZE,
@@ -99,17 +116,8 @@ def get_tray_icon(
 
     if paused:
         # Amber/Orange pause circle badge in bottom-right corner
-        badge_radius = int(w * 0.22)
-        badge_cx = min(doc_right, w - badge_radius - 1) - int(badge_radius * 0.4)
-        badge_cy = min(doc_bottom, h - badge_radius - 1) - int(badge_radius * 0.4)
-        badge_box = [
-            badge_cx - badge_radius,
-            badge_cy - badge_radius,
-            badge_cx + badge_radius,
-            badge_cy + badge_radius,
-        ]
-        draw.ellipse(
-            badge_box, fill=(235, 140, 20, 255), outline=(255, 255, 255, 255), width=2
+        badge_cx, badge_cy, badge_radius = _draw_badge(
+            draw, w, h, doc_right, doc_bottom, 0.22, (235, 140, 20, 255)
         )
 
         # Two vertical white pause bars
@@ -132,17 +140,8 @@ def get_tray_icon(
         )
     else:
         # Green / cyan active filing badge
-        badge_radius = int(w * 0.20)
-        badge_cx = min(doc_right, w - badge_radius - 1) - int(badge_radius * 0.4)
-        badge_cy = min(doc_bottom, h - badge_radius - 1) - int(badge_radius * 0.4)
-        badge_box = [
-            badge_cx - badge_radius,
-            badge_cy - badge_radius,
-            badge_cx + badge_radius,
-            badge_cy + badge_radius,
-        ]
-        draw.ellipse(
-            badge_box, fill=(35, 175, 95, 255), outline=(255, 255, 255, 255), width=2
+        badge_cx, badge_cy, badge_radius = _draw_badge(
+            draw, w, h, doc_right, doc_bottom, 0.20, (35, 175, 95, 255)
         )
 
         # Checkmark in active badge

@@ -19,6 +19,7 @@ from scansort.classification.models import (
 )
 from scansort.classification.taxonomy import format_taxonomy_for_prompt
 from scansort.core.constants import (
+    BLANK_SCANS_DIR,
     DEFAULT_GEMINI_MODEL,
     MAX_DESCRIPTION_LENGTH,
     MIN_CONFIDENCE_THRESHOLD,
@@ -30,6 +31,18 @@ from scansort.logging.gemini_logger import log_classification_event
 from scansort.platform.secrets import get_api_key, redact_secrets_from_text
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_usage(response) -> tuple[int, int]:
+    """Return ``(prompt_tokens, candidates_tokens)`` from a Gemini response."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return 0, 0
+    prompt = getattr(usage, "prompt_token_count", 0)
+    candidates = getattr(usage, "candidates_token_count", 0)
+    prompt_tokens = prompt if isinstance(prompt, int) else 0
+    candidates_tokens = candidates if isinstance(candidates, int) else 0
+    return prompt_tokens, candidates_tokens
 
 
 class GeminiClassifier:
@@ -72,7 +85,7 @@ class GeminiClassifier:
             f"   - If no pre-existing folder fits or confidence is below {MIN_CONFIDENCE_THRESHOLD:.2f}, choose '{REVIEW_NEEDED_DIR}'.\n"
             "   - DO NOT invent new folder names outside the provided list.\n"
             "   - Event & Trip Folders: Destination folders often represent specific events, trips, tournaments, conferences, vacations, or projects (e.g. '2026 Sydney Marathon', 'Tokyo Trip 2025', 'DEFCON 34'). These folders are intended to collect ALL related logistics and expenses: lodging/hotel invoices, flights/trains, car rentals, registration fees, tickets, and travel receipts.\n"
-            "   - Date & Context Cross-Referencing: When evaluating event folders, cross-reference the document's dates (issuance date, hotel stay check-in/out, flight dates) and location/city against the year, date range, or known schedule and location of the event. If the dates and location align with the event timeframe, assign the document to that event folder with high confidence (>= 0.70) instead of defaulting to '_Review_Needed'.\n"
+            f"   - Date & Context Cross-Referencing: When evaluating event folders, cross-reference the document's dates (issuance date, hotel stay check-in/out, flight dates) and location/city against the year, date range, or known schedule and location of the event. If the dates and location align with the event timeframe, assign the document to that event folder with high confidence (>= {MIN_CONFIDENCE_THRESHOLD:.2f}) instead of defaulting to '_Review_Needed'.\n"
             "2. Document Date: Identify the official issuance / billing date. Output in YYMMDD format.\n"
             "   - If no explicit date exists, output today's date in YYMMDD.\n"
             "3. Description: Write a clear, concise title in English using Title_Case_With_Underscores.\n"
@@ -126,9 +139,10 @@ class GeminiClassifier:
             target = normalize_relative_folder(clean_target)
             suggested_folder = target
             if doc_type.lower() == "blank":
-                target = f"{REVIEW_NEEDED_DIR}/Blank_Scans"
+                target = f"{REVIEW_NEEDED_DIR}/{BLANK_SCANS_DIR}"
                 routing_rationale = (
-                    f"Blank scan detected -> routed to {REVIEW_NEEDED_DIR}/Blank_Scans."
+                    f"Blank scan detected -> routed to "
+                    f"{REVIEW_NEEDED_DIR}/{BLANK_SCANS_DIR}."
                 )
             elif conf < MIN_CONFIDENCE_THRESHOLD:
                 routing_rationale = (
@@ -215,14 +229,7 @@ class GeminiClassifier:
             )
             latency = time.monotonic() - start_time
 
-            usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = 0
-            candidates_tokens = 0
-            if usage is not None:
-                pt = getattr(usage, "prompt_token_count", 0)
-                prompt_tokens = pt if isinstance(pt, int) else 0
-                ct = getattr(usage, "candidates_token_count", 0)
-                candidates_tokens = ct if isinstance(ct, int) else 0
+            prompt_tokens, candidates_tokens = _extract_usage(response)
 
             cost = calculate_gemini_cost(self.model, prompt_tokens, candidates_tokens)
 

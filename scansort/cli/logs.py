@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
 from scansort.core.config import get_default_app_dir
 from scansort.core.constants import LOG_FILENAME
@@ -45,6 +46,53 @@ def _extract_line_severity(line: str) -> int | None:
     return None
 
 
+def _line_passes(
+    line: str, min_severity: int | None, last_matched: bool
+) -> tuple[bool, bool]:
+    """Return ``(updated_last_matched, should_emit)`` for a log-level filter."""
+    if min_severity is None:
+        return last_matched, True
+    severity = _extract_line_severity(line)
+    if severity is not None:
+        last_matched = severity >= min_severity
+    return last_matched, last_matched
+
+
+def _follow_log(log_file: Path, min_severity: int | None) -> None:
+    """Stream appended log lines, following across rotations/truncation."""
+    last_matched = False
+    while True:
+        rotated = False
+        with open(log_file, encoding="utf-8", errors="replace") as f:
+            last_inode = os.fstat(f.fileno()).st_ino
+            # Print content already present (empty on a fresh rotation).
+            for line in f:
+                last_matched, emit = _line_passes(line, min_severity, last_matched)
+                if emit:
+                    print(line, end="")
+                    sys.stdout.flush()
+
+            # Poll for appended lines, detecting log rotation/truncation.
+            while True:
+                try:
+                    current_inode = os.stat(log_file).st_ino
+                except OSError:
+                    current_inode = last_inode
+                if current_inode != last_inode:
+                    rotated = True
+                    break
+                line = f.readline()
+                if line:
+                    last_matched, emit = _line_passes(line, min_severity, last_matched)
+                    if emit:
+                        print(line, end="")
+                        sys.stdout.flush()
+                else:
+                    time.sleep(0.2)
+        if not rotated:
+            break
+
+
 def handle_logs(parsed: argparse.Namespace) -> int:
     """Handle 'logs' command to view, filter, tail, or clear scansort.log."""
     app_dir = get_default_app_dir()
@@ -74,45 +122,7 @@ def handle_logs(parsed: argparse.Namespace) -> int:
 
     if getattr(parsed, "follow", False):
         try:
-            last_matched = False
-            while True:
-                rotated = False
-                with open(log_file, encoding="utf-8", errors="replace") as f:
-                    last_inode = os.fstat(f.fileno()).st_ino
-                    # Print content already present (empty on a fresh rotation).
-                    for line in f:
-                        if min_severity is not None:
-                            sev = _extract_line_severity(line)
-                            if sev is not None:
-                                last_matched = sev >= min_severity
-                            if not last_matched:
-                                continue
-                        print(line, end="")
-                        sys.stdout.flush()
-
-                    # Poll for appended lines, detecting log rotation/truncation.
-                    while True:
-                        try:
-                            current_inode = os.stat(log_file).st_ino
-                        except OSError:
-                            current_inode = last_inode
-                        if current_inode != last_inode:
-                            rotated = True
-                            break
-                        line = f.readline()
-                        if line:
-                            if min_severity is not None:
-                                sev = _extract_line_severity(line)
-                                if sev is not None:
-                                    last_matched = sev >= min_severity
-                                if not last_matched:
-                                    continue
-                            print(line, end="")
-                            sys.stdout.flush()
-                        else:
-                            time.sleep(0.2)
-                if not rotated:
-                    break
+            _follow_log(log_file, min_severity)
         except KeyboardInterrupt:
             return 0
         except OSError as e:
@@ -130,10 +140,8 @@ def handle_logs(parsed: argparse.Namespace) -> int:
         filtered = []
         last_matched = False
         for line in lines:
-            sev = _extract_line_severity(line)
-            if sev is not None:
-                last_matched = sev >= min_severity
-            if last_matched:
+            last_matched, emit = _line_passes(line, min_severity, last_matched)
+            if emit:
                 filtered.append(line)
         lines = filtered
 

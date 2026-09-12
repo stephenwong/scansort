@@ -6,7 +6,7 @@ import queue
 import sys
 import threading
 
-from scansort.cli.config import _load_config_or_exit
+from scansort.cli.config import _load_config_or_exit, _with_overrides
 from scansort.cli.update import (
     announce_applied_update,
     maybe_apply_auto_update,
@@ -19,9 +19,6 @@ from scansort.platform.instance_guard import instance_guard
 from scansort.ui import SystemTrayApp
 
 logger = logging.getLogger(__name__)
-
-_announce_applied_update = announce_applied_update
-_maybe_apply_auto_update = maybe_apply_auto_update
 
 
 def _run_monitor(cfg: AppConfig, start_tray: bool = True) -> int:
@@ -93,15 +90,12 @@ def handle_watch(parsed: argparse.Namespace) -> int:
     )
     dry_run = getattr(parsed, "dry_run", False) or cfg.dry_run
 
-    try:
-        updated_dict = cfg.model_dump()
-        updated_dict["watch_folder"] = new_watch
-        updated_dict["documents_root"] = new_docs
-        updated_dict["dry_run"] = dry_run
-        cfg = AppConfig(**updated_dict)
-    except ValueError as e:
-        print(f"Configuration error: {e}", file=sys.stderr)
+    new_cfg = _with_overrides(
+        cfg, watch_folder=new_watch, documents_root=new_docs, dry_run=dry_run
+    )
+    if new_cfg is None:
         return 1
+    cfg = new_cfg
 
     try:
         cfg.ensure_directories()

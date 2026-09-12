@@ -125,22 +125,16 @@ def test_ensure_csv_headers_concurrent_creation_never_truncates(tmp_path: Path):
         jsonl_path=tmp_path / "history.jsonl",
         csv_path=csv_path,
     )
+    # Simulate a concurrent process that created the file and appended a row
+    # before this writer acquired the lock.
+    csv_path.write_text("MUST_SURVIVE\n", encoding="utf-8")
 
-    orig_open = open
-
-    def race_open(file, mode="r", *args, **kwargs):
-        if str(file) == str(csv_path) and mode == "x":
-            # Another process created the file and wrote a row
-            with orig_open(csv_path, "w", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(["MUST_SURVIVE"])
-            raise FileExistsError("File exists")
-        return orig_open(file, mode, *args, **kwargs)
-
-    with patch("scansort.logging.audit.open", race_open):
+    with patch("scansort.logging.audit.open", wraps=open) as mock_open:
         logger._ensure_csv_headers(csv_path)
 
-    content = csv_path.read_text(encoding="utf-8")
-    assert "MUST_SURVIVE" in content
+    modes = [call.args[1] for call in mock_open.call_args_list if len(call.args) > 1]
+    assert "w" not in modes and "x" not in modes
+    assert csv_path.read_text(encoding="utf-8") == "MUST_SURVIVE\n"
 
 
 def test_log_scan_neutralizes_spreadsheet_formula_cells(tmp_path: Path):

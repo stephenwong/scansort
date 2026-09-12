@@ -76,6 +76,9 @@ scansort/
 │   │   └── worker.py           # Sequential queue worker with shutdown draining
 │   ├── platform/               # Platform and OS integrations (Windows Registry, toasts, credentials, locks, console)
 │   │   ├── __init__.py         # Package interface re-exports
+│   │   ├── _commands.py        # Shared quoted executable-invocation formatter (frozen/dev)
+│   │   ├── _linux.py           # Shared Linux XDG file write/remove helpers
+│   │   ├── _winreg_seam.py     # Shared lazy-import seam for the winreg test mock
 │   │   ├── autorun.py          # Windows Registry (HKCU Run) & Linux autostart manager
 │   │   ├── console.py          # Windows GUI-subsystem console attachment (AttachConsole/stdout/stderr)
 │   │   ├── context_menu.py     # Windows Explorer (HKCU SystemFileAssociations) & Linux context menu manager

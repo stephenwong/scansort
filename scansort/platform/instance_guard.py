@@ -32,14 +32,7 @@ def instance_guard(lock_path: Path) -> Iterator[bool]:
             lock_file.flush()
         lock_file.seek(0)
         try:
-            if sys.platform == "win32":
-                import msvcrt
-
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _file_lock(lock_file, acquire=True)
         except OSError as exc:
             if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
                 # A genuine lock-subsystem failure must not masquerade as
@@ -51,11 +44,21 @@ def instance_guard(lock_path: Path) -> Iterator[bool]:
         try:
             yield True
         finally:
-            if sys.platform == "win32":
-                import msvcrt
+            _file_lock(lock_file, acquire=False)
 
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
 
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+def _file_lock(lock_file, *, acquire: bool) -> None:
+    """Acquire or release the non-blocking platform advisory lock on *lock_file*."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        msvcrt.locking(
+            lock_file.fileno(), msvcrt.LK_NBLCK if acquire else msvcrt.LK_UNLCK, 1
+        )
+    else:
+        import fcntl
+
+        fcntl.flock(
+            lock_file.fileno(),
+            (fcntl.LOCK_EX | fcntl.LOCK_NB) if acquire else fcntl.LOCK_UN,
+        )

@@ -5,13 +5,27 @@ import logging
 import sys
 from pathlib import Path
 
-from scansort.cli.config import _load_config_or_exit
-from scansort.core.config import AppConfig
+from scansort.cli.config import _load_config_or_exit, _with_overrides
 from scansort.core.constants import SUPPORTED_EXTENSIONS
 from scansort.pipeline.coordinator import ScanSortPipeline
 from scansort.platform.secrets import get_api_key
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_file_target(resolved: Path, display_name: str) -> str | None:
+    """Return an error message when *resolved* is not a fileable document."""
+    if resolved.is_dir():
+        return f"Error: Expected a file but got a directory: {display_name}"
+    if not resolved.is_file():
+        return f"Error: File not found: {display_name}"
+    if resolved.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        return (
+            f"Error: Unsupported file type: {resolved.suffix} for '{display_name}' "
+            f"(supported: {allowed})"
+        )
+    return None
 
 
 def handle_file(parsed: argparse.Namespace) -> int:
@@ -30,9 +44,10 @@ def handle_file(parsed: argparse.Namespace) -> int:
 
     dry_run = getattr(parsed, "dry_run", False) or cfg.dry_run
     if dry_run != cfg.dry_run:
-        updated_dict = cfg.model_dump()
-        updated_dict["dry_run"] = dry_run
-        cfg = AppConfig(**updated_dict)
+        new_cfg = _with_overrides(cfg, dry_run=dry_run)
+        if new_cfg is None:
+            return 1
+        cfg = new_cfg
 
     copy_source = getattr(parsed, "copy", False)
     files: list[Path] = getattr(parsed, "files", [])
@@ -49,24 +64,9 @@ def handle_file(parsed: argparse.Namespace) -> int:
 
     for target_path in files:
         resolved = target_path.resolve()
-        if resolved.is_dir():
-            print(
-                f"Error: Expected a file but got a directory: {target_path.name}",
-                file=sys.stderr,
-            )
-            any_failure = True
-            continue
-        if not resolved.is_file():
-            print(f"Error: File not found: {target_path.name}", file=sys.stderr)
-            any_failure = True
-            continue
-
-        if resolved.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-            print(
-                f"Error: Unsupported file type: {resolved.suffix} for '{target_path.name}' (supported: {allowed})",
-                file=sys.stderr,
-            )
+        error = _validate_file_target(resolved, target_path.name)
+        if error is not None:
+            print(error, file=sys.stderr)
             any_failure = True
             continue
 

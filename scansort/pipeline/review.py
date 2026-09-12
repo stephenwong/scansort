@@ -84,6 +84,43 @@ def _extract_date_and_desc(filename: str) -> tuple[str, str]:
     return sanitize_date(None), sanitize_description(stem)
 
 
+def _load_history_index(
+    history_path: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Build destination-path and new-filename lookup maps from ``history.jsonl``.
+
+    Malformed lines are skipped; an unreadable file degrades to empty maps.
+    """
+    path_map: dict[str, dict[str, Any]] = {}
+    name_map: dict[str, dict[str, Any]] = {}
+    if not history_path.exists():
+        return path_map, name_map
+    try:
+        with open(history_path, encoding="utf-8") as f:
+            for line in f:
+                line_str = line.strip()
+                if not line_str:
+                    continue
+                try:
+                    rec = json.loads(line_str)
+                    if isinstance(rec, dict):
+                        dest_p = rec.get("destination_path")
+                        if dest_p:
+                            try:
+                                resolved = str(Path(dest_p).resolve())
+                                path_map[resolved] = rec
+                            except OSError, ValueError:
+                                pass
+                        new_fn = rec.get("new_filename")
+                        if new_fn:
+                            name_map[new_fn] = rec
+                except json.JSONDecodeError:
+                    continue
+    except (OSError, UnicodeError) as e:
+        logger.warning("Could not read history for review correlation: %s", e)
+    return path_map, name_map
+
+
 def get_review_queue(
     docs_root: Path,
     fallback_folder: str = REVIEW_NEEDED_DIR,
@@ -105,32 +142,7 @@ def get_review_queue(
 
     # Build history lookup index
     h_path = history_path or (get_default_app_dir() / HISTORY_JSONL_NAME)
-    path_map: dict[str, dict[str, Any]] = {}
-    name_map: dict[str, dict[str, Any]] = {}
-    if h_path.exists():
-        try:
-            with open(h_path, encoding="utf-8") as f:
-                for line in f:
-                    line_str = line.strip()
-                    if not line_str:
-                        continue
-                    try:
-                        rec = json.loads(line_str)
-                        if isinstance(rec, dict):
-                            dest_p = rec.get("destination_path")
-                            if dest_p:
-                                try:
-                                    resolved = str(Path(dest_p).resolve())
-                                    path_map[resolved] = rec
-                                except OSError, ValueError:
-                                    pass
-                            new_fn = rec.get("new_filename")
-                            if new_fn:
-                                name_map[new_fn] = rec
-                    except json.JSONDecodeError:
-                        continue
-        except (OSError, UnicodeError) as e:
-            logger.warning("Could not read history for review correlation: %s", e)
+    path_map, name_map = _load_history_index(h_path)
 
     items: list[ReviewItem] = []
     dup_dir = resolve_duplicates_dir(docs_root, fallback_folder)
@@ -199,6 +211,32 @@ def get_review_queue(
     return items
 
 
+def _convert_review_source_to_pdf(item: ReviewItem) -> tuple[Path, Path | None]:
+    """Return ``(filing_source, converted_pdf)`` for a review item.
+
+    Image originals are normalized to a temp-dir PDF (invariant B); on
+    conversion failure the original path is returned unchanged.
+    """
+    source_path = item.file_path
+    if source_path.suffix.lower() == ".pdf":
+        return source_path, None
+    try:
+        tmp_dir = get_default_app_dir() / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        converted_pdf = convert_to_pdf(
+            source_path,
+            output_path=tmp_dir / f"{source_path.stem}_{os.getpid()}.pdf",
+        )
+        return converted_pdf, converted_pdf
+    except Exception as conv_err:  # noqa: BLE001 - best-effort conversion
+        logger.warning(
+            "Could not convert %s to PDF for review filing: %s",
+            item.file_path.name,
+            conv_err,
+        )
+        return source_path, None
+
+
 def file_reviewed_item(
     item: ReviewItem,
     target_folder: str,
@@ -249,24 +287,7 @@ def file_reviewed_item(
 
     # Invariant B: reviewed image originals are normalized to PDF (with XMP)
     # before filing; conversion failures fall back to the original extension.
-    source_path = item.file_path
-    converted_pdf: Path | None = None
-    if source_path.suffix.lower() != ".pdf":
-        try:
-            tmp_dir = get_default_app_dir() / "tmp"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            converted_pdf = convert_to_pdf(
-                source_path,
-                output_path=tmp_dir / f"{source_path.stem}_{os.getpid()}.pdf",
-            )
-            source_path = converted_pdf
-        except Exception as conv_err:  # noqa: BLE001 - best-effort conversion
-            logger.warning(
-                "Could not convert %s to PDF for review filing: %s",
-                item.file_path.name,
-                conv_err,
-            )
-            converted_pdf = None
+    source_path, converted_pdf = _convert_review_source_to_pdf(item)
 
     suffix = source_path.suffix.lower() or ".pdf"
     desired_name = f"{clean_date}_{clean_desc}{suffix}"

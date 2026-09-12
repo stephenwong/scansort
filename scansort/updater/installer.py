@@ -18,9 +18,33 @@ EXECUTABLE_NAME = "ScanSort.exe"
 SWAP_RETRY_TIMEOUT = 10.0
 SWAP_RETRY_INTERVAL = 0.1
 
+# Sibling-directory prefixes shared by every updater producer/consumer.
+_SIBLING_GLOB_PATTERNS = ("stage-*", "helper-*", "old-*")
+
 
 class UpdateError(Exception):
     """Raised when an update check, download, or install step fails."""
+
+
+def stage_dir_for(install_dir: Path, version: str) -> Path:
+    """Return the sibling staging directory for ``version``."""
+    return install_dir.parent / f"{install_dir.name}.stage-{version}"
+
+
+def helper_dir_for(install_dir: Path, version: str) -> Path:
+    """Return the isolated sibling helper directory for ``version``."""
+    return install_dir.parent / f"{install_dir.name}.helper-{version}"
+
+
+def backup_dir_for(install_dir: Path, timestamp: int) -> Path:
+    """Return the sibling backup directory name for ``timestamp``."""
+    return install_dir.parent / f"{install_dir.name}.old-{timestamp}"
+
+
+def require_exe(directory: Path, message: str) -> None:
+    """Raise ``UpdateError(message)`` unless *directory* contains the executable."""
+    if not (directory / EXECUTABLE_NAME).is_file():
+        raise UpdateError(message)
 
 
 def cleanup_stale_updates(install_dir: Path, keep: Path | None = None) -> None:
@@ -33,12 +57,8 @@ def cleanup_stale_updates(install_dir: Path, keep: Path | None = None) -> None:
     current_exe_dir = Path(sys.executable).parent.resolve()
     keep_resolved = keep.resolve() if keep is not None else None
 
-    for pattern in (
-        f"{install_dir.name}.stage-*",
-        f"{install_dir.name}.helper-*",
-        f"{install_dir.name}.old-*",
-    ):
-        for entry in install_dir.parent.glob(pattern):
+    for suffix in _SIBLING_GLOB_PATTERNS:
+        for entry in install_dir.parent.glob(f"{install_dir.name}.{suffix}"):
             resolved = entry.resolve()
             if keep_resolved is not None and resolved == keep_resolved:
                 continue
@@ -114,10 +134,8 @@ def replace_install_dir(
     """
     install_dir = Path(install_dir)
     staged_dir = Path(staged_dir)
-    if not (staged_dir / EXECUTABLE_NAME).is_file():
-        raise UpdateError("Staged update does not contain ScanSort.exe.")
-    if not (install_dir / EXECUTABLE_NAME).is_file():
-        raise UpdateError("Install directory does not contain ScanSort.exe.")
+    require_exe(staged_dir, "Staged update does not contain ScanSort.exe.")
+    require_exe(install_dir, "Install directory does not contain ScanSort.exe.")
 
     base_name = f"{install_dir.name}.old-{int(time.time())}"
     backup_dir = install_dir.parent / base_name
@@ -166,6 +184,10 @@ __all__ = [
     "SWAP_RETRY_INTERVAL",
     "SWAP_RETRY_TIMEOUT",
     "UpdateError",
+    "backup_dir_for",
     "cleanup_stale_updates",
+    "helper_dir_for",
     "replace_install_dir",
+    "require_exe",
+    "stage_dir_for",
 ]

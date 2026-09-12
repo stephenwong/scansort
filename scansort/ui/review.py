@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 _ACTIVE_REVIEW_DIALOG: "ReviewDialog | None" = None
 _DIALOG_LOCK = threading.Lock()
 
+_DIAGNOSIS_COLOR = "#B05000"
+_REASON_WRAPLENGTH = 580
+_FONT_TITLE = ("TkDefaultFont", 12, "bold")
+_FONT_SUBTITLE = ("TkDefaultFont", 10, "bold")
+_FONT_LABEL = ("TkDefaultFont", 9, "bold")
+_FONT_HINT = ("TkDefaultFont", 8, "italic")
+
 
 def open_review_dialog(
     config: AppConfig | None = None,
@@ -126,7 +133,7 @@ class ReviewDialog(tk.Toplevel):
             ttk.Label(
                 empty_frame,
                 text="No documents currently require review.",
-                font=("TkDefaultFont", 12, "bold"),
+                font=_FONT_TITLE,
             ).pack(pady=(0, 10))
             ttk.Label(
                 empty_frame,
@@ -147,7 +154,7 @@ class ReviewDialog(tk.Toplevel):
         self.lbl_counter = ttk.Label(
             nav_frame,
             textvariable=self.header_var,
-            font=("TkDefaultFont", 10, "bold"),
+            font=_FONT_SUBTITLE,
         )
         self.lbl_counter.pack(side=tk.LEFT, padx=10)
 
@@ -170,19 +177,19 @@ class ReviewDialog(tk.Toplevel):
         ttk.Label(
             diag_frame,
             textvariable=self.diagnosis_var,
-            font=("TkDefaultFont", 9, "bold"),
-            foreground="#B05000",
+            font=_FONT_LABEL,
+            foreground=_DIAGNOSIS_COLOR,
         ).pack(anchor=tk.W, pady=(0, 4))
 
-        ttk.Label(diag_frame, textvariable=self.summary_var, wraplength=580).pack(
-            anchor=tk.W, pady=(0, 4)
-        )
+        ttk.Label(
+            diag_frame, textvariable=self.summary_var, wraplength=_REASON_WRAPLENGTH
+        ).pack(anchor=tk.W, pady=(0, 4))
 
         reason_lbl = ttk.Label(
             diag_frame,
             textvariable=self.reasoning_var,
-            font=("TkDefaultFont", 8, "italic"),
-            wraplength=580,
+            font=_FONT_HINT,
+            wraplength=_REASON_WRAPLENGTH,
         )
         reason_lbl.pack(anchor=tk.W, pady=(0, 6))
 
@@ -247,7 +254,7 @@ class ReviewDialog(tk.Toplevel):
         ttk.Label(
             hint_frame,
             text="Future scans matching this keyword will be filed automatically with high confidence.",
-            font=("TkDefaultFont", 8, "italic"),
+            font=_FONT_HINT,
         ).pack(anchor=tk.W)
 
         # Action Buttons Footer
@@ -378,10 +385,7 @@ class ReviewDialog(tk.Toplevel):
                     logger.exception("Error in on_filed callback for '%s': %s", dest, e)
 
             # Remove filed item and advance
-            self.queue.pop(self._current_index)
-            if self._current_index >= len(self.queue) and self._current_index > 0:
-                self._current_index -= 1
-            self._load_current_item()
+            self._remove_current_item()
 
         except (OSError, ValueError) as e:
             messagebox.showerror(
@@ -389,6 +393,13 @@ class ReviewDialog(tk.Toplevel):
                 f"Could not file document: {e}",
                 parent=self,
             )
+
+    def _remove_current_item(self) -> None:
+        """Drop the current queue item and advance to the next, if any."""
+        self.queue.pop(self._current_index)
+        if self._current_index >= len(self.queue) and self._current_index > 0:
+            self._current_index -= 1
+        self._load_current_item()
 
     def _dismiss_current_item(self, confirm: bool = True) -> None:
         if not self.queue:
@@ -403,10 +414,7 @@ class ReviewDialog(tk.Toplevel):
 
         try:
             dismiss_review_item(item)
-            self.queue.pop(self._current_index)
-            if self._current_index >= len(self.queue) and self._current_index > 0:
-                self._current_index -= 1
-            self._load_current_item()
+            self._remove_current_item()
         except OSError as e:
             messagebox.showerror(
                 "Dismiss Error",

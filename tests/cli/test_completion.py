@@ -2,7 +2,16 @@
 
 import pytest
 
+from scansort.cli.completion import _SHELL_TEMPLATES, _SUBCOMMANDS
 from scansort.cli.root import main_cli
+
+
+def test_completion_templates_cover_all_subcommands():
+    """Every shell template must advertise the canonical subcommand inventory."""
+    for shell, template in _SHELL_TEMPLATES.items():
+        assert "__SCAN_SORT" not in template
+        for name in _SUBCOMMANDS:
+            assert name in template, f"{shell} completion missing {name}"
 
 
 @pytest.mark.parametrize(

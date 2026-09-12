@@ -1,10 +1,8 @@
 """Shared domain constants used across ScanSort modules."""
 
-from scansort import __version__
-
-VERSION: str = __version__
 REVIEW_NEEDED_DIR: str = "_Review_Needed"
 DUPLICATES_DIR: str = "Duplicates"
+BLANK_SCANS_DIR: str = "Blank_Scans"
 UNDONE_PREFIX: str = "_undone_"
 
 CONFIG_FILENAME: str = "config.json"
@@ -46,6 +44,13 @@ STATUS_COLLISION_RENAMED: str = "COLLISION_RENAMED"
 STATUS_UNDONE: str = "UNDONE"
 STATUS_FAILED: str = "FAILED"
 REVERSIBLE_STATUSES: set[str] = {STATUS_SUCCESS, STATUS_COLLISION_RENAMED}
+FILING_STATUSES: tuple[str, ...] = (
+    STATUS_SUCCESS,
+    STATUS_DUPLICATE,
+    STATUS_FAILED,
+    STATUS_UNDONE,
+    STATUS_COLLISION_RENAMED,
+)
 
 DEFAULT_DPI: float = 300.0
 DEFAULT_AUTHOR: str = "ScanSort"
@@ -73,3 +78,11 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".tiff",
     ".tif",
 }
+
+# Pipeline timing tuning (invariant C: ~1 s quiescence window is 10 x 0.1 s).
+SCAN_STABILITY_TIMEOUT_S: float = 10.0
+SCAN_STABILITY_POLL_INTERVAL_S: float = 0.1
+SCAN_STABLE_COUNT: int = 10
+DEFAULT_WATCH_DEBOUNCE_MS: int = 1500
+DEFAULT_RATE_LIMIT_DELAY_S: float = 1.0
+WATCHER_ERROR_BACKOFF_S: float = 2.0

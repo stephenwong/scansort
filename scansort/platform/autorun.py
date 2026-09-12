@@ -5,7 +5,9 @@ import os
 import sys
 from pathlib import Path
 
-from scansort.core.fs import atomic_write
+from scansort.platform._commands import build_executable_invocation
+from scansort.platform._linux import remove_xdg_file, write_xdg_file
+from scansort.platform._winreg_seam import load_winreg
 
 logger = logging.getLogger(__name__)
 
@@ -17,22 +19,12 @@ _winreg = None
 
 def _get_winreg():
     """Retrieve the winreg module or test mock seam."""
-    if _winreg is not None:
-        return _winreg
-    import winreg
-
-    return winreg
+    return load_winreg(_winreg)
 
 
 def _build_autorun_command(executable_path: str | None = None) -> str:
     """Format the full command line invocation for background watch mode."""
-    if executable_path:
-        base_cmd = f'"{executable_path}"'
-    elif getattr(sys, "frozen", False):
-        base_cmd = f'"{sys.executable}"'
-    else:
-        base_cmd = f'"{sys.executable}" -m scansort'
-    return f"{base_cmd} watch --minimized"
+    return build_executable_invocation(executable_path, "watch --minimized")
 
 
 def _get_linux_autostart_path() -> Path:
@@ -51,7 +43,7 @@ def is_autorun_enabled() -> bool:
             ) as key:
                 value, _ = reg.QueryValueEx(key, RUN_KEY_NAME)
                 return bool(str(value).strip())
-        except OSError, FileNotFoundError, AttributeError, ImportError:
+        except OSError, AttributeError, ImportError:
             return False
 
     if sys.platform.startswith("linux"):
@@ -95,23 +87,19 @@ def enable_autorun(executable_path: str | None = None) -> bool:
     if sys.platform.startswith("linux"):
         # Linux autostart desktop entry
         desktop_file = _get_linux_autostart_path()
-        try:
-            desktop_file.parent.mkdir(parents=True, exist_ok=True)
-            content = (
-                "[Desktop Entry]\n"
-                "Type=Application\n"
-                "Name=ScanSort\n"
-                f"Exec={full_cmd}\n"
-                "Hidden=false\n"
-                "NoDisplay=false\n"
-                "X-GNOME-Autostart-enabled=true\n"
-            )
-            atomic_write(desktop_file, content)
-            logger.info("Created Linux autostart file at %s", desktop_file)
-            return True
-        except OSError as e:
-            logger.warning("Failed to create Linux autostart file: %s", e)
+        content = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Name=ScanSort\n"
+            f"Exec={full_cmd}\n"
+            "Hidden=false\n"
+            "NoDisplay=false\n"
+            "X-GNOME-Autostart-enabled=true\n"
+        )
+        if not write_xdg_file(desktop_file, content, description="autostart file"):
             return False
+        logger.info("Created Linux autostart file at %s", desktop_file)
+        return True
 
     logger.info("Auto-start on boot is only supported on Windows and Linux.")
     return False
@@ -136,12 +124,9 @@ def disable_autorun() -> bool:
 
     if sys.platform.startswith("linux"):
         desktop_file = _get_linux_autostart_path()
-        try:
-            desktop_file.unlink(missing_ok=True)
-            logger.info("Removed Linux autostart file.")
-            return True
-        except OSError as e:
-            logger.warning("Failed to remove Linux autostart file: %s", e)
+        if not remove_xdg_file(desktop_file, description="autostart file"):
             return False
+        logger.info("Removed Linux autostart file.")
+        return True
 
     return True

@@ -56,8 +56,8 @@ def log_classification_event(
         classification.orientation_correction,
     )
 
-    reason = getattr(classification, "folder_reasoning", None)
-    if reason and str(reason).strip():
+    reason = classification.folder_reasoning
+    if reason and reason.strip():
         logger.info("Folder reason: %s", _clean_for_log(reason))
 
     if routing_rationale and routing_rationale.strip():

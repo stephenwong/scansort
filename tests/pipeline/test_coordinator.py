@@ -792,6 +792,33 @@ def test_route_failed_to_review_holds_operations_lock(tmp_path: Path):
     assert not scan.exists()
 
 
+def test_route_failed_to_review_cleans_partial_copy_on_failure(tmp_path: Path):
+    """A failed transfer must not strand a partial file in the review folder."""
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    docs_root.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root)
+    pipeline = ScanSortPipeline(config=cfg, app_dir=tmp_path / "app")
+    scan = inbox / "scan001.jpg"
+    scan.write_bytes(b"image")
+
+    def _partial_copy(src, dst, *args, **kwargs):
+        Path(dst).write_bytes(b"partial")
+        raise OSError("disk full")
+
+    with (
+        patch("scansort.pipeline.coordinator.shutil.copy2", side_effect=_partial_copy),
+        patch("scansort.pipeline.coordinator.notify_filing_failed"),
+        patch("scansort.pipeline.coordinator.notify_scan_stranded"),
+    ):
+        pipeline._route_failed_to_review(scan, reason="boom", preserve_source=True)
+
+    review_dir = docs_root / "_Review_Needed"
+    assert list(review_dir.glob("scan001*")) == []
+    assert scan.exists()
+
+
 def test_pipeline_records_resolved_destination_folder_when_redirected(tmp_path: Path):
     inbox = tmp_path / "Inbox"
     inbox.mkdir()

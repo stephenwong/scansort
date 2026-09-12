@@ -73,24 +73,22 @@ def interprocess_file_lock(lock_path: Path) -> Iterator[None]:
             lock_file.flush()
         lock_file.seek(0)
         try:
-            if sys.platform == "win32":
-                import msvcrt
-
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            _apply_advisory_lock(lock_file.fileno(), acquire=True)
             yield
         finally:
-            if sys.platform == "win32":
-                import msvcrt
+            _apply_advisory_lock(lock_file.fileno(), acquire=False)
 
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
 
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+def _apply_advisory_lock(fileno: int, *, acquire: bool) -> None:
+    """Lock or unlock ``fileno`` using the platform-specific advisory lock API."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        msvcrt.locking(fileno, msvcrt.LK_LOCK if acquire else msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fileno, fcntl.LOCK_EX if acquire else fcntl.LOCK_UN)
 
 
 def relative_folder_is_safe(rel: str) -> bool:
@@ -175,16 +173,13 @@ def open_in_file_manager(path: Path) -> bool:
         if sys.platform == "win32":
             os.startfile(str(path))  # type: ignore[attr-defined]
             return True
-        elif sys.platform == "darwin":
-            import subprocess
+        import subprocess
 
-            subprocess.Popen(["open", str(path)])
-            return True
-        else:
-            import subprocess
-
-            subprocess.Popen(["xdg-open", str(path)])
-            return True
+        command = (
+            ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+        )
+        subprocess.Popen(command)
+        return True
     except OSError as e:
         logger.warning("Failed to open %s in file manager: %s", path, e)
         return False

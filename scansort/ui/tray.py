@@ -16,7 +16,7 @@ from scansort.classification.taxonomy import (
     scan_documents_folders,
 )
 from scansort.core.config import AppConfig, get_default_app_dir
-from scansort.core.constants import HISTORY_CSV_NAME
+from scansort.core.constants import HISTORY_CSV_NAME, SUPPORTED_EXTENSIONS
 from scansort.core.fs import open_in_file_manager
 from scansort.pipeline.review import get_review_queue
 from scansort.pipeline.undo import run_undo
@@ -27,6 +27,11 @@ from scansort.ui.settings import open_settings_dialog
 from scansort.updater.feed import check_for_updates
 
 logger = logging.getLogger(__name__)
+
+# Tk file-picker pattern derived from the single supported-extension source.
+_SUPPORTED_FILETYPE_PATTERN = " ".join(
+    f"*{ext}" for ext in sorted(SUPPORTED_EXTENSIONS)
+)
 
 
 class SystemTrayApp:
@@ -67,6 +72,27 @@ class SystemTrayApp:
         with self._lock:
             if self.icon is not None and not self._shutting_down:
                 self.icon.menu = menu
+
+    @staticmethod
+    def _offload(task: Callable[[], None], async_task: bool) -> threading.Thread | None:
+        """Run *task* synchronously, or in a daemon thread when async is requested."""
+        if not async_task:
+            task()
+            return None
+        thread = threading.Thread(target=task, daemon=True)
+        thread.start()
+        return thread
+
+    @staticmethod
+    def _run_owned_mainloop(dialog: Any) -> None:
+        """Run a dialog's mainloop once when it owns an unstarted Tk root."""
+        if (
+            dialog is not None
+            and getattr(dialog, "_owns_root", False)
+            and not getattr(dialog, "_mainloop_running", False)
+        ):
+            with contextlib.suppress(Exception):
+                dialog.mainloop()
 
     def _build_taxonomy_submenus(self) -> pystray.Menu:
         """Dynamically build nested submenus reflecting destination folder taxonomy."""
@@ -195,12 +221,7 @@ class SystemTrayApp:
             success, msg, _ = run_undo(self.config)
             show_toast("ScanSort Undo", msg)
 
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(target=_task, daemon=True)
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def rescan_taxonomy(self, async_task: bool = True) -> threading.Thread | None:
         """Refresh folder taxonomy discovery."""
@@ -216,12 +237,7 @@ class SystemTrayApp:
                 f"Discovered {len(folders)} destination folders under Documents.",
             )
 
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(target=_task, daemon=True)
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def open_drop_folder(self) -> None:
         """Open the monitored scanner drop directory."""
@@ -253,26 +269,12 @@ class SystemTrayApp:
                     config=self.config,
                     on_applied=self.on_settings_applied,
                 )
-                if (
-                    dialog is not None
-                    and getattr(dialog, "_owns_root", False)
-                    and not getattr(dialog, "_mainloop_running", False)
-                ):
-                    with contextlib.suppress(Exception):
-                        dialog.mainloop()
+                self._run_owned_mainloop(dialog)
             except Exception as e:  # noqa: BLE001
                 logger.exception("Settings dialog failed: %s", e)
                 show_toast("ScanSort", f"Could not open Settings: {e}")
 
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(
-            target=_task,
-            daemon=True,
-        )
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def open_review(self, async_task: bool = True) -> threading.Thread | None:
         """Display the Tkinter review dialog with instant queue triage."""
@@ -281,29 +283,19 @@ class SystemTrayApp:
             def _on_filed(_dest: Path) -> None:
                 self._refresh_menu()
 
-            dialog = open_review_dialog(
-                config=self.config,
-                on_filed=_on_filed,
-            )
-            if (
-                dialog is not None
-                and getattr(dialog, "_owns_root", False)
-                and not getattr(dialog, "_mainloop_running", False)
-            ):
-                with contextlib.suppress(Exception):
-                    dialog.mainloop()
+            try:
+                dialog = open_review_dialog(
+                    config=self.config,
+                    on_filed=_on_filed,
+                )
+                self._run_owned_mainloop(dialog)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Review dialog failed: %s", e)
+                show_toast("ScanSort", f"Could not open Review: {e}")
+            finally:
+                self._refresh_menu()
 
-            self._refresh_menu()
-
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(
-            target=_task,
-            daemon=True,
-        )
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def file_documents_dialog(self, async_task: bool = True) -> threading.Thread | None:
         """Prompt user with native file picker and file selected documents."""
@@ -320,10 +312,7 @@ class SystemTrayApp:
                         parent=root,
                         title="Select Documents to File",
                         filetypes=[
-                            (
-                                "Supported Documents",
-                                "*.pdf *.jpg *.jpeg *.png *.tiff *.tif",
-                            ),
+                            ("Supported Documents", _SUPPORTED_FILETYPE_PATTERN),
                             ("All Files", "*.*"),
                         ],
                     )
@@ -353,12 +342,7 @@ class SystemTrayApp:
                 logger.exception("File Document(s) dialog failed: %s", e)
                 show_toast("ScanSort", f"Could not open file picker: {e}")
 
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(target=_task, daemon=True)
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def open_drop_zone(self, async_task: bool = True) -> threading.Thread | None:
         """Display the Tkinter quick-filing Drop Zone window."""
@@ -375,23 +359,12 @@ class SystemTrayApp:
                     pipeline=self.pipeline,
                     on_filed=_on_filed,
                 )
-                if (
-                    dialog is not None
-                    and getattr(dialog, "_owns_root", False)
-                    and not getattr(dialog, "_mainloop_running", False)
-                ):
-                    with contextlib.suppress(Exception):
-                        dialog.mainloop()
+                self._run_owned_mainloop(dialog)
             except Exception as e:  # noqa: BLE001
                 logger.exception("Drop Zone window failed: %s", e)
                 show_toast("ScanSort", f"Could not open Drop Zone: {e}")
 
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(target=_task, daemon=True)
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def check_updates(self, async_task: bool = True) -> threading.Thread | None:
         """Check for updates on GitHub Releases."""
@@ -411,12 +384,7 @@ class SystemTrayApp:
                     "ScanSort is up to date. No updates available.",
                 )
 
-        if not async_task:
-            _task()
-            return None
-        t = threading.Thread(target=_task, daemon=True)
-        t.start()
-        return t
+        return self._offload(_task, async_task)
 
     def on_settings_applied(self, new_cfg: AppConfig) -> None:
         """Hot-reload configuration changes into the active watcher and pipeline."""

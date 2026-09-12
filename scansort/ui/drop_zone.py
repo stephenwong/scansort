@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 _ACTIVE_DROP_ZONE_INSTANCE: "DropZoneWindow | None" = None
 _DROP_ZONE_LOCK = threading.Lock()
 
+# Tk file-picker pattern derived from the single supported-extension source.
+_SUPPORTED_FILETYPE_PATTERN = " ".join(
+    f"*{ext}" for ext in sorted(SUPPORTED_EXTENSIONS)
+)
+
 
 def open_drop_zone_window(
     master: tk.Misc | None = None,
@@ -179,10 +184,7 @@ class DropZoneWindow(tk.Toplevel):
             parent=self,
             title="Select Documents to File",
             filetypes=[
-                (
-                    "Supported Documents",
-                    "*.pdf *.jpg *.jpeg *.png *.tiff *.tif",
-                ),
+                ("Supported Documents", _SUPPORTED_FILETYPE_PATTERN),
                 ("All Files", "*.*"),
             ],
         )

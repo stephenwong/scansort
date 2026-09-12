@@ -105,7 +105,7 @@ def test_autorun_linux_enable_failure_leaves_no_corrupt_file(
             return_value=desktop_file,
         ),
         patch(
-            "scansort.platform.autorun.atomic_write", side_effect=OSError("Disk full")
+            "scansort.platform._linux.atomic_write", side_effect=OSError("Disk full")
         ) as mock_atomic,
     ):
         assert enable_autorun() is False
@@ -138,7 +138,7 @@ def test_autorun_linux_os_errors(tmp_path: Path, monkeypatch):
         "scansort.platform.autorun._get_linux_autostart_path", return_value=desktop_file
     ):
         with patch(
-            "scansort.platform.autorun.atomic_write",
+            "scansort.platform._linux.atomic_write",
             side_effect=OSError("Permission denied"),
         ):
             assert enable_autorun() is False
@@ -200,6 +200,18 @@ def test_autorun_windows_import_error(monkeypatch):
         assert is_autorun_enabled() is False
         assert enable_autorun("C:\\app.exe") is False
         assert disable_autorun() is False
+
+
+def test_autorun_lazy_imports_winreg_when_no_seam(monkeypatch):
+    """The shared seam imports the real winreg module when none is injected."""
+    import scansort.platform.autorun as autorun
+
+    fake_winreg = MagicMock()
+    with (
+        patch.dict("sys.modules", {"winreg": fake_winreg}),
+        patch("scansort.platform.autorun._winreg", None),
+    ):
+        assert autorun._get_winreg() is fake_winreg
 
 
 def test_autorun_frozen_executable(tmp_path: Path, monkeypatch):

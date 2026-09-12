@@ -7,7 +7,12 @@ from pathlib import Path
 
 from watchfiles import Change, watch
 
-from scansort.core.constants import IGNORED_PREFIXES, TEMPORARY_EXTENSIONS
+from scansort.core.constants import (
+    DEFAULT_WATCH_DEBOUNCE_MS,
+    IGNORED_PREFIXES,
+    TEMPORARY_EXTENSIONS,
+    WATCHER_ERROR_BACKOFF_S,
+)
 from scansort.document.converter import is_supported_format
 
 logger = logging.getLogger(__name__)
@@ -50,7 +55,7 @@ class DropFolderWatcher:
         self,
         watch_folder: Path,
         file_queue: queue.Queue,
-        debounce_ms: int = 1500,
+        debounce_ms: int = DEFAULT_WATCH_DEBOUNCE_MS,
     ) -> None:
         self.watch_folder = watch_folder
         self.file_queue = file_queue
@@ -117,11 +122,18 @@ class DropFolderWatcher:
         seen_paths = seen_paths if seen_paths is not None else set()
         for change_type, path_str in changes:
             if change_type in {Change.added, Change.modified}:
-                candidate = Path(path_str)
-                if candidate not in seen_paths and should_process_path(candidate):
-                    seen_paths.add(candidate)
-                    logger.info("Detected incoming scan: %s", candidate.name)
-                    self.file_queue.put(candidate)
+                self._enqueue_candidate(
+                    Path(path_str), seen_paths, "Detected incoming scan"
+                )
+
+    def _enqueue_candidate(self, candidate: Path, seen: set[Path], reason: str) -> bool:
+        """Queue *candidate* once if it is a supported, not-yet-seen drop file."""
+        if candidate in seen or not should_process_path(candidate):
+            return False
+        seen.add(candidate)
+        logger.info("%s: %s", reason, candidate.name)
+        self.file_queue.put(candidate)
+        return True
 
     def _run_watch_cycle(self, folder: Path, cycle_stop_event: threading.Event) -> None:
         """Run a single monitoring cycle on folder using cycle_stop_event."""
@@ -172,10 +184,7 @@ class DropFolderWatcher:
         seen = seen if seen is not None else set()
         try:
             for candidate in sorted(folder.iterdir()):
-                if candidate not in seen and should_process_path(candidate):
-                    seen.add(candidate)
-                    logger.info("Queuing pre-existing scan: %s", candidate.name)
-                    self.file_queue.put(candidate)
+                self._enqueue_candidate(candidate, seen, "Queuing pre-existing scan")
         except OSError as e:
             logger.warning("Could not enumerate watch folder %s: %s", folder, e)
 
@@ -208,7 +217,7 @@ class DropFolderWatcher:
                         logger.warning(
                             "Watcher encountered error on %s: %s", current_folder, e
                         )
-                        self._stop_event.wait(2.0)
+                        self._stop_event.wait(WATCHER_ERROR_BACKOFF_S)
         finally:
             self._running = False
             logger.info("DropFolderWatcher stopped.")
