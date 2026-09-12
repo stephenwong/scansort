@@ -10,6 +10,13 @@ from typing import Any
 
 from scansort.classification.client import GeminiClassifier
 from scansort.classification.hints import load_folder_hints
+from scansort.classification.memory import (
+    MemoryStore,
+    build_retrieval_query,
+    compute_folder_thresholds_cached,
+    memory_db_path_for,
+    memory_lock_path_for,
+)
 from scansort.classification.models import DocumentClassification
 from scansort.classification.taxonomy import FolderMapper
 from scansort.core.config import AppConfig, get_default_app_dir
@@ -19,6 +26,9 @@ from scansort.core.constants import (
     HISTORY_CSV_NAME,
     HISTORY_JSONL_NAME,
     LOG_FILENAME,
+    MAX_MEMORY_EXAMPLES,
+    MEMORY_BACKFILL_LIMIT,
+    MEMORY_MIN_SIMILARITY,
     SCAN_STABILITY_POLL_INTERVAL_S,
     SCAN_STABILITY_TIMEOUT_S,
     SCAN_STABLE_COUNT,
@@ -70,6 +80,8 @@ class ScanSortPipeline:
         self.tmp_dir = self.app_dir / "tmp"
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.operations_lock = self.app_dir / OPERATIONS_LOCK_FILENAME
+        self.memory_db_path = memory_db_path_for(self.app_dir)
+        self.memory_lock_path = memory_lock_path_for(self.app_dir)
 
         self.classifier = classifier or GeminiClassifier(model=config.gemini_model)
         self.hints_path = self.app_dir / HINTS_FILENAME
@@ -240,13 +252,89 @@ class ScanSortPipeline:
             staging_pdf.unlink(missing_ok=True)
             return None
 
-    def _classify_scan(self, staging_pdf: Path) -> DocumentClassification:
+    def _classify_scan(
+        self,
+        staging_pdf: Path,
+        original_name: str = "",
+        config: AppConfig | None = None,
+    ) -> DocumentClassification:
         """Query Gemini to classify the staged PDF against taxonomy and hints."""
+        cfg = config or self.config
         taxonomy = self.folder_mapper.get_taxonomy()
         hints = load_folder_hints(self.hints_path)
-        return self.classifier.classify_document(
-            staging_pdf, taxonomy=taxonomy, hints=hints
+        examples, folder_thresholds = self._retrieve_memory_context(
+            staging_pdf, original_name, taxonomy, cfg
         )
+        return self.classifier.classify_document(
+            staging_pdf,
+            taxonomy=taxonomy,
+            hints=hints,
+            examples=examples,
+            folder_thresholds=folder_thresholds,
+        )
+
+    def _retrieve_memory_context(
+        self,
+        staging_pdf: Path,
+        original_name: str,
+        taxonomy: list[str],
+        cfg: AppConfig,
+    ) -> tuple[list | None, dict[str, float] | None]:
+        """Return ``(examples, folder_thresholds)`` for the system prompt.
+
+        Returns ``(None, None)`` when memory is disabled, the store is empty,
+        or anything fails: retrieval is best-effort and must never break a
+        filing. The one-time history backfill runs under the dedicated index
+        lock (never the dispatch lock) with a row cap; per-file indexing
+        happens inside the dispatch critical section instead.
+        """
+        if not cfg.rag_memory_enabled:
+            return None, None
+        try:
+            # Thresholds derive from correction history (not the vector store),
+            # so compute them even when the store is empty; otherwise a valid
+            # calibrated bar is silently dropped.
+            thresholds = compute_folder_thresholds_cached(self.audit_logger.jsonl_path)
+            if taxonomy:
+                allowed = {item.lower() for item in taxonomy}
+                thresholds = {
+                    folder: value
+                    for folder, value in thresholds.items()
+                    if folder.lower() in allowed
+                }
+            store = MemoryStore(self.memory_db_path)
+            if not cfg.dry_run:
+                # The one-time backfill writes persistent state: a read-only
+                # dry run must never create the vector database.
+                with interprocess_file_lock(self.memory_lock_path):
+                    if store.count() == 0:
+                        store.backfill_from_history(
+                            self.audit_logger.jsonl_path, limit=MEMORY_BACKFILL_LIMIT
+                        )
+            if store.count() == 0:
+                return None, (thresholds or None)
+            query = build_retrieval_query(
+                staging_pdf,
+                original_name,
+                ocr_language=cfg.ocr_language,
+                # The coordinator already embedded a text layer when OCR is on;
+                # do not run a second full Tesseract pass for the query.
+                allow_ocr_skim=not cfg.ocr_enabled,
+            )
+            if not query.strip():
+                return None, (thresholds or None)
+            examples = store.search(
+                query,
+                k=MAX_MEMORY_EXAMPLES,
+                min_similarity=MEMORY_MIN_SIMILARITY,
+                taxonomy=taxonomy,
+            )
+            return (examples or None), (thresholds or None)
+        except Exception as e:  # noqa: BLE001 - RAG memory is best-effort
+            logger.warning(
+                "RAG memory retrieval failed for %s: %s", staging_pdf.name, e
+            )
+            return None, None
 
     def _apply_metadata_and_dispatch(
         self,
@@ -288,19 +376,23 @@ class ScanSortPipeline:
                     lock_path=None,
                 )
                 folder_str = self._relative_posix_folder(final_dest.parent, cfg)
-                self.audit_logger.log_scan(
-                    self._build_audit_entry(
-                        file_hash=file_hash,
-                        file_path=file_path,
-                        destination_path=final_dest,
-                        destination_folder=folder_str,
-                        summary=classification.summary,
-                        status=STATUS_SUCCESS,
-                        classification=classification,
-                        ocr_engine=ocr_engine,
-                        ocr_confidence=ocr_confidence,
-                    )
+                entry = self._build_audit_entry(
+                    file_hash=file_hash,
+                    file_path=file_path,
+                    destination_path=final_dest,
+                    destination_folder=folder_str,
+                    summary=classification.summary,
+                    status=STATUS_SUCCESS,
+                    classification=classification,
+                    ocr_engine=ocr_engine,
+                    ocr_confidence=ocr_confidence,
                 )
+                self.audit_logger.log_scan(entry)
+                if cfg.rag_memory_enabled:
+                    try:
+                        MemoryStore(self.memory_db_path).index_record(entry)
+                    except Exception as e:  # noqa: BLE001 - memory never breaks filing
+                        logger.warning("RAG memory index failed: %s", e)
 
         if race_record is not None:
             return self._route_duplicate(
@@ -412,7 +504,7 @@ class ScanSortPipeline:
                     )
 
             # 5. Multimodal analysis and classification via Gemini
-            classification = self._classify_scan(staging_pdf)
+            classification = self._classify_scan(staging_pdf, file_path.name, config)
 
             # 6. Dry-Run Verification before any file mutation or metadata writing
             if config.dry_run:

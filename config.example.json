@@ -10,5 +10,6 @@
   "auto_update": true,
   "update_check_interval_days": 0,
   "ocr_enabled": false,
-  "ocr_language": "eng"
+  "ocr_language": "eng",
+  "rag_memory_enabled": true
 }

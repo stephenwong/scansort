@@ -506,3 +506,153 @@ def test_handle_review_falls_back_to_cli_on_tcl_error(
     assert handle_review(args) == 0
     assert called["items"] == [item]
     assert "falling back" in capsys.readouterr().err.lower()
+
+
+def test_handle_review_cli_proposes_summary_keywords_for_generic_name(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A generic 'Scanned Document' default falls back to summary keywords."""
+    import json
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "_.pdf")
+
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True)
+    (app_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "destination_path": str(pdf.resolve()),
+                "new_filename": "_.pdf",
+                "summary": "Origin Energy electricity bill August",
+                "status": "SUCCESS",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    prompts: list[str] = []
+    inputs = iter(["2", "Utilities/Electricity", "", "", ""])
+
+    def _mock_input(prompt=""):
+        prompts.append(prompt)
+        return next(inputs)
+
+    monkeypatch.setattr("builtins.input", _mock_input)
+
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.review.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        code = handle_review(args)
+
+    assert code == 0
+    hint_prompts = [p for p in prompts if "keyword hint" in p]
+    assert len(hint_prompts) == 1
+    assert "origin energy electricity" in hint_prompts[0]
+    hints = json.loads((app_dir / "folder_hints.json").read_text(encoding="utf-8-sig"))
+    assert hints["Utilities/Electricity"] == ["origin energy electricity"]
+
+
+def test_handle_review_cli_skips_hint_for_boilerplate_summary(
+    tmp_path: Path, monkeypatch
+):
+    """A boilerplate summary must not persist a junk hint on bare Enter."""
+    import json
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "_.pdf")
+
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True)
+    (app_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "destination_path": str(pdf.resolve()),
+                "new_filename": "_.pdf",
+                "summary": "Failed processing; routed to review folder.",
+                "status": "FAILED",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    inputs = iter(["2", "Utilities/Electricity", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.review.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        code = handle_review(args)
+
+    assert code == 0
+    assert not (app_dir / "folder_hints.json").exists()
+
+
+def test_handle_review_cli_reports_duplicate_diversion(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A declined duplicate must not be reported as filed to the chosen folder."""
+    import json
+
+    from scansort.pipeline.hasher import compute_file_sha256
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "260815_Dental.pdf")
+    digest = compute_file_sha256(pdf)
+
+    docs.mkdir(exist_ok=True)
+    prior = docs / "Health" / "Dental" / "260801_Dental_Prior.pdf"
+    prior.parent.mkdir(parents=True)
+    prior.write_bytes(b"prior filing")
+
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True)
+    (app_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "sha256": digest,
+                "destination_path": str(prior.resolve()),
+                "new_filename": "260801_Dental_Prior.pdf",
+                "summary": "Earlier identical filing",
+                "status": "SUCCESS",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+
+    inputs = iter(["2", "Health/Dental", "", "", "", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.review.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        code = handle_review(args)
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Duplicate moved to the Duplicates folder" in out
+    assert "Successfully filed" not in out

@@ -52,7 +52,7 @@ _scansort_completion() {
             opts="--gui -g --cli -c --limit -v --verbose --help"
             ;;
         config)
-            opts="--show --json --path --get --set --set-key --watch-folder --documents-folder --autostart --context-menu --ocr --ocr-menu --gemini-model --fallback-folder --max-depth --mirror-csv --auto-update --update-check-interval --dry-run -v --verbose --help"
+            opts="--show --json --path --get --set --set-key --watch-folder --documents-folder --autostart --context-menu --ocr --ocr-menu --rag-memory --gemini-model --fallback-folder --max-depth --mirror-csv --auto-update --update-check-interval --dry-run -v --verbose --help"
             ;;
         logs)
             opts="-n --lines -f --follow --level --clear -v --verbose --help"
@@ -154,7 +154,8 @@ _scansort() {
                         '--autostart[Toggle auto-start]:choice:(enable disable)' \\
                         '--context-menu[Toggle context menu]:choice:(enable disable)' \\
                         '--ocr[Toggle OCR text layer]:choice:(enable disable)' \\
-                        '--ocr-menu[Toggle searchable context menu]:choice:(enable disable)'
+                        '--ocr-menu[Toggle searchable context menu]:choice:(enable disable)' \\
+                        '--rag-memory[Toggle self-improving filing memory]:choice:(enable disable)'
                     ;;
                 ocr-backfill)
                     _arguments \\
@@ -241,6 +242,7 @@ complete -c scansort -n "__fish_seen_subcommand_from config" -l autostart -a "en
 complete -c scansort -n "__fish_seen_subcommand_from config" -l context-menu -a "enable disable" -d "Toggle Windows Explorer context menu"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l ocr -a "enable disable" -d "Toggle OCR text layer embedding"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l ocr-menu -a "enable disable" -d "Toggle searchable context menu"
+complete -c scansort -n "__fish_seen_subcommand_from config" -l rag-memory -a "enable disable" -d "Toggle self-improving filing memory"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l watch-folder -a "(__fish_complete_directories)" -d "Set watch folder"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l documents-folder -a "(__fish_complete_directories)" -d "Set documents root"
 complete -c scansort -n "__fish_seen_subcommand_from config" -l fallback-folder -d "Set fallback folder"
@@ -296,7 +298,7 @@ Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
         $flags += @('--dry-run', '--limit', '--language')
     }
     elseif ($elements -contains 'config') {
-        $flags += @('--show', '--json', '--path', '--get', '--set', '--set-key', '--watch-folder', '--documents-folder', '--gemini-model', '--fallback-folder', '--max-depth', '--mirror-csv', '--auto-update', '--update-check-interval', '--dry-run', '--autostart', '--context-menu', '--ocr', '--ocr-menu')
+        $flags += @('--show', '--json', '--path', '--get', '--set', '--set-key', '--watch-folder', '--documents-folder', '--gemini-model', '--fallback-folder', '--max-depth', '--mirror-csv', '--auto-update', '--update-check-interval', '--dry-run', '--autostart', '--context-menu', '--ocr', '--ocr-menu', '--rag-memory')
     }
     elseif ($elements -contains 'review') {
         $flags += @('--gui', '-g', '--cli', '-c', '--limit')

@@ -11,6 +11,10 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
+from scansort.classification.memory import (
+    MemoryExample,
+    format_examples_for_prompt,
+)
 from scansort.classification.models import (
     DocumentClassification,
     GeminiClassificationResponse,
@@ -21,6 +25,7 @@ from scansort.classification.taxonomy import format_taxonomy_for_prompt
 from scansort.core.constants import (
     BLANK_SCANS_DIR,
     DEFAULT_GEMINI_MODEL,
+    MAX_CONFIDENCE_THRESHOLD,
     MAX_DESCRIPTION_LENGTH,
     MIN_CONFIDENCE_THRESHOLD,
     REVIEW_NEEDED_DIR,
@@ -31,6 +36,52 @@ from scansort.logging.gemini_logger import log_classification_event
 from scansort.platform.secrets import get_api_key, redact_secrets_from_text
 
 logger = logging.getLogger(__name__)
+
+
+def _format_thresholds_for_prompt(
+    folder_thresholds: dict[str, float] | None,
+) -> str:
+    """Render calibrated per-folder confidence bars as a prompt block."""
+    entries: list[tuple[str, float]] = []
+    for folder, threshold in (folder_thresholds or {}).items():
+        try:
+            value = float(threshold)
+        except TypeError, ValueError:
+            continue
+        name = " ".join(str(folder or "").split())
+        if not name or not math.isfinite(value):
+            continue
+        entries.append((name, value))
+    if not entries:
+        return ""
+    entries.sort(key=lambda item: item[0].lower())
+    lines = "\n".join(f"- '{name}' requires >= {value:.2f}" for name, value in entries)
+    return (
+        "CALIBRATED CONFIDENCE (these folders had past mis-filings; only choose"
+        f" one when confidence meets its higher bar, else choose '{REVIEW_NEEDED_DIR}'):\n"
+        + lines
+    )
+
+
+def _effective_threshold(
+    folder: str, folder_thresholds: dict[str, float] | None
+) -> float:
+    """Return the enforced confidence bar for *folder* (global minimum floor)."""
+    if not folder_thresholds:
+        return MIN_CONFIDENCE_THRESHOLD
+    want = normalize_relative_folder(folder).lower()
+    for name, threshold in folder_thresholds.items():
+        try:
+            value = float(threshold)
+        except TypeError, ValueError:
+            continue
+        if not math.isfinite(value):
+            # A non-finite bar would make every `conf < effective` comparison
+            # false (fail open); ignore it and fall back to the global floor.
+            continue
+        if normalize_relative_folder(str(name)).lower() == want:
+            return min(max(value, MIN_CONFIDENCE_THRESHOLD), MAX_CONFIDENCE_THRESHOLD)
+    return MIN_CONFIDENCE_THRESHOLD
 
 
 def _extract_usage(response) -> tuple[int, int]:
@@ -72,11 +123,15 @@ class GeminiClassifier:
         return self._client
 
     def _build_system_instruction(
-        self, taxonomy: list[str], hints: dict[str, list[str]] | None = None
+        self,
+        taxonomy: list[str],
+        hints: dict[str, list[str]] | None = None,
+        examples: list[MemoryExample] | None = None,
+        folder_thresholds: dict[str, float] | None = None,
     ) -> str:
         """Build the structured system prompt including discovered taxonomy."""
         taxonomy_block = format_taxonomy_for_prompt(taxonomy, hints)
-        return (
+        base = (
             "You are ScanSort, an expert document sorting assistant for personal and business records.\n"
             "Analyze the attached scanned document and classify it strictly according to the user's pre-existing folder hierarchy.\n\n"
             f"{taxonomy_block}\n\n"
@@ -96,9 +151,22 @@ class GeminiClassifier:
             "6. Summary: Provide a crisp 1-sentence summary of the document contents.\n"
             "7. Folder Reasoning: Briefly explain why the chosen target folder is the best match for this document, explicitly citing any date or event cross-referencing used (e.g. 'Good Life Suites hotel invoice dates match 2026 Sydney Marathon event timeframe')."
         )
+        extras = []
+        examples_block = format_examples_for_prompt(examples)
+        if examples_block:
+            extras.append(examples_block)
+        thresholds_block = _format_thresholds_for_prompt(folder_thresholds)
+        if thresholds_block:
+            extras.append(thresholds_block)
+        if not extras:
+            return base
+        return base + "\n\n" + "\n\n".join(extras)
 
     def _parse_and_route_response(
-        self, raw_text: str, taxonomy: list[str]
+        self,
+        raw_text: str,
+        taxonomy: list[str],
+        folder_thresholds: dict[str, float] | None = None,
     ) -> DocumentClassification:
         """Parse raw JSON output from Gemini and route to a valid taxonomy folder."""
         try:
@@ -170,7 +238,16 @@ class GeminiClassifier:
                 else:
                     target = canonical
                     suggested_folder = canonical
-                    routing_rationale = f"Matched discovered taxonomy folder '{canonical}' with {conf * 100:.0f}% confidence."
+                    effective = _effective_threshold(canonical, folder_thresholds)
+                    if conf < effective:
+                        routing_rationale = (
+                            f"Confidence {conf:.2f} below {effective:.2f} calibrated "
+                            f"threshold for '{canonical}' (past corrections; "
+                            f"suggested '{canonical}') -> routed to {REVIEW_NEEDED_DIR}."
+                        )
+                        target = REVIEW_NEEDED_DIR
+                    else:
+                        routing_rationale = f"Matched discovered taxonomy folder '{canonical}' with {conf * 100:.0f}% confidence."
 
         return DocumentClassification(
             document_date=doc_date,
@@ -207,6 +284,8 @@ class GeminiClassifier:
         pdf_path: Path,
         taxonomy: list[str],
         hints: dict[str, list[str]] | None = None,
+        examples: list[MemoryExample] | None = None,
+        folder_thresholds: dict[str, float] | None = None,
     ) -> DocumentClassification:
         """Analyze a PDF document and return structured classification and metadata.
 
@@ -214,12 +293,17 @@ class GeminiClassifier:
             pdf_path: Path to the PDF document.
             taxonomy: Discovered folder taxonomy paths.
             hints: Optional dictionary mapping folder paths to keyword hints.
+            examples: Optional past filings injected as few-shot examples.
+            folder_thresholds: Optional per-folder confidence bars from
+                correction history (enforced at routing time).
 
         Returns:
             Validated DocumentClassification instance.
         """
         client = self._get_client()
-        system_instruction = self._build_system_instruction(taxonomy, hints)
+        system_instruction = self._build_system_instruction(
+            taxonomy, hints, examples=examples, folder_thresholds=folder_thresholds
+        )
         start_time = time.monotonic()
 
         try:
@@ -250,7 +334,7 @@ class GeminiClassifier:
             cost = calculate_gemini_cost(self.model, prompt_tokens, candidates_tokens)
 
             classification = self._parse_and_route_response(
-                response.text or "{}", taxonomy
+                response.text or "{}", taxonomy, folder_thresholds=folder_thresholds
             )
             classification.prompt_tokens = prompt_tokens
             classification.candidates_tokens = candidates_tokens

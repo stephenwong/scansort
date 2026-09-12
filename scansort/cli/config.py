@@ -56,6 +56,7 @@ _MUTATION_FLAGS = (
     "context_menu",
     "ocr",
     "ocr_menu",
+    "rag_memory",
 )
 
 
@@ -264,6 +265,11 @@ def _apply_mutations(
         direct_fields_changed = True
         updated_dict["ocr_enabled"] = args.ocr == "enable"
 
+    if args.rag_memory:
+        has_mutation = True
+        direct_fields_changed = True
+        updated_dict["rag_memory_enabled"] = args.rag_memory == "enable"
+
     if direct_fields_changed:
         new_cfg = _with_overrides(cfg, **updated_dict)
         if new_cfg is None:
@@ -292,6 +298,8 @@ def _apply_mutations(
             print(f"Dry run mode: {cfg.dry_run}")
         if args.ocr:
             print(f"OCR text layer: {cfg.ocr_enabled}")
+        if args.rag_memory:
+            print(f"RAG memory: {cfg.rag_memory_enabled}")
 
     if args.autostart:
         has_mutation = True
@@ -372,6 +380,7 @@ def _config_display_payload(cfg: AppConfig) -> dict[str, object]:
         "update_check_interval_days": cfg.update_check_interval_days,
         "ocr_enabled": cfg.ocr_enabled,
         "ocr_language": cfg.ocr_language,
+        "rag_memory_enabled": cfg.rag_memory_enabled,
         "gemini_api_key": mask_api_key(get_api_key()),
     }
 
@@ -403,6 +412,9 @@ def _show_config(args: CliArgs, cfg: AppConfig) -> None:
     print(f"OCR Menu:          {ocr_menu_status}")
     print(f"OCR Text Layer:    {'Enabled' if payload['ocr_enabled'] else 'Disabled'}")
     print(f"OCR Language:      {payload['ocr_language']}")
+    print(
+        f"RAG Memory:        {'Enabled' if payload['rag_memory_enabled'] else 'Disabled'}"
+    )
     print(f"Dry Run Mode:      {payload['dry_run']}")
     print(f"Auto Update:       {auto_update}")
     print(f"Update Check:      every {payload['update_check_interval_days']} day(s)")

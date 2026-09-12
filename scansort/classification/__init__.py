@@ -15,6 +15,16 @@ from scansort.classification.hints import (
     normalize_folder_key,
     save_folder_hints,
 )
+from scansort.classification.memory import (
+    MemoryExample,
+    MemoryStore,
+    build_retrieval_query,
+    compute_folder_thresholds,
+    format_examples_for_prompt,
+    memory_db_path_for,
+    memory_lock_path_for,
+    propose_hint_keywords,
+)
 from scansort.classification.models import (
     DocumentClassification,
     GeminiClassificationResponse,
@@ -43,6 +53,14 @@ __all__ = [
     "add_folder_hint",
     "normalize_folder_key",
     "get_default_hints_path",
+    "MemoryExample",
+    "MemoryStore",
+    "build_retrieval_query",
+    "compute_folder_thresholds",
+    "format_examples_for_prompt",
+    "memory_db_path_for",
+    "memory_lock_path_for",
+    "propose_hint_keywords",
     "DoctorFinding",
     "DoctorReport",
     "run_doctor",

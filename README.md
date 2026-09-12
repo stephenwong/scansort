@@ -34,6 +34,7 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 - 🌳 **Uses your folder structure** — ScanSort discovers your real Documents hierarchy and matches scans to the deepest, most specific subfolder. No setup or folder configuration required.
 - ✈️ **Event & trip awareness** — Folders like `2026 Sydney Marathon` or `Tokyo Trip 2025` are recognised automatically. ScanSort cross-references document dates and locations against event timing to route related receipts, tickets, and invoices correctly.
 - 💡 **Keyword hints** — Optionally provide a `folder_hints.json` file to help the AI with ambiguous folder names (see [Folder Hints](#folder-hints) below).
+- 🧠 **Self-improving memory (RAG)** — Every filing teaches ScanSort: past filings are retrieved as few-shot examples for the next classification, so repeat bills file correctly after a single correction. Fully local (no new cloud calls, nothing leaves your machine); disable anytime with `scansort config --rag-memory disable` or the Settings dialog toggle.
 - 🎯 **Confidence gating** — Documents below 70% classification confidence go to `_Review_Needed` instead of being misfiled.
 
 ---
@@ -43,6 +44,7 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 - 📋 **Triage unfiled scans** — Documents placed in `_Review_Needed` (low confidence or missing folder) can be reviewed and filed interactively through a visual desktop dialog or in your terminal (`scansort review`).
 - 💡 **AI routing suggestions** — ScanSort preserves what Gemini understood from the document (document type, summary, and suggested folder) so you can accept suggestions with a single click.
 - 🧠 **Self-learning feedback loop** — When you choose or refine a destination folder, you can optionally teach ScanSort a new keyword hint. It automatically updates `folder_hints.json`, ensuring future scans match that folder with high confidence.
+- ↩️ **Corrections stick** — Undoing a filing removes its bad example from memory, and folders with a history of corrections require higher confidence before auto-filing again.
 - 🖱️ **System tray counter** — The system tray menu dynamically indicates pending reviews (e.g. `Review Needed (3)...`), allowing 1-click access to triage scans.
 
 ---
@@ -168,6 +170,7 @@ All settings can be changed via the **Settings dialog** (tray → Settings...) o
 | Auto-start | `--autostart enable/disable` | Launch on login | Disabled |
 | Context menu | `--context-menu enable/disable` | Windows Explorer right-click integration | Disabled |
 | OCR text layer | `--ocr enable/disable` | Embed a searchable text layer in new scans | Disabled |
+| Filing memory | `--rag-memory enable/disable` | Retrieve past filings as classification examples | Enabled |
 | OCR context menu | `--ocr-menu enable/disable` | Explorer right-click "Make searchable with ScanSort" (PDF only) | Disabled |
 | Dry-run | `--dry-run enable/disable` | Preview without moving files | Disabled |
 | Auto-update | `--auto-update enable/disable` | Check for updates on launch | Enabled |

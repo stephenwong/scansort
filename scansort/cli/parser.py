@@ -390,5 +390,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["enable", "disable"],
         help="Toggle Windows Explorer right-click 'Make searchable with ScanSort' menu",
     )
+    cfg_p.add_argument(
+        "--rag-memory",
+        choices=["enable", "disable"],
+        help="Toggle self-improving filing memory (local retrieval over history)",
+    )
 
     return parser

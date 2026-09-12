@@ -98,6 +98,7 @@ class AppConfig(BaseModel):
     update_check_interval_days: int = Field(default=0, ge=0, le=60)
     ocr_enabled: bool = False
     ocr_language: str = DEFAULT_OCR_LANGUAGE
+    rag_memory_enabled: bool = True
 
     @field_validator("ocr_language", mode="before")
     @classmethod

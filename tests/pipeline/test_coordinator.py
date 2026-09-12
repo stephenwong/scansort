@@ -664,7 +664,7 @@ def test_process_file_defers_when_source_changes_during_processing(tmp_path: Pat
     _create_sample_scan(scan_file)
     original_bytes = scan_file.read_bytes()
 
-    def late_writing_classify(staging_pdf: Path):
+    def late_writing_classify(staging_pdf: Path, *args):
         with open(scan_file, "ab") as f:
             f.write(b"tail-bytes")
         return DocumentClassification(

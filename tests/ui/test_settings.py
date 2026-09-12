@@ -654,3 +654,65 @@ def test_settings_dialog_doctor_dismiss_persists_across_rerun(tk_root, tmp_path:
 
     assert all(f.finding_id != dismissed_id for f in dialog._doctor_findings)
     dialog.destroy()
+
+
+def test_settings_rag_memory_toggle_persists(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs, rag_memory_enabled=True)
+
+    with (
+        patch("scansort.ui.settings.load_config", return_value=cfg),
+        patch("scansort.ui.settings.save_config") as mock_save,
+        patch("scansort.ui.settings.set_api_key"),
+        patch("scansort.ui.settings.enable_autorun", return_value=True),
+        patch("scansort.ui.settings.disable_autorun", return_value=True),
+        patch("scansort.ui.settings.enable_context_menu", return_value=True),
+        patch("scansort.ui.settings.disable_context_menu", return_value=True),
+        patch("scansort.ui.settings.enable_ocr_menu", return_value=True),
+        patch("scansort.ui.settings.disable_ocr_menu", return_value=True),
+        patch("scansort.ui.settings.is_autorun_enabled", return_value=False),
+        patch("scansort.ui.settings.is_context_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.is_ocr_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.show_toast"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        assert dialog.rag_memory_var.get() is True
+        dialog.rag_memory_var.set(False)
+        dialog.on_save()
+
+    saved = mock_save.call_args.args[0]
+    assert saved.rag_memory_enabled is False
+
+
+def test_settings_save_merges_non_dialog_fields_from_disk(tk_root, tmp_path: Path):
+    """A concurrent CLI change to a non-dialog field must survive a dialog save."""
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs, max_folder_depth=3)
+    disk_cfg = cfg.model_copy(update={"max_folder_depth": 5})
+
+    with (
+        patch("scansort.ui.settings.load_config", return_value=disk_cfg),
+        patch("scansort.ui.settings.save_config") as mock_save,
+        patch("scansort.ui.settings.set_api_key"),
+        patch("scansort.ui.settings.enable_autorun", return_value=True),
+        patch("scansort.ui.settings.disable_autorun", return_value=True),
+        patch("scansort.ui.settings.enable_context_menu", return_value=True),
+        patch("scansort.ui.settings.disable_context_menu", return_value=True),
+        patch("scansort.ui.settings.enable_ocr_menu", return_value=True),
+        patch("scansort.ui.settings.disable_ocr_menu", return_value=True),
+        patch("scansort.ui.settings.is_autorun_enabled", return_value=False),
+        patch("scansort.ui.settings.is_context_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.is_ocr_menu_enabled", return_value=False),
+        patch("scansort.ui.settings.show_toast"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        dialog.on_save()
+
+    saved = mock_save.call_args.args[0]
+    assert saved.max_folder_depth == 5

@@ -35,8 +35,35 @@ DEFAULT_IGNORED_FOLDERS: set[str] = {
 }
 
 MIN_CONFIDENCE_THRESHOLD: float = 0.70
+# Upper bound for learned per-folder confidence thresholds (RAG memory
+# calibration only ever raises thresholds, never below the global minimum).
+MAX_CONFIDENCE_THRESHOLD: float = 0.95
+# Per-correction increment applied to a folder's calibrated threshold.
+CALIBRATION_STEP: float = 0.05
 DEFAULT_DESCRIPTION: str = "Scanned_Document"
 MAX_DESCRIPTION_LENGTH: int = 60
+
+# RAG self-improving classifier memory (local-only retrieval over history).
+# Examples injected into the system prompt are capped to bound token cost.
+MAX_MEMORY_EXAMPLES: int = 3
+MEMORY_EXAMPLE_SUMMARY_CHARS: int = 80
+MEMORY_VECTOR_DIM: int = 512
+MEMORY_QUERY_MAX_CHARS: int = 2000
+MEMORY_MIN_QUERY_CHARS: int = 25
+# Measured separation on hashed lexical vectors: repeat bills sharing vendor
+# words score >= 0.25 while unrelated documents score <= 0.08.
+MEMORY_MIN_SIMILARITY: float = 0.20
+# One-time lazy backfill budget (rows) so large histories never stall the worker.
+MEMORY_BACKFILL_LIMIT: int = 2000
+# Bound on the most-recent vector rows scored per retrieval so the hot path
+# cannot degrade linearly with an ever-growing store.
+MEMORY_SEARCH_CANDIDATE_LIMIT: int = 2000
+# Best-effort memory writes must fail fast rather than hold the dispatch lock on
+# a busy/corrupt database.
+MEMORY_WRITE_TIMEOUT_S: float = 0.5
+MEMORY_DIRNAME: str = "vectors"
+MEMORY_DB_FILENAME: str = "memory.sqlite3"
+MEMORY_INDEX_LOCK_FILENAME: str = "index.lock"
 
 STATUS_SUCCESS: str = "SUCCESS"
 STATUS_DUPLICATE: str = "DUPLICATE"

@@ -14,6 +14,7 @@ from typing import Any
 from pypdf.errors import PyPdfError
 
 from scansort.classification.hints import add_folder_hint, get_default_hints_path
+from scansort.classification.memory import MemoryStore, memory_db_path_for
 from scansort.classification.models import sanitize_date, sanitize_description
 from scansort.core.config import AppConfig, get_default_app_dir
 from scansort.core.constants import (
@@ -229,7 +230,7 @@ def _build_review_audit_entry(
     destination_path: str,
 ) -> dict[str, Any]:
     """Build the audit entry for a review-folder filing or dismissal."""
-    return {
+    entry: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "sha256": sha256,
         "original_filename": item.filename,
@@ -241,6 +242,12 @@ def _build_review_audit_entry(
         "document_type": item.document_type,
         "status": status,
     }
+    # Persist the model's mistaken suggestion when present: calibration
+    # penalizes the suggestion (never the human-corrected destination).
+    # Legacy rows without a suggestion keep the historical shape.
+    if item.suggested_folder and item.suggested_folder.strip():
+        entry["suggested_folder"] = item.suggested_folder.strip()
+    return entry
 
 
 def _convert_review_source_to_pdf(item: ReviewItem) -> tuple[Path, Path | None]:
@@ -394,7 +401,9 @@ def file_reviewed_item(
     # prompt never blocks another process's critical section.
     file_anyway = False
     if on_duplicate is not None:
-        pre_existing = check_duplicate(file_hash, jsonl_path)
+        pre_existing = check_duplicate(
+            file_hash, jsonl_path, ignore_path=item.file_path
+        )
         if pre_existing is not None:
             file_anyway = bool(on_duplicate(pre_existing))
 
@@ -405,7 +414,7 @@ def file_reviewed_item(
             raise FileNotFoundError(f"Source file {item.file_path} no longer exists")
 
         # Re-verify duplicates atomically with the move (invariant D).
-        race_record = check_duplicate(file_hash, jsonl_path)
+        race_record = check_duplicate(file_hash, jsonl_path, ignore_path=item.file_path)
         if race_record is not None and not file_anyway:
             dest_path = _route_review_duplicate(
                 item=item,
@@ -463,6 +472,24 @@ def file_reviewed_item(
                     destination_path=str(dest_path),
                 )
             )
+
+            # Self-improving memory: index the human-corrected filing under
+            # the operations lock so the next similar scan retrieves it.
+            # Best-effort: an index failure must not fail the filing.
+            if config.rag_memory_enabled:
+                try:
+                    MemoryStore(memory_db_path_for(jsonl_path.parent)).index_record(
+                        {
+                            "sha256": file_hash,
+                            "destination_folder": normalized_folder,
+                            "summary": item.summary,
+                            "document_type": item.document_type,
+                            "suggested_folder": item.suggested_folder,
+                            "status": "REVIEWED",
+                        }
+                    )
+                except Exception as e:  # noqa: BLE001 - memory never breaks filing
+                    logger.warning("RAG memory index failed: %s", e)
 
             # Save keyword hint if requested (best-effort: a hint failure must
             # not misreport an already-completed filing as failed).

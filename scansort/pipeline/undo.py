@@ -12,6 +12,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from scansort.classification.memory import MemoryStore, memory_db_path_for
 from scansort.core.config import get_default_app_dir, load_config
 from scansort.core.constants import (
     HISTORY_CSV_NAME,
@@ -100,6 +101,8 @@ def undo_last_move(
     csv_path: Path | None = None,
     mirror_csv_path: Path | None = None,
     lock_path: Path | None = None,
+    *,
+    memory_enabled: bool = True,
 ) -> Path | None:
     """Reverse the last successful document move recorded in the audit log.
 
@@ -109,6 +112,8 @@ def undo_last_move(
             sibling of jsonl_path.
         mirror_csv_path: Optional mirrored CSV audit log to update alongside.
         lock_path: Optional cross-process lock file guarding the restore.
+        memory_enabled: When True, also drop the mis-filed vector from the
+            local RAG memory so it cannot steer future classifications.
 
     Returns:
         Path of restored file in drop folder, or None if no reversible action found.
@@ -149,6 +154,18 @@ def undo_last_move(
             mirror_csv_path=mirror_csv_path,
         ).log_scan(undo_record)
 
+        if memory_enabled:
+            # Negative signal: the filed location was wrong, so its vector
+            # must not be retrieved as a past-similar example. Best-effort.
+            try:
+                undone_sha = str(target_record.get("sha256") or "")
+                if undone_sha and undone_sha != "UNKNOWN":
+                    MemoryStore(memory_db_path_for(jsonl_path.parent)).remove(
+                        undone_sha
+                    )
+            except Exception as e:  # noqa: BLE001 - memory never breaks undo
+                logger.warning("RAG memory remove failed: %s", e)
+
     logger.info("Undid filing: %s moved back to %s", dest_path.name, restore_path)
     return restore_path
 
@@ -187,7 +204,14 @@ def run_undo(cfg=None, undo_fn=None, app_dir=None) -> UndoResult:
 
     try:
         mirror_csv = active_cfg.mirror_csv_path if active_cfg else None
-        restored = executor(jsonl_path, mirror_csv_path=mirror_csv)
+        memory_enabled = (
+            getattr(active_cfg, "rag_memory_enabled", True)
+            if active_cfg is not None
+            else True
+        )
+        restored = executor(
+            jsonl_path, mirror_csv_path=mirror_csv, memory_enabled=memory_enabled
+        )
         if restored:
             return UndoResult(
                 True,

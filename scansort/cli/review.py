@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 
+from scansort.classification.memory import propose_hint_keywords
 from scansort.cli.args import CliArgs
 from scansort.cli.config import _load_config_or_exit
 from scansort.core.config import AppConfig, get_default_app_dir
@@ -13,7 +14,10 @@ from scansort.core.constants import (
     HISTORY_JSONL_NAME,
 )
 from scansort.core.fs import open_in_file_manager
-from scansort.pipeline.dispatcher import OPERATIONS_LOCK_FILENAME
+from scansort.pipeline.dispatcher import (
+    OPERATIONS_LOCK_FILENAME,
+    resolve_duplicates_dir,
+)
 from scansort.pipeline.review import (
     ReviewItem,
     dismiss_review_item,
@@ -179,6 +183,12 @@ def _run_cli_review(
             in_desc = raw_desc.strip() or item.description
 
             suggested_kw = item.description.replace("_", " ").lower()
+            if not suggested_kw.strip() or suggested_kw == "scanned document":
+                # Generic filenames carry no signal: propose content-derived
+                # keywords from the summary instead. A boilerplate summary
+                # yields an empty string, so Enter saves nothing rather than
+                # persisting a junk hint.
+                suggested_kw = " ".join(propose_hint_keywords(item.summary))
             hint_prompt = f"Add keyword hint for '{target_folder}'? [{suggested_kw}] (Enter to accept, type custom, or 'n' to skip): "
             raw_hint = _input_or_cancel(hint_prompt)
             if raw_hint is None:
@@ -203,7 +213,13 @@ def _run_cli_review(
                     lock_path=lock_path,
                     on_duplicate=_confirm_duplicate,
                 )
-                print(f"Successfully filed to {dest.name} in '{target_folder}'.\n")
+                duplicates_dir = resolve_duplicates_dir(
+                    config.documents_root, config.fallback_folder
+                )
+                if dest.parent == duplicates_dir:
+                    print(f"Duplicate moved to the Duplicates folder: {dest.name}.\n")
+                else:
+                    print(f"Successfully filed to {dest.name} in '{target_folder}'.\n")
                 break
             except (OSError, ValueError) as e:
                 print(f"Error filing document: {e}\n")

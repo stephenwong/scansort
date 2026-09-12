@@ -52,6 +52,19 @@ _DIALOG_LOCK = threading.Lock()
 
 _FOOTNOTE_FONT = ("TkDefaultFont", 8, "italic")
 
+#: Fields the Settings dialog owns; everything else is merged from disk on save
+#: so a concurrent CLI mutation is not clobbered by the dialog's stale snapshot.
+_DIALOG_MANAGED_FIELDS: tuple[str, ...] = (
+    "watch_folder",
+    "documents_root",
+    "gemini_model",
+    "fallback_folder",
+    "dry_run",
+    "start_on_boot",
+    "ocr_enabled",
+    "rag_memory_enabled",
+)
+
 
 def open_settings_dialog(
     config: AppConfig | None = None,
@@ -123,6 +136,7 @@ class SettingsDialog(SingletonToplevel):
         self.context_menu_var = tk.BooleanVar(value=is_context_menu_enabled())
         self.ocr_var = tk.BooleanVar(value=self.app_config.ocr_enabled)
         self.ocr_menu_var = tk.BooleanVar(value=is_ocr_menu_enabled())
+        self.rag_memory_var = tk.BooleanVar(value=self.app_config.rag_memory_enabled)
         self._doctor_findings: list[DoctorFinding] = []
         self._doctor_root: Path | None = None
         self._dismissed_finding_ids: set[str] = set()
@@ -293,6 +307,11 @@ class SettingsDialog(SingletonToplevel):
             opts_frame,
             text="Enable 'Make searchable with ScanSort' for PDFs in Explorer",
             variable=self.ocr_menu_var,
+        ).pack(anchor=tk.W, pady=2)
+        ttk.Checkbutton(
+            opts_frame,
+            text="Use past filings as classification examples (local filing memory)",
+            variable=self.rag_memory_var,
         ).pack(anchor=tk.W, pady=2)
         ttk.Checkbutton(
             opts_frame,
@@ -512,6 +531,7 @@ class SettingsDialog(SingletonToplevel):
             updated_dict["dry_run"] = self.dry_run_var.get()
             updated_dict["start_on_boot"] = self.autorun_var.get()
             updated_dict["ocr_enabled"] = self.ocr_var.get()
+            updated_dict["rag_memory_enabled"] = self.rag_memory_var.get()
             new_cfg = AppConfig(**updated_dict)
             new_cfg.ensure_directories()
         except (ValueError, OSError) as e:
@@ -521,14 +541,28 @@ class SettingsDialog(SingletonToplevel):
 
     def _persist_config_with_key_rollback(
         self, new_cfg: AppConfig, new_key: str, prior_key: str | None
-    ) -> bool:
-        """Persist *new_cfg*, rolling back the saved credential on failure."""
+    ) -> AppConfig | None:
+        """Persist *new_cfg*, rolling back the saved credential on failure.
+
+        Reloads the on-disk config inside the lock and overlays only the fields
+        this dialog manages, so a concurrent CLI mutation to any other field is
+        not silently reverted by the dialog's stale snapshot. Returns the
+        reconciled config (or None on failure).
+        """
         try:
             op_lock = get_default_app_dir() / OPERATIONS_LOCK_FILENAME
             with interprocess_file_lock(op_lock):
-                save_config(new_cfg)
-            return True
-        except OSError as e:
+                try:
+                    disk_cfg = load_config()
+                except ValueError:
+                    disk_cfg = new_cfg
+                merged = disk_cfg.model_dump()
+                for field in _DIALOG_MANAGED_FIELDS:
+                    merged[field] = getattr(new_cfg, field)
+                reconciled = AppConfig(**merged)
+                save_config(reconciled)
+            return reconciled
+        except (OSError, ValueError) as e:
             # Roll back the credential so the vault does not disagree with the
             # config that failed to persist.
             if new_key:
@@ -540,7 +574,7 @@ class SettingsDialog(SingletonToplevel):
             messagebox.showerror(
                 "Save Error", f"Failed to save config file: {e}", parent=self
             )
-            return False
+            return None
 
     def _apply_system_integrations(self, new_cfg: AppConfig) -> tuple[bool, bool, bool]:
         """Reconcile OS state; returns (autorun_ok, menu_ok, ocr_menu_ok)."""
@@ -610,8 +644,10 @@ class SettingsDialog(SingletonToplevel):
                 )
                 return
 
-        if not self._persist_config_with_key_rollback(new_cfg, new_key, prior_key):
+        saved_cfg = self._persist_config_with_key_rollback(new_cfg, new_key, prior_key)
+        if saved_cfg is None:
             return
+        new_cfg = saved_cfg
 
         autorun_ok, context_menu_ok, ocr_menu_ok = self._apply_system_integrations(
             new_cfg

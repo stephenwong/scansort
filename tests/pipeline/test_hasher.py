@@ -94,6 +94,33 @@ def test_check_duplicate_ignores_undone(tmp_path: Path):
     assert check_duplicate(h, hist) is None
 
 
+def test_check_duplicate_ignores_own_routing_record(tmp_path: Path):
+    hist = tmp_path / "history.jsonl"
+    own = tmp_path / "review" / "scan.pdf"
+    own.parent.mkdir()
+    own.touch()
+    h = "a" * 64
+    record = {"sha256": h, "status": "SUCCESS", "destination_path": str(own)}
+    hist.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    assert check_duplicate(h, hist) is not None
+    # A review item is not a duplicate of its own routing record.
+    assert check_duplicate(h, hist, ignore_path=own) is None
+
+
+def test_check_duplicate_ignore_path_still_finds_other_files(tmp_path: Path):
+    hist = tmp_path / "history.jsonl"
+    own = tmp_path / "review" / "scan.pdf"
+    other = tmp_path / "filed" / "prior.pdf"
+    own.parent.mkdir()
+    other.parent.mkdir()
+    own.touch()
+    other.touch()
+    h = "a" * 64
+    record = {"sha256": h, "status": "SUCCESS", "destination_path": str(other)}
+    hist.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    assert check_duplicate(h, hist, ignore_path=own) is not None
+
+
 def test_compute_file_sha256_invalid_chunk_size(tmp_path: Path):
     test_file = tmp_path / "doc.pdf"
     test_file.write_bytes(b"content")

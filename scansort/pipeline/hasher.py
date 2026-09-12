@@ -30,18 +30,30 @@ def compute_file_sha256(path: Path, chunk_size: int = 65536) -> str:
     return hasher.hexdigest()
 
 
-def check_duplicate(file_hash: str, history_file: Path) -> dict | None:
+def check_duplicate(
+    file_hash: str, history_file: Path, ignore_path: Path | None = None
+) -> dict | None:
     """Check whether a given SHA-256 file hash was previously recorded in history.jsonl.
 
     Args:
         file_hash: 64-character SHA-256 hex digest.
         history_file: Path to history.jsonl.
+        ignore_path: Optional path whose own prior routing record should be
+            ignored (used when filing a review item so it is not treated as a
+            duplicate of itself).
 
     Returns:
         The matched record dictionary if duplicate found, otherwise None.
     """
     if not history_file.exists():
         return None
+
+    ignore_resolved = None
+    if ignore_path is not None:
+        try:
+            ignore_resolved = str(Path(ignore_path).resolve())
+        except OSError:
+            ignore_resolved = None
 
     latest_record = None
     with open(history_file, encoding="utf-8") as f:
@@ -51,8 +63,20 @@ def check_duplicate(file_hash: str, history_file: Path) -> dict | None:
                 continue
             try:
                 record = json.loads(clean_line)
-                if isinstance(record, dict) and record.get("sha256") == file_hash:
-                    latest_record = record
+                if not isinstance(record, dict) or record.get("sha256") != file_hash:
+                    continue
+                if ignore_resolved is not None:
+                    destination = record.get("destination_path")
+                    try:
+                        if (
+                            destination
+                            and str(Path(destination).resolve()) == ignore_resolved
+                        ):
+                            # The item's own routing record, not a prior filing.
+                            continue
+                    except OSError:
+                        pass
+                latest_record = record
             except json.JSONDecodeError:
                 continue
 

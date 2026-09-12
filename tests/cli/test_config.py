@@ -581,3 +581,54 @@ def test_cli_config_mutations_serialized_under_lock():
     ):
         assert main_cli(["config", "--gemini-model", "gemini-3.5-flash-lite"]) == 0
     assert entered
+
+
+def test_cli_config_rag_memory_toggle(capsys):
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--rag-memory", "disable"]) == 0
+        assert mock_save.call_args.args[0].rag_memory_enabled is False
+        assert "RAG memory: False" in capsys.readouterr().out
+
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--rag-memory", "enable"]) == 0
+        assert mock_save.call_args.args[0].rag_memory_enabled is True
+
+
+def test_cli_config_rag_memory_combined_with_get_set_rejected(capsys):
+    """--rag-memory + --get/--set must be rejected, not silently drop one."""
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert main_cli(["config", "--get", "dry_run", "--rag-memory", "enable"]) == 1
+    assert not mock_save.called
+    assert "cannot be combined" in capsys.readouterr().err
+
+    with (
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+        patch("scansort.cli.config.save_config") as mock_save,
+    ):
+        assert (
+            main_cli(["config", "--set", "dry_run", "true", "--rag-memory", "disable"])
+            == 1
+        )
+    assert not mock_save.called
+    assert "cannot be combined" in capsys.readouterr().err
+
+
+def test_cli_config_show_rag_memory_field(capsys):
+    with (
+        patch("scansort.cli.config.get_api_key", return_value="AIzaSyTest1234567890"),
+        patch("scansort.cli.config.load_config", return_value=AppConfig()),
+    ):
+        assert main_cli(["config", "--show"]) == 0
+        assert "RAG Memory:" in capsys.readouterr().out
+
+        assert main_cli(["config", "--json"]) == 0
+        assert '"rag_memory_enabled": true' in capsys.readouterr().out

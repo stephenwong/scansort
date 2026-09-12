@@ -42,6 +42,7 @@ class CliArgs:
     context_menu: str | None = None
     ocr: str | None = None
     ocr_menu: str | None = None
+    rag_memory: str | None = None
     json: bool = False
 
     # file
