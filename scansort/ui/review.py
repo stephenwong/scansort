@@ -303,9 +303,15 @@ class ReviewDialog(tk.Toplevel):
         conf_pct = f"{int(item.confidence * 100)}%" if item.confidence else "Uncertain"
         self.diagnosis_var.set(f"Type: {item.document_type} | Confidence: {conf_pct}")
         self.summary_var.set(f"Summary: {item.summary or 'No summary available.'}")
-        self.reasoning_var.set(
-            f"Reasoning: {item.folder_reasoning or item.routing_rationale or 'No reasoning recorded.'}"
+        reasoning = (
+            item.folder_reasoning or item.routing_rationale or "No reasoning recorded."
         )
+        if "calibrated" in str(item.routing_rationale or "").lower():
+            reasoning += (
+                " This folder needs higher confidence because past filings "
+                "into it were corrected."
+            )
+        self.reasoning_var.set(f"Reasoning: {reasoning}")
 
         if item.suggested_folder:
             self.sugg_btn.config(
@@ -369,6 +375,12 @@ class ReviewDialog(tk.Toplevel):
         desc_val = self.desc_var.get().strip()
         hint_kw = self.hint_kw_var.get().strip() if self.hint_var.get() else None
 
+        indexed = False
+
+        def _record_indexed(value: bool) -> None:
+            nonlocal indexed
+            indexed = value
+
         try:
             dest = file_reviewed_item(
                 item=item,
@@ -378,6 +390,7 @@ class ReviewDialog(tk.Toplevel):
                 config=self.app_config,
                 keyword_hint=hint_kw,
                 on_duplicate=self._confirm_duplicate,
+                on_indexed=_record_indexed,
             )
             dup_dir = resolve_duplicates_dir(
                 self.app_config.documents_root, self.app_config.fallback_folder
@@ -386,6 +399,11 @@ class ReviewDialog(tk.Toplevel):
                 show_toast(
                     "ScanSort",
                     f"Duplicate '{dest.name}' moved to the Duplicates folder.",
+                )
+            elif indexed:
+                show_toast(
+                    "ScanSort",
+                    f"Filed '{dest.name}' into '{target_folder}' — remembered for future documents.",
                 )
             else:
                 show_toast("ScanSort", f"Filed '{dest.name}' into '{target_folder}'.")

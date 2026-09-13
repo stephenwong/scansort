@@ -22,6 +22,21 @@ def test_file_filed_message_exact_wording():
     assert body == "260901_Origin_Energy.pdf → Utilities/Electricity"
 
 
+def test_file_filed_message_with_detail():
+    title, body = file_filed_message(
+        "260901_Origin_Energy.pdf",
+        "Utilities/Electricity",
+        "matched 2 past filing(s)",
+    )
+    assert title == "ScanSort"
+    assert body == (
+        "260901_Origin_Energy.pdf → Utilities/Electricity\nmatched 2 past filing(s)"
+    )
+    # Empty detail leaves the two-arg wording byte-identical.
+    assert file_filed_message("a.pdf", "Bills", None)[1] == "a.pdf → Bills"
+    assert file_filed_message("a.pdf", "Bills", "   ")[1] == "a.pdf → Bills"
+
+
 def test_filing_failed_message_exact_wording_with_reason():
     title, body = filing_failed_message(
         "scan001.pdf", "_Review_Needed", "Gemini rate limit exceeded (429)"
@@ -149,3 +164,14 @@ def test_clean_reason_skips_vault_lookup():
         mock_redact.return_value = "clean"
         _clean_reason("Failed: network error")
     assert mock_redact.call_args.kwargs.get("use_vault") is False
+
+
+def test_memory_learned_message_exact_wording():
+    from scansort.platform.notifications import memory_learned_message
+
+    title, body = memory_learned_message(412)
+    assert title == "ScanSort"
+    assert body == (
+        "Learned from 412 past filings to improve sorting. "
+        "Local only — nothing leaves this computer."
+    )

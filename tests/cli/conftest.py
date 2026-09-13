@@ -30,6 +30,8 @@ def mock_app_dir(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("scansort.cli.history.get_default_app_dir", lambda: app_dir)
     monkeypatch.setattr("scansort.cli.logs.get_default_app_dir", lambda: app_dir)
     monkeypatch.setattr("scansort.cli.stats.get_default_app_dir", lambda: app_dir)
+    monkeypatch.setattr("scansort.cli.memory.get_default_app_dir", lambda: app_dir)
+    monkeypatch.setattr("scansort.core.config.get_default_app_dir", lambda: app_dir)
     return app_dir
 
 

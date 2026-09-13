@@ -18,6 +18,7 @@ _SUBCOMMANDS: tuple[str, ...] = (
     "logs",
     "history",
     "stats",
+    "memory",
     "help",
     "completion",
 )
@@ -63,6 +64,9 @@ _scansort_completion() {
         stats)
             opts="--json -v --verbose --help"
             ;;
+        memory)
+            opts="--list --forget-folder --clear --rebuild -n --limit --json -v --verbose --help"
+            ;;
         rescan)
             opts="--json -v --verbose --help"
             ;;
@@ -102,6 +106,7 @@ _scansort() {
         'logs:View, filter, or tail execution logs'
         'history:View and search document filing history'
         'stats:Display aggregate filing metrics and estimated cost'
+        'memory:Inspect and control filing memory'
         'help:Show help for a command'
         'completion:Generate shell completion script'
     )
@@ -182,6 +187,15 @@ _scansort() {
                 stats)
                     _arguments '--json[Output JSON]'
                     ;;
+                memory)
+                    _arguments \
+                        '--list[List learned examples]' \
+                        '--forget-folder[Forget a folder]:folder:' \
+                        '--clear[Clear all learned examples]' \
+                        '--rebuild[Rebuild memory from history]' \
+                        '(-n --limit)'{-n,--limit}'[Limit examples]:count:' \
+                        '--json[Output JSON]'
+                    ;;
                 rescan|check-update)
                     _arguments '--json[Output JSON]'
                     ;;
@@ -210,6 +224,7 @@ complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "check
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "logs" -d "View, filter, or tail execution logs"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "history" -d "View and search document filing history"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "stats" -d "Display aggregate filing metrics and cost"
+complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "memory" -d "Inspect and control filing memory"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "help" -d "Show help for a command"
 complete -c scansort -f -n "not __fish_seen_subcommand_from $commands" -a "completion" -d "Generate shell completion script"
 
@@ -268,6 +283,12 @@ complete -c scansort -n "__fish_seen_subcommand_from history" -l reverse -d "Rev
 complete -c scansort -n "__fish_seen_subcommand_from history" -l json -d "Output JSON"
 
 complete -c scansort -n "__fish_seen_subcommand_from stats" -l json -d "Output JSON"
+complete -c scansort -n "__fish_seen_subcommand_from memory" -l list -d "List learned examples"
+complete -c scansort -n "__fish_seen_subcommand_from memory" -l forget-folder -d "Forget a folder"
+complete -c scansort -n "__fish_seen_subcommand_from memory" -l clear -d "Clear learned examples"
+complete -c scansort -n "__fish_seen_subcommand_from memory" -l rebuild -d "Rebuild from history"
+complete -c scansort -n "__fish_seen_subcommand_from memory" -s n -l limit -d "Limit examples"
+complete -c scansort -n "__fish_seen_subcommand_from memory" -l json -d "Output JSON"
 complete -c scansort -n "__fish_seen_subcommand_from rescan" -l json -d "Output JSON"
 complete -c scansort -n "__fish_seen_subcommand_from check-update" -l json -d "Output JSON"
 complete -c scansort -n "__fish_seen_subcommand_from completion" -a "bash zsh fish powershell" -d "Shell type"
@@ -311,6 +332,9 @@ Register-ArgumentCompleter -Native -CommandName scansort -ScriptBlock {
     }
     elseif ($elements -contains 'stats' -or $elements -contains 'rescan' -or $elements -contains 'check-update') {
         $flags += @('--json')
+    }
+    elseif ($elements -contains 'memory') {
+        $flags += @('--list', '--forget-folder', '--clear', '--rebuild', '-n', '--limit', '--json')
     }
 
     $flags | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {

@@ -33,9 +33,16 @@ def _clean_reason(reason: str) -> str:
     return text
 
 
-def file_filed_message(filed_name: str, folder: str) -> tuple[str, str]:
+def file_filed_message(
+    filed_name: str, folder: str, detail: str | None = None
+) -> tuple[str, str]:
     """Return (title, body) announcing a successfully filed document."""
-    return (NOTIFICATION_TITLE, f"{filed_name} → {folder}")
+    body = f"{filed_name} → {folder}"
+    if detail:
+        cleaned = " ".join(str(detail).split())
+        if cleaned:
+            body = f"{body}\n{cleaned}"
+    return (NOTIFICATION_TITLE, body)
 
 
 def filing_failed_message(
@@ -59,14 +66,24 @@ def scan_stranded_message(source_name: str, folder: str) -> tuple[str, str]:
     )
 
 
+def memory_learned_message(count: int) -> tuple[str, str]:
+    """Return (title, body) announcing the first filing-memory backfill."""
+    return (
+        NOTIFICATION_TITLE,
+        f"Learned from {int(count)} past filings to improve sorting. "
+        "Local only — nothing leaves this computer.",
+    )
+
+
 def notify_file_filed(
     filed_name: str,
     folder: str,
     folder_path: Path | str | None = None,
     log_path: Path | str | None = None,
+    detail: str | None = None,
 ) -> bool:
     """Toast that a document was filed into ``folder`` (best effort)."""
-    title, body = file_filed_message(filed_name, folder)
+    title, body = file_filed_message(filed_name, folder, detail)
     return show_toast(title, body, folder_path=folder_path, log_path=log_path)
 
 
@@ -90,4 +107,14 @@ def notify_scan_stranded(
 ) -> bool:
     """Toast that a document needs manual attention in the drop folder."""
     title, body = scan_stranded_message(source_name, folder)
+    return show_toast(title, body, folder_path=folder_path, log_path=log_path)
+
+
+def notify_memory_learned(
+    count: int,
+    folder_path: Path | str | None = None,
+    log_path: Path | str | None = None,
+) -> bool:
+    """Toast that filing memory learned from history (best effort)."""
+    title, body = memory_learned_message(count)
     return show_toast(title, body, folder_path=folder_path, log_path=log_path)

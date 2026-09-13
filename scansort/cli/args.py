@@ -72,6 +72,12 @@ class CliArgs:
     # rescan
     doctor: bool = False
 
+    # memory
+    memory_list: bool = False
+    memory_forget_folder: str | None = None
+    memory_clear: bool = False
+    memory_rebuild: bool = False
+
     # completion / help
     shell: str = "bash"
     command_name: str | None = None

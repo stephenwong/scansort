@@ -300,12 +300,44 @@ def test_tray_app_menu_shows_version_in_status_item(tmp_path: Path):
 
     menu = app._build_menu()
     status_item = menu.items[0]
-    assert f"ScanSort {__version__}: Monitoring Active" == status_item.text
+    assert status_item.text.startswith(f"ScanSort {__version__}: Monitoring Active")
 
     mock_watcher.is_paused.return_value = True
     menu_paused = app._build_menu()
     status_item_paused = menu_paused.items[0]
-    assert f"ScanSort {__version__}: Monitoring Paused" == status_item_paused.text
+    assert status_item_paused.text.startswith(
+        f"ScanSort {__version__}: Monitoring Paused"
+    )
+
+
+def test_tray_menu_shows_memory_count(tmp_path: Path):
+    app, cfg, *_ = _create_app(tmp_path)
+    with (
+        patch("scansort.ui.tray.get_default_app_dir", return_value=tmp_path),
+        patch("scansort.classification.memory.MemoryStore.count", return_value=412),
+    ):
+        menu = app._build_menu()
+    assert "Memory: 412" in menu.items[0].text
+
+
+def test_tray_menu_shows_memory_off_when_disabled(tmp_path: Path):
+    app, cfg, mock_watcher, mock_pipeline, stop_event = _create_app(tmp_path)
+    app.config = AppConfig(
+        watch_folder=cfg.watch_folder,
+        documents_root=cfg.documents_root,
+        rag_memory_enabled=False,
+    )
+    menu = app._build_menu()
+    assert "Memory: off" in menu.items[0].text
+
+
+def test_tray_menu_survives_memory_failure(tmp_path: Path):
+    app, cfg, *_ = _create_app(tmp_path)
+    with patch(
+        "scansort.ui.tray.get_default_app_dir", side_effect=RuntimeError("boom")
+    ):
+        menu = app._build_menu()
+    assert menu.items[0].text.startswith(f"ScanSort {__version__}: Monitoring")
 
 
 def test_tray_app_menu_contains_file_and_drop_zone(tmp_path: Path):
@@ -377,3 +409,24 @@ def test_tray_refresh_menu_skipped_while_shutting_down(tmp_path: Path):
     with patch.object(app, "_build_menu") as mock_build:
         app._refresh_menu()
     mock_build.assert_not_called()
+
+
+def test_tray_menu_contains_memory_item(tmp_path: Path):
+    app, cfg, *_ = _create_app(tmp_path)
+    menu_texts = [getattr(item, "text", "") for item in app._build_menu().items]
+    assert "Filing Memory..." in menu_texts
+
+
+def test_tray_open_memory(tmp_path: Path):
+    app, cfg, *_ = _create_app(tmp_path)
+    mock_dialog = MagicMock()
+    mock_dialog._owns_root = True
+    mock_dialog._mainloop_running = False
+    with patch(
+        "scansort.ui.memory.open_memory_dialog", return_value=mock_dialog
+    ) as mock_open:
+        app.open_memory(async_task=False)
+        mock_open.assert_called_once()
+        assert mock_open.call_args.kwargs["config"] is app.config
+        assert mock_open.call_args.kwargs["on_changed"] == app._refresh_menu
+        mock_dialog.mainloop.assert_called_once()

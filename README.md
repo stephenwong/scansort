@@ -37,6 +37,20 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 - 🧠 **Self-improving memory (RAG)** — Every filing teaches ScanSort: past filings are retrieved as few-shot examples for the next classification, so repeat bills file correctly after a single correction. Fully local (no new cloud calls, nothing leaves your machine); disable anytime with `scansort config --rag-memory disable` or the Settings dialog toggle.
 - 🎯 **Confidence gating** — Documents below 70% classification confidence go to `_Review_Needed` instead of being misfiled.
 
+#### 🧠 Filing memory
+
+ScanSort remembers your past filings on this computer and uses them as examples for the next classification. Nothing leaves your machine — no new cloud calls, no uploads.
+
+```bash
+scansort memory                    # overview: status, examples learned, calibration
+scansort memory --list -n 20       # newest learned examples
+scansort memory --forget-folder "Finances/Utilities"  # forget one folder
+scansort memory --rebuild          # re-index filing history
+scansort memory --clear            # forget everything (re-learns from history unless memory is off)
+```
+
+Manage it from the tray (**Filing Memory...**) or **Settings → Filing Memory** (live count + **Clear Memory...**). Clearing only deletes the learned index — ScanSort re-learns from filing history on the next scan unless memory is turned off.
+
 ---
 
 ### 🗂️ Interactive Review & Self-Learning
@@ -45,6 +59,7 @@ You scan a document. ScanSort picks it up, waits for the scanner to finish writi
 - 💡 **AI routing suggestions** — ScanSort preserves what Gemini understood from the document (document type, summary, and suggested folder) so you can accept suggestions with a single click.
 - 🧠 **Self-learning feedback loop** — When you choose or refine a destination folder, you can optionally teach ScanSort a new keyword hint. It automatically updates `folder_hints.json`, ensuring future scans match that folder with high confidence.
 - ↩️ **Corrections stick** — Undoing a filing removes its bad example from memory, and folders with a history of corrections require higher confidence before auto-filing again.
+- 🧠 **Honest memory feedback** — Filing a reviewed document re-indexes the corrected folder; the CLI and tray confirm only when it was actually learned, and tell you when no keyword hint was saved instead of implying otherwise.
 - 🖱️ **System tray counter** — The system tray menu dynamically indicates pending reviews (e.g. `Review Needed (3)...`), allowing 1-click access to triage scans.
 
 ---
@@ -170,7 +185,7 @@ All settings can be changed via the **Settings dialog** (tray → Settings...) o
 | Auto-start | `--autostart enable/disable` | Launch on login | Disabled |
 | Context menu | `--context-menu enable/disable` | Windows Explorer right-click integration | Disabled |
 | OCR text layer | `--ocr enable/disable` | Embed a searchable text layer in new scans | Disabled |
-| Filing memory | `--rag-memory enable/disable` | Retrieve past filings as classification examples | Enabled |
+| Filing memory | `--rag-memory enable/disable` | Retrieve past filings as classification examples (Settings → Filing Memory) | Enabled |
 | OCR context menu | `--ocr-menu enable/disable` | Explorer right-click "Make searchable with ScanSort" (PDF only) | Disabled |
 | Dry-run | `--dry-run enable/disable` | Preview without moving files | Disabled |
 | Auto-update | `--auto-update enable/disable` | Check for updates on launch | Enabled |
@@ -212,6 +227,7 @@ View current settings: `uv run scansort config --show`
 | `scansort history` | View recent filing history |
 | `scansort history -q "electricity"` | Search filing history |
 | `scansort stats` | View filing totals & API cost summary |
+| `scansort memory` | Inspect and control filing memory (`--list`, `--forget-folder`, `--clear`, `--rebuild`) |
 | `scansort logs` | View recent log entries |
 | `scansort logs -f` | Stream logs in real-time |
 | `scansort check-update` | Check for new versions |

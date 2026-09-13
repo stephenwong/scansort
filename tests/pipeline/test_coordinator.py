@@ -667,11 +667,14 @@ def test_process_file_defers_when_source_changes_during_processing(tmp_path: Pat
     def late_writing_classify(staging_pdf: Path, *args):
         with open(scan_file, "ab") as f:
             f.write(b"tail-bytes")
-        return DocumentClassification(
-            document_date="260901",
-            description="Late_Writer",
-            target_folder="Utilities",
-            confidence=0.95,
+        return (
+            DocumentClassification(
+                document_date="260901",
+                description="Late_Writer",
+                target_folder="Utilities",
+                confidence=0.95,
+            ),
+            None,
         )
 
     pipeline._classify_scan = late_writing_classify  # type: ignore[method-assign]
@@ -794,6 +797,7 @@ def test_pipeline_filed_toast_fired_with_destination(tmp_path: Path):
         "260901_Origin_Energy_Bill.pdf",
         "Utilities/Electricity",
         folder_path=dest.parent,
+        detail=None,
     )
 
 

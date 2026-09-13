@@ -23,7 +23,9 @@ from scansort.classification.memory import (
     format_examples_for_prompt,
     memory_db_path_for,
     memory_lock_path_for,
+    memory_summary,
     propose_hint_keywords,
+    rebuild_memory,
 )
 from scansort.classification.models import (
     DocumentClassification,
@@ -60,7 +62,9 @@ __all__ = [
     "format_examples_for_prompt",
     "memory_db_path_for",
     "memory_lock_path_for",
+    "memory_summary",
     "propose_hint_keywords",
+    "rebuild_memory",
     "DoctorFinding",
     "DoctorReport",
     "run_doctor",

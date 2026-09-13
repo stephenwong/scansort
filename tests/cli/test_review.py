@@ -656,3 +656,137 @@ def test_handle_review_cli_reports_duplicate_diversion(
     out = capsys.readouterr().out
     assert "Duplicate moved to the Duplicates folder" in out
     assert "Successfully filed" not in out
+
+
+def test_review_cli_reports_memory_learned(tmp_path: Path, monkeypatch, capsys):
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    _create_dummy_pdf(review_dir / "260815_Dental_Receipt.pdf")
+    cfg = AppConfig(
+        documents_root=docs, fallback_folder="_Review_Needed", rag_memory_enabled=True
+    )
+    inputs = iter(["2", "Health/Dental", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch(
+            "scansort.cli.review.get_default_app_dir", return_value=tmp_path / "app_dir"
+        ),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        assert handle_review(args) == 0
+    assert "Remembered for future documents." in capsys.readouterr().out
+
+
+def test_review_cli_reports_skipped_hint(tmp_path: Path, monkeypatch, capsys):
+    import json
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "_.pdf")
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True)
+    (app_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "destination_path": str(pdf.resolve()),
+                "new_filename": "_.pdf",
+                "summary": "Failed processing; routed to review folder.",
+                "status": "FAILED",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+    inputs = iter(["2", "Utilities/Electricity", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.review.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        assert handle_review(args) == 0
+    assert "No keyword hint saved (generic summary)." in capsys.readouterr().out
+
+
+def test_review_cli_custom_hint_not_reported_as_skipped(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A typed custom hint is persisted, so the CLI must not claim none saved."""
+    import json
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "_.pdf")
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True)
+    (app_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "destination_path": str(pdf.resolve()),
+                "new_filename": "_.pdf",
+                "summary": "Failed processing; routed to review folder.",
+                "status": "FAILED",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cfg = AppConfig(documents_root=docs, fallback_folder="_Review_Needed")
+    inputs = iter(["2", "Utilities/Electricity", "", "", "electricity bill"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.review.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        assert handle_review(args) == 0
+    out = capsys.readouterr().out
+    assert "No keyword hint saved" not in out
+    hints = json.loads((app_dir / "folder_hints.json").read_text(encoding="utf-8-sig"))
+    assert hints["Utilities/Electricity"]
+
+
+def test_review_cli_omits_memory_claim_when_not_indexed(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A FAILED-origin boilerplate summary is not indexable: no false claim."""
+    import json
+
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "_.pdf")
+    app_dir = tmp_path / "app_dir"
+    app_dir.mkdir(parents=True)
+    (app_dir / "history.jsonl").write_text(
+        json.dumps(
+            {
+                "destination_path": str(pdf.resolve()),
+                "new_filename": "_.pdf",
+                "summary": "Failed processing; routed to review folder.",
+                "status": "FAILED",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cfg = AppConfig(
+        documents_root=docs, fallback_folder="_Review_Needed", rag_memory_enabled=True
+    )
+    inputs = iter(["2", "Utilities/Electricity", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+    with (
+        patch("scansort.cli.review._load_config_or_exit", return_value=cfg),
+        patch("scansort.cli.review.get_default_app_dir", return_value=app_dir),
+        patch("scansort.pipeline.review.get_default_app_dir", return_value=app_dir),
+    ):
+        args = argparse.Namespace(gui=False, cli=True, limit=None)
+        assert handle_review(args) == 0
+    assert "Remembered for future documents." not in capsys.readouterr().out

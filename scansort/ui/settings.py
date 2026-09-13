@@ -310,11 +310,6 @@ class SettingsDialog(SingletonToplevel):
         ).pack(anchor=tk.W, pady=2)
         ttk.Checkbutton(
             opts_frame,
-            text="Use past filings as classification examples (local filing memory)",
-            variable=self.rag_memory_var,
-        ).pack(anchor=tk.W, pady=2)
-        ttk.Checkbutton(
-            opts_frame,
             text="Dry-Run Mode (simulate filing without moving files)",
             variable=self.dry_run_var,
         ).pack(anchor=tk.W, pady=2)
@@ -323,6 +318,26 @@ class SettingsDialog(SingletonToplevel):
             text="Open Quick File / Drop Zone...",
             command=self._open_drop_zone,
         ).pack(anchor=tk.W, pady=(6, 2))
+
+        # 4b. Filing Memory
+        memory_frame = ttk.LabelFrame(
+            container, text="Filing Memory", padding="10 10 10 10"
+        )
+        memory_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Checkbutton(
+            memory_frame,
+            text="Learn from my past filings to improve sorting (stays on this computer)",
+            variable=self.rag_memory_var,
+            command=self._refresh_memory_count,
+        ).pack(anchor=tk.W, pady=2)
+        self.memory_count_var = tk.StringVar()
+        ttk.Label(memory_frame, textvariable=self.memory_count_var).pack(
+            anchor=tk.W, pady=2
+        )
+        ttk.Button(
+            memory_frame, text="Clear Memory...", command=self._clear_memory
+        ).pack(anchor=tk.W, pady=(4, 0))
+        self._refresh_memory_count()
 
         # 5. Buttons
         btn_bar = ttk.Frame(container)
@@ -335,6 +350,52 @@ class SettingsDialog(SingletonToplevel):
 
     def _toggle_show_key(self) -> None:
         self.key_entry.config(show="" if self.show_key_var.get() else "*")
+
+    def _refresh_memory_count(self) -> None:
+        """Update the filing-memory count label best-effort; never raises."""
+        try:
+            if not self.rag_memory_var.get():
+                self.memory_count_var.set("Memory is off")
+                return
+            from scansort.classification.memory import (
+                memory_db_path_for,
+                memory_summary,
+            )
+            from scansort.core.constants import HISTORY_JSONL_NAME
+
+            app_dir = get_default_app_dir()
+            summary = memory_summary(
+                memory_db_path_for(app_dir), app_dir / HISTORY_JSONL_NAME
+            )
+            self.memory_count_var.set(
+                f"{int(summary.get('examples', 0) or 0)} examples learned"
+            )
+        except Exception:  # noqa: BLE001 - count label must never break settings
+            with contextlib.suppress(tk.TclError):
+                self.memory_count_var.set("Memory status unavailable")
+
+    def _clear_memory(self) -> None:
+        """Clear filing memory after an honest confirm; refresh the count."""
+        confirmed = messagebox.askyesno(
+            "Clear Filing Memory",
+            "Forget all learned examples? ScanSort will re-learn from your "
+            "filing history on the next scan unless memory is turned off.",
+            parent=self,
+        )
+        if not confirmed:
+            return
+        try:
+            from scansort.classification.memory import (
+                MemoryStore,
+                memory_db_path_for,
+            )
+
+            MemoryStore(memory_db_path_for(get_default_app_dir())).clear()
+            self._refresh_memory_count()
+        except Exception as e:  # noqa: BLE001 - best-effort with user feedback
+            messagebox.showerror(
+                "Clear Filing Memory", f"Could not clear memory: {e}", parent=self
+            )
 
     def _browse_folder(
         self,

@@ -137,6 +137,100 @@ def test_review_dialog_file_action(tk_root, tmp_path: Path):
         dialog.destroy()
 
 
+def _review_item_for_toast(tmp_path: Path, docs: Path, pdf: Path) -> ReviewItem:
+    return ReviewItem(
+        file_path=pdf,
+        filename=pdf.name,
+        file_size_bytes=1024,
+        modified_time=1000.0,
+        summary="Electricity bill",
+        suggested_folder="Utilities/Electricity",
+        confidence=0.65,
+        document_date="260815",
+        description="Bill",
+    )
+
+
+def test_review_toast_mentions_memory_when_enabled(tk_root, tmp_path: Path):
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "260815_Bill.pdf")
+    cfg = AppConfig(
+        documents_root=docs, fallback_folder="_Review_Needed", rag_memory_enabled=True
+    )
+    item = _review_item_for_toast(tmp_path, docs, pdf)
+    dest = docs / "Utilities" / "Electricity" / "260815_Bill.pdf"
+
+    def _filed(**kwargs):
+        kwargs["on_indexed"](True)
+        return dest
+
+    with (
+        patch("scansort.ui.review.get_review_queue", return_value=[item]),
+        patch("scansort.ui.review.file_reviewed_item", side_effect=_filed),
+        patch("scansort.ui.review.show_toast") as mock_toast,
+    ):
+        dialog = ReviewDialog(master=tk_root, config=cfg)
+        dialog.folder_var.set("Utilities/Electricity")
+        dialog.hint_var.set(False)
+        dialog._file_current_item()
+        assert "remembered for future documents" in mock_toast.call_args.args[1]
+        dialog.destroy()
+
+
+def test_review_toast_omits_memory_when_not_indexed(tk_root, tmp_path: Path):
+    """Memory enabled but the record was ineligible: no false claim."""
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "260815_Bill.pdf")
+    cfg = AppConfig(
+        documents_root=docs, fallback_folder="_Review_Needed", rag_memory_enabled=True
+    )
+    item = _review_item_for_toast(tmp_path, docs, pdf)
+    dest = docs / "Utilities" / "Electricity" / "260815_Bill.pdf"
+
+    def _filed(**kwargs):
+        kwargs["on_indexed"](False)
+        return dest
+
+    with (
+        patch("scansort.ui.review.get_review_queue", return_value=[item]),
+        patch("scansort.ui.review.file_reviewed_item", side_effect=_filed),
+        patch("scansort.ui.review.show_toast") as mock_toast,
+    ):
+        dialog = ReviewDialog(master=tk_root, config=cfg)
+        dialog.folder_var.set("Utilities/Electricity")
+        dialog.hint_var.set(False)
+        dialog._file_current_item()
+        assert "remembered" not in mock_toast.call_args.args[1]
+        dialog.destroy()
+
+
+def test_review_toast_unchanged_when_disabled(tk_root, tmp_path: Path):
+    docs = tmp_path / "Documents"
+    review_dir = docs / "_Review_Needed"
+    review_dir.mkdir(parents=True)
+    pdf = _create_dummy_pdf(review_dir / "260815_Bill.pdf")
+    cfg = AppConfig(
+        documents_root=docs, fallback_folder="_Review_Needed", rag_memory_enabled=False
+    )
+    item = _review_item_for_toast(tmp_path, docs, pdf)
+    dest = docs / "Utilities" / "Electricity" / "260815_Bill.pdf"
+    with (
+        patch("scansort.ui.review.get_review_queue", return_value=[item]),
+        patch("scansort.ui.review.file_reviewed_item", return_value=dest),
+        patch("scansort.ui.review.show_toast") as mock_toast,
+    ):
+        dialog = ReviewDialog(master=tk_root, config=cfg)
+        dialog.folder_var.set("Utilities/Electricity")
+        dialog.hint_var.set(False)
+        dialog._file_current_item()
+        assert "remembered" not in mock_toast.call_args.args[1]
+        dialog.destroy()
+
+
 def test_review_dialog_dismiss_action(tk_root, tmp_path: Path):
     docs = tmp_path / "Documents"
     review_dir = docs / "_Review_Needed"
@@ -340,3 +434,36 @@ def test_review_dialog_open_in_viewer_failure_warns(tk_root, tmp_path: Path):
         dialog = ReviewDialog(master=tk_root, config=cfg)
         dialog._open_in_viewer()
     mock_warn.assert_called_once()
+
+
+def test_review_dialog_shows_calibration_explainer(tk_root, tmp_path: Path):
+    docs = tmp_path / "Documents"
+    cfg = AppConfig(documents_root=docs)
+    item = ReviewItem(
+        file_path=tmp_path / "file.pdf",
+        filename="file.pdf",
+        file_size_bytes=100,
+        modified_time=100.0,
+        routing_rationale="Confidence 0.65 below 0.75 calibrated threshold for 'X'",
+        suggested_folder="Finances/Utilities",
+    )
+    with patch("scansort.ui.review.get_review_queue", return_value=[item]):
+        dialog = ReviewDialog(master=tk_root, config=cfg)
+        assert "higher confidence because past filings" in dialog.reasoning_var.get()
+        dialog.destroy()
+
+
+def test_review_dialog_omits_explainer_without_calibration(tk_root, tmp_path: Path):
+    docs = tmp_path / "Documents"
+    cfg = AppConfig(documents_root=docs)
+    item = ReviewItem(
+        file_path=tmp_path / "file.pdf",
+        filename="file.pdf",
+        file_size_bytes=100,
+        modified_time=100.0,
+        routing_rationale="Matched discovered taxonomy folder",
+    )
+    with patch("scansort.ui.review.get_review_queue", return_value=[item]):
+        dialog = ReviewDialog(master=tk_root, config=cfg)
+        assert "higher confidence" not in dialog.reasoning_var.get()
+        dialog.destroy()

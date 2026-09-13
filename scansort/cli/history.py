@@ -8,7 +8,7 @@ from typing import Any
 
 from scansort.cli.args import CliArgs
 from scansort.core.config import get_default_app_dir
-from scansort.core.constants import HISTORY_JSONL_NAME
+from scansort.core.constants import HISTORY_JSONL_NAME, REVIEW_NEEDED_DIR
 
 
 def load_history_records(history_path: Path) -> list[dict[str, Any]] | None:
@@ -135,6 +135,16 @@ def handle_history(parsed: argparse.Namespace) -> int:
         summary = safe_str(r.get("summary"))
         if summary and status_str != "SUCCESS":
             print(f"  └─ Note: {summary}")
+        # Routing rationales live on review-routed records, which are logged as
+        # SUCCESS with a ``_Review_Needed`` destination; gate on the destination
+        # rather than the status so the explanation actually surfaces.
+        dest_folder = safe_str(r.get("destination_folder"))
+        in_review = dest_folder == REVIEW_NEEDED_DIR or dest_folder.startswith(
+            f"{REVIEW_NEEDED_DIR}/"
+        )
+        rationale = safe_str(r.get("routing_rationale"))
+        if rationale and in_review:
+            print(f"  └─ Why: {_truncate_column(rationale, 100)}")
 
     print(
         "========================================================================================="

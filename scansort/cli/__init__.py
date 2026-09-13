@@ -4,6 +4,7 @@ from scansort.cli.file_cmd import handle_file
 from scansort.cli.help import handle_help
 from scansort.cli.history import handle_history
 from scansort.cli.logs import handle_logs
+from scansort.cli.memory import handle_memory
 from scansort.cli.ocr import handle_ocr_backfill
 from scansort.cli.parser import build_parser
 from scansort.cli.rescan import handle_rescan
@@ -29,6 +30,7 @@ __all__ = [
     "handle_logs",
     "handle_history",
     "handle_stats",
+    "handle_memory",
     "handle_help",
     "handle_completion",
     "_attach_parent_console",

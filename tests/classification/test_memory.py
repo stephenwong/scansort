@@ -759,3 +759,177 @@ def test_index_rejects_boilerplate_summary(tmp_path: Path):
         is False
     )
     assert store.count() == 0
+
+
+# --- Phase 1 UX: list / forget / clear / rebuild / summary ---
+
+
+def test_list_examples_returns_recent_rows(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(_success_record(sha="a" * 64, timestamp="2026-09-13T10:00:00"))
+    store.index_record(
+        _success_record(
+            sha="b" * 64,
+            folder="Health/Dental",
+            summary="Dental checkup invoice",
+            timestamp="2026-09-13T11:00:00",
+        )
+    )
+    rows = store.list_examples()
+    assert len(rows) == 2
+    # Newest first.
+    assert rows[0]["sha256"] == "b" * 64
+    assert rows[0]["folder"] == "Health/Dental"
+    assert rows[0]["summary"] == "Dental checkup invoice"
+    assert rows[1]["sha256"] == "a" * 64
+
+
+def test_list_examples_missing_db_returns_empty_without_creating(tmp_path: Path):
+    db_path = tmp_path / "vectors" / "memory.sqlite3"
+    store = MemoryStore(db_path)
+    assert store.list_examples() == []
+    assert not db_path.exists()
+    assert not (tmp_path / "vectors").exists()
+
+
+def test_list_examples_respects_limit(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    for index in range(5):
+        store.index_record(_success_record(sha=f"{index:064d}"))
+    assert len(store.list_examples(limit=2)) == 2
+    assert store.list_examples(limit=0) == []
+
+
+def test_forget_folder_deletes_matching_rows(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(_success_record(sha="a" * 64))
+    store.index_record(_success_record(sha="b" * 64))
+    store.index_record(
+        _success_record(sha="c" * 64, folder="Health/Dental", summary="Dental invoice")
+    )
+    assert store.forget_folder("Finances/Utilities/Electricity") == 2
+    assert store.count() == 1
+    assert store.list_examples()[0]["folder"] == "Health/Dental"
+
+
+def test_forget_folder_missing_db_returns_zero(tmp_path: Path):
+    db_path = tmp_path / "vectors" / "memory.sqlite3"
+    assert MemoryStore(db_path).forget_folder("Finances/Utilities") == 0
+    assert not db_path.exists()
+
+
+def test_forget_folder_is_case_insensitive(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(_success_record(sha="a" * 64))
+    assert store.forget_folder("finances/utilities/electricity") == 1
+    assert store.count() == 0
+
+
+def test_forget_folder_matches_non_ascii_case(tmp_path: Path):
+    """SQLite LOWER() is ASCII-only, so non-ASCII names must still match."""
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(
+        _success_record(sha="a" * 64, folder="Öl/Rechnungen", summary="Öl invoice")
+    )
+    assert store.forget_folder("Öl/Rechnungen") == 1
+    assert store.forget_folder("öl/rechnungen") == 0  # already gone
+    assert store.count() == 0
+
+
+def test_forget_folder_returns_zero_when_nothing_matches(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(_success_record(sha="a" * 64))
+    assert store.forget_folder("Health/Dental") == 0
+    assert store.count() == 1
+
+
+def test_forget_folder_fails_open_on_storage_error(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(_success_record(sha="a" * 64))
+    with patch.object(
+        MemoryStore, "_connect", side_effect=sqlite3.OperationalError("locked")
+    ):
+        assert store.forget_folder("Finances/Utilities/Electricity") == 0
+
+
+def test_list_examples_fails_open_on_storage_error(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.sqlite3")
+    store.index_record(_success_record(sha="a" * 64))
+    with patch.object(
+        MemoryStore, "_connect", side_effect=sqlite3.OperationalError("locked")
+    ):
+        assert store.list_examples() == []
+
+
+def test_clear_removes_store_files(tmp_path: Path):
+    db_path = tmp_path / "memory.sqlite3"
+    store = MemoryStore(db_path)
+    store.index_record(_success_record())
+    assert db_path.exists()
+    assert store.clear() is True
+    assert not db_path.exists()
+    assert store.count() == 0
+
+
+def test_clear_missing_store_returns_false(tmp_path: Path):
+    db_path = tmp_path / "vectors" / "memory.sqlite3"
+    assert MemoryStore(db_path).clear() is False
+    assert not db_path.exists()
+
+
+def test_rebuild_clears_then_backfills(tmp_path: Path):
+    from scansort.classification.memory import rebuild_memory
+
+    db_path = tmp_path / "memory.sqlite3"
+    history = tmp_path / "history.jsonl"
+    lock_path = tmp_path / "index.lock"
+    _write_jsonl(history, [_success_record(), _success_record(sha="b" * 64)])
+    store = MemoryStore(db_path)
+    store.index_record(
+        _success_record(sha="c" * 64, folder="Stale/Folder", summary="Stale entry")
+    )
+    assert rebuild_memory(db_path, history, lock_path) == 2
+    folders = {row["folder"] for row in store.list_examples()}
+    assert folders == {"Finances/Utilities/Electricity"}
+
+
+def test_rebuild_without_history_leaves_empty_store(tmp_path: Path):
+    from scansort.classification.memory import rebuild_memory
+
+    db_path = tmp_path / "memory.sqlite3"
+    assert (
+        rebuild_memory(db_path, tmp_path / "missing.jsonl", tmp_path / "index.lock")
+        == 0
+    )
+    assert MemoryStore(db_path).count() == 0
+
+
+def test_memory_summary_counts_and_bars(tmp_path: Path):
+    from scansort.classification.memory import memory_summary
+
+    db_path = tmp_path / "memory.sqlite3"
+    history = tmp_path / "history.jsonl"
+    store = MemoryStore(db_path)
+    store.index_record(_success_record(timestamp="2026-09-13T14:22:00"))
+    _write_jsonl(history, [_success_record(sha="b" * 64, status="UNDONE")])
+    summary = memory_summary(db_path, history)
+    assert summary["examples"] == 1
+    assert summary["last_learned"] == "2026-09-13T14:22:00"
+    assert summary["calibrated_folders"]["Finances/Utilities/Electricity"] == (
+        pytest.approx(0.75)
+    )
+    assert summary["db_path"] == str(db_path)
+
+
+def test_memory_summary_missing_everything_is_zeroed(tmp_path: Path):
+    from scansort.classification.memory import memory_summary
+
+    db_path = tmp_path / "vectors" / "memory.sqlite3"
+    summary = memory_summary(db_path, tmp_path / "missing.jsonl")
+    assert summary == {
+        "examples": 0,
+        "calibrated_folders": {},
+        "last_learned": None,
+        "db_path": str(db_path),
+    }
+    assert not db_path.exists()

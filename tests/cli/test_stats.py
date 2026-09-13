@@ -125,3 +125,80 @@ def test_stats_excludes_review_folder_case_insensitively():
     ]
     metrics = _calculate_metrics(records)
     assert metrics["top_folders"] == {"Utilities": 1}
+
+
+def test_stats_shows_memory_section(mock_app_dir: Path, capsys):
+    from unittest.mock import patch
+
+    _write_stats_records(mock_app_dir, [{"status": "SUCCESS"}])
+    summary = {
+        "examples": 412,
+        "calibrated_folders": {"Finances/Utilities": 0.8},
+        "last_learned": "2026-09-13T14:22:00",
+        "db_path": str(mock_app_dir / "vectors" / "memory.sqlite3"),
+    }
+    with patch(
+        "scansort.cli.stats._memory_overview", return_value=(summary, "Enabled")
+    ):
+        assert main_cli(["stats"]) == 0
+    out = capsys.readouterr().out
+    assert "Filing Memory:" in out
+    assert "Examples Learned: 412" in out
+    assert "Finances/Utilities 0.80" in out
+    assert "2026-09-13 14:22" in out
+
+
+def test_stats_memory_json_payload(mock_app_dir: Path, capsys):
+    from unittest.mock import patch
+
+    _write_stats_records(mock_app_dir, [{"status": "SUCCESS"}])
+    summary = {
+        "examples": 3,
+        "calibrated_folders": {},
+        "last_learned": None,
+        "db_path": "db",
+    }
+    with patch(
+        "scansort.cli.stats._memory_overview", return_value=(summary, "Enabled")
+    ):
+        assert main_cli(["stats", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["memory"]["examples"] == 3
+    assert data["memory"]["status"] == "Enabled"
+
+
+def test_memory_overview_status_unknown_on_bad_config():
+    from unittest.mock import patch
+
+    from scansort.cli.stats import _memory_overview
+
+    with patch("scansort.core.config.load_config", side_effect=ValueError("bad")):
+        assert _memory_overview()[1] == "Unknown"
+    with patch("scansort.core.config.load_config", side_effect=RuntimeError("boom")):
+        assert _memory_overview()[1] == "Unknown"
+
+
+def test_format_calibrated_renders_bars():
+    from scansort.cli.stats import _format_calibrated
+
+    assert _format_calibrated({}) == "0"
+    assert _format_calibrated({"A/B": 0.8, "C": 0.75}) == "2 (A/B 0.80, C 0.75)"
+
+
+def test_stats_memory_failure_does_not_crash(mock_app_dir: Path, capsys):
+    from unittest.mock import patch
+
+    _write_stats_records(mock_app_dir, [{"status": "SUCCESS"}])
+    with patch(
+        "scansort.classification.memory.memory_summary",
+        side_effect=RuntimeError("boom"),
+    ):
+        assert main_cli(["stats"]) == 0
+        assert "Total Scans:" in capsys.readouterr().out
+    with patch(
+        "scansort.classification.memory.memory_summary",
+        side_effect=RuntimeError("boom"),
+    ):
+        assert main_cli(["stats", "--json"]) == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["total_scans"] == 1

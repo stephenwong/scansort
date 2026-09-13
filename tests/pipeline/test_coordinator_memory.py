@@ -135,7 +135,7 @@ def test_classify_scan_search_failure_falls_back(tmp_path: Path, minimal_pdf: Pa
     with patch.object(
         MemoryStore, "search", side_effect=sqlite3.OperationalError("locked")
     ):
-        result = pipeline._classify_scan(minimal_pdf, "bill.pdf", cfg)
+        result, _ = pipeline._classify_scan(minimal_pdf, "bill.pdf", cfg)
     assert result.target_folder == "Utilities/Electricity"
 
 
@@ -304,3 +304,139 @@ def test_backfill_runs_once_under_lock(tmp_path: Path, minimal_pdf: Path):
         pipeline._classify_scan(minimal_pdf, "bill.pdf", cfg)
     assert len(calls) == 1
     assert history.exists()
+
+
+def test_classify_scan_returns_memory_note(tmp_path: Path, minimal_pdf: Path):
+    """The note is returned per call, never stored on the shared instance."""
+    pipeline, cfg, _, _, app_dir = _make_pipeline(tmp_path)
+    _seed_history(
+        app_dir,
+        [
+            {
+                "sha256": "a" * 64,
+                "status": "SUCCESS",
+                "destination_folder": "Utilities/Electricity",
+                "summary": "Origin Energy electricity bill July",
+            }
+        ],
+    )
+    _, note = pipeline._classify_scan(minimal_pdf, "Origin Energy bill August.pdf", cfg)
+    assert note == "matched 1 past filing(s)"
+    assert not hasattr(pipeline, "_last_memory_note")
+
+
+def test_process_file_passes_memory_note_to_toast(tmp_path: Path):
+    pipeline, cfg, inbox, _, app_dir = _make_pipeline(tmp_path)
+    _seed_history(
+        app_dir,
+        [
+            {
+                "sha256": "a" * 64,
+                "status": "SUCCESS",
+                "destination_folder": "Utilities/Electricity",
+                "summary": "Origin Energy electricity bill July",
+            }
+        ],
+    )
+    with patch(
+        "scansort.pipeline.coordinator.notify_file_filed", return_value=True
+    ) as mock_notify:
+        scan_file = inbox / "Origin Energy bill September.jpg"
+        _create_sample_scan(scan_file)
+        assert pipeline.process_file(scan_file) is not None
+    assert mock_notify.call_args.kwargs.get("detail") == "matched 1 past filing(s)"
+
+
+def test_memory_note_isolated_between_interleaved_dispatches(tmp_path: Path):
+    """A note from one dispatch must never leak into another's toast."""
+    pipeline, cfg, inbox, docs_root, _ = _make_pipeline(tmp_path)
+    prepared: list[Path] = []
+    for index in range(2):
+        scan = inbox / f"scan{index}.jpg"
+        Image.new("RGB", (200, 200), color=(index * 40, 10, 10)).save(
+            scan, format="JPEG"
+        )
+        prepared.append(scan)
+
+    notes = iter(["matched 1 past filing(s)", None])
+    with (
+        patch.object(
+            pipeline,
+            "_classify_scan",
+            side_effect=lambda *a, **k: (_classification(), next(notes)),
+        ),
+        patch(
+            "scansort.pipeline.coordinator.notify_file_filed", return_value=True
+        ) as mock_notify,
+    ):
+        first = pipeline.process_file(prepared[0])
+        second = pipeline.process_file(prepared[1])
+
+    assert first is not None and second is not None
+    details = [call.kwargs.get("detail") for call in mock_notify.call_args_list]
+    assert details == ["matched 1 past filing(s)", None]
+
+
+def test_memory_note_absent_when_disabled(tmp_path: Path, minimal_pdf: Path):
+    pipeline, cfg, inbox, _, _ = _make_pipeline(tmp_path, rag_memory_enabled=False)
+    _, note = pipeline._classify_scan(minimal_pdf, "bill.pdf", cfg)
+    assert note is None
+    with patch(
+        "scansort.pipeline.coordinator.notify_file_filed", return_value=True
+    ) as mock_notify:
+        scan_file = inbox / "scan001.jpg"
+        _create_sample_scan(scan_file)
+        assert pipeline.process_file(scan_file) is not None
+    assert mock_notify.call_args.kwargs.get("detail") is None
+
+
+def test_first_backfill_notifies_once(tmp_path: Path, minimal_pdf: Path):
+    pipeline, cfg, _, _, app_dir = _make_pipeline(tmp_path)
+    _seed_history(
+        app_dir,
+        [
+            {
+                "sha256": "a" * 64,
+                "status": "SUCCESS",
+                "destination_folder": "Utilities/Electricity",
+                "summary": "Origin Energy electricity bill July",
+            }
+        ],
+    )
+    with patch(
+        "scansort.pipeline.coordinator.notify_memory_learned", return_value=True
+    ) as mock_toast:
+        pipeline._classify_scan(minimal_pdf, "Origin Energy bill August.pdf", cfg)
+        pipeline._classify_scan(minimal_pdf, "Origin Energy bill August.pdf", cfg)
+    assert mock_toast.call_count == 1
+    assert mock_toast.call_args.args[0] == 1
+
+
+def test_backfill_no_rows_no_toast(tmp_path: Path, minimal_pdf: Path):
+    pipeline, cfg, _, _, _ = _make_pipeline(tmp_path)
+    with patch(
+        "scansort.pipeline.coordinator.notify_memory_learned", return_value=True
+    ) as mock_toast:
+        pipeline._classify_scan(minimal_pdf, "bill.pdf", cfg)
+    mock_toast.assert_not_called()
+
+
+def test_dry_run_no_toast(tmp_path: Path, minimal_pdf: Path):
+    pipeline, _, _, _, app_dir = _make_pipeline(tmp_path, dry_run=True)
+    _seed_history(
+        app_dir,
+        [
+            {
+                "sha256": "a" * 64,
+                "status": "SUCCESS",
+                "destination_folder": "Utilities/Electricity",
+                "summary": "Origin Energy bill",
+            }
+        ],
+    )
+    cfg = pipeline.config
+    with patch(
+        "scansort.pipeline.coordinator.notify_memory_learned", return_value=True
+    ) as mock_toast:
+        pipeline._classify_scan(minimal_pdf, "bill.pdf", cfg)
+    mock_toast.assert_not_called()

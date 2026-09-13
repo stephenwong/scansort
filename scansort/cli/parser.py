@@ -281,6 +281,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output statistics as JSON",
     )
 
+    # memory command
+    mem_p = subparsers.add_parser(
+        "memory",
+        parents=[verbose_parser],
+        help="Inspect and control self-improving filing memory",
+    )
+    mem_group = mem_p.add_mutually_exclusive_group()
+    mem_group.add_argument(
+        "--list",
+        dest="memory_list",
+        action="store_true",
+        help="List learned filing examples (newest first)",
+    )
+    mem_group.add_argument(
+        "--forget-folder",
+        dest="memory_forget_folder",
+        type=str,
+        metavar="FOLDER",
+        help="Forget learned examples for a destination folder",
+    )
+    mem_group.add_argument(
+        "--clear",
+        dest="memory_clear",
+        action="store_true",
+        help="Clear all learned examples (re-learns from history on next scan unless memory is off)",
+    )
+    mem_group.add_argument(
+        "--rebuild",
+        dest="memory_rebuild",
+        action="store_true",
+        help="Rebuild filing memory from history",
+    )
+    mem_p.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum examples to list with --list (default: 20)",
+    )
+    mem_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output memory information as JSON",
+    )
+
     # help command
     help_p = subparsers.add_parser(
         "help",

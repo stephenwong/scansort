@@ -59,6 +59,7 @@ from scansort.pipeline.worker import run_pipeline_worker
 from scansort.platform.notifications import (
     notify_file_filed,
     notify_filing_failed,
+    notify_memory_learned,
     notify_scan_stranded,
 )
 
@@ -257,21 +258,28 @@ class ScanSortPipeline:
         staging_pdf: Path,
         original_name: str = "",
         config: AppConfig | None = None,
-    ) -> DocumentClassification:
-        """Query Gemini to classify the staged PDF against taxonomy and hints."""
+    ) -> tuple[DocumentClassification, str | None]:
+        """Query Gemini to classify the staged PDF against taxonomy and hints.
+
+        Returns ``(classification, memory_note)``. The note is returned rather
+        than stored on the instance so concurrent ``process_file`` calls on one
+        shared pipeline (watcher worker, tray, drop zone) cannot leak a note
+        into another file's toast.
+        """
         cfg = config or self.config
         taxonomy = self.folder_mapper.get_taxonomy()
         hints = load_folder_hints(self.hints_path)
-        examples, folder_thresholds = self._retrieve_memory_context(
+        examples, folder_thresholds, memory_note = self._retrieve_memory_context(
             staging_pdf, original_name, taxonomy, cfg
         )
-        return self.classifier.classify_document(
+        classification = self.classifier.classify_document(
             staging_pdf,
             taxonomy=taxonomy,
             hints=hints,
             examples=examples,
             folder_thresholds=folder_thresholds,
         )
+        return classification, memory_note
 
     def _retrieve_memory_context(
         self,
@@ -279,17 +287,17 @@ class ScanSortPipeline:
         original_name: str,
         taxonomy: list[str],
         cfg: AppConfig,
-    ) -> tuple[list | None, dict[str, float] | None]:
-        """Return ``(examples, folder_thresholds)`` for the system prompt.
+    ) -> tuple[list | None, dict[str, float] | None, str | None]:
+        """Return ``(examples, folder_thresholds, memory_note)`` for the prompt.
 
-        Returns ``(None, None)`` when memory is disabled, the store is empty,
-        or anything fails: retrieval is best-effort and must never break a
-        filing. The one-time history backfill runs under the dedicated index
+        Returns ``(None, None, None)`` when memory is disabled, the store is
+        empty, or anything fails: retrieval is best-effort and must never break
+        a filing. The one-time history backfill runs under the dedicated index
         lock (never the dispatch lock) with a row cap; per-file indexing
         happens inside the dispatch critical section instead.
         """
         if not cfg.rag_memory_enabled:
-            return None, None
+            return None, None, None
         try:
             # Thresholds derive from correction history (not the vector store),
             # so compute them even when the store is empty; otherwise a valid
@@ -303,16 +311,22 @@ class ScanSortPipeline:
                     if folder.lower() in allowed
                 }
             store = MemoryStore(self.memory_db_path)
+            backfilled = 0
             if not cfg.dry_run:
                 # The one-time backfill writes persistent state: a read-only
                 # dry run must never create the vector database.
                 with interprocess_file_lock(self.memory_lock_path):
-                    if store.count() == 0:
-                        store.backfill_from_history(
+                    pre_count = store.count()
+                    if pre_count == 0:
+                        backfilled = store.backfill_from_history(
                             self.audit_logger.jsonl_path, limit=MEMORY_BACKFILL_LIMIT
                         )
+            if backfilled > 0:
+                # Fire the toast after releasing the index lock: show_toast can
+                # block (WinRT backend) and must not extend the lock hold.
+                notify_memory_learned(backfilled)
             if store.count() == 0:
-                return None, (thresholds or None)
+                return None, (thresholds or None), None
             query = build_retrieval_query(
                 staging_pdf,
                 original_name,
@@ -322,19 +336,20 @@ class ScanSortPipeline:
                 allow_ocr_skim=not cfg.ocr_enabled,
             )
             if not query.strip():
-                return None, (thresholds or None)
+                return None, (thresholds or None), None
             examples = store.search(
                 query,
                 k=MAX_MEMORY_EXAMPLES,
                 min_similarity=MEMORY_MIN_SIMILARITY,
                 taxonomy=taxonomy,
             )
-            return (examples or None), (thresholds or None)
+            note = f"matched {len(examples)} past filing(s)" if examples else None
+            return (examples or None), (thresholds or None), note
         except Exception as e:  # noqa: BLE001 - RAG memory is best-effort
             logger.warning(
                 "RAG memory retrieval failed for %s: %s", staging_pdf.name, e
             )
-            return None, None
+            return None, None, None
 
     def _apply_metadata_and_dispatch(
         self,
@@ -346,8 +361,13 @@ class ScanSortPipeline:
         config: AppConfig | None = None,
         ocr_engine: str | None = None,
         ocr_confidence: float | None = None,
+        memory_note: str | None = None,
     ) -> Path:
-        """Apply rotation, embed metadata, dispatch to destination, and write audit record."""
+        """Apply rotation, embed metadata, dispatch to destination, and write audit record.
+
+        ``memory_note`` is this call's own retrieval summary (never shared
+        instance state) used only as the filing toast detail.
+        """
         cfg = config or self.config
         keywords = [classification.document_type, classification.target_folder]
         process_pdf_metadata_and_rotation(
@@ -423,6 +443,7 @@ class ScanSortPipeline:
             final_dest.name,
             folder_str,
             folder_path=final_dest.parent,
+            detail=memory_note,
         )
         return final_dest
 
@@ -504,7 +525,9 @@ class ScanSortPipeline:
                     )
 
             # 5. Multimodal analysis and classification via Gemini
-            classification = self._classify_scan(staging_pdf, file_path.name, config)
+            classification, memory_note = self._classify_scan(
+                staging_pdf, file_path.name, config
+            )
 
             # 6. Dry-Run Verification before any file mutation or metadata writing
             if config.dry_run:
@@ -540,6 +563,7 @@ class ScanSortPipeline:
                 config=config,
                 ocr_engine=ocr_engine,
                 ocr_confidence=ocr_confidence,
+                memory_note=memory_note,
             )
 
         except Exception as e:  # noqa: BLE001 - Catch unexpected processing errors to prevent pipeline crashing

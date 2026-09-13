@@ -9,6 +9,7 @@ from scansort.cli.file_cmd import handle_file
 from scansort.cli.help import handle_help
 from scansort.cli.history import handle_history
 from scansort.cli.logs import handle_logs
+from scansort.cli.memory import handle_memory
 from scansort.cli.ocr import handle_ocr_backfill
 from scansort.cli.parser import build_parser
 from scansort.cli.rescan import handle_rescan
@@ -52,6 +53,7 @@ def main_cli(args: list[str] | None = None) -> int:
         "logs": handle_logs,
         "history": handle_history,
         "stats": handle_stats,
+        "memory": handle_memory,
         "completion": handle_completion,
     }
     handler = handlers.get(command, handle_watch)

@@ -99,6 +99,40 @@ def _calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _memory_overview() -> tuple[dict[str, Any], str]:
+    """Return ``(summary, status)`` best-effort; never raises."""
+    from scansort.classification.memory import memory_db_path_for, memory_summary
+    from scansort.core.config import load_config
+
+    app_dir = get_default_app_dir()
+    try:
+        summary = memory_summary(
+            memory_db_path_for(app_dir), app_dir / HISTORY_JSONL_NAME
+        )
+    except Exception:  # noqa: BLE001 - stats must never crash on memory
+        summary = {
+            "examples": 0,
+            "calibrated_folders": {},
+            "last_learned": None,
+            "db_path": str(memory_db_path_for(app_dir)),
+        }
+    try:
+        status = "Enabled" if load_config().rag_memory_enabled else "Disabled"
+    except ValueError:
+        status = "Unknown"
+    except Exception:  # noqa: BLE001 - stats must never crash on config
+        status = "Unknown"
+    return summary, status
+
+
+def _format_calibrated(calibrated: dict[str, Any]) -> str:
+    """Render the calibrated-folders line (count plus per-folder bars)."""
+    if not calibrated:
+        return "0"
+    parts = [f"{name} {float(value):.2f}" for name, value in sorted(calibrated.items())]
+    return f"{len(parts)} ({', '.join(parts)})"
+
+
 def handle_stats(parsed: argparse.Namespace) -> int:
     """Handle 'stats' command to summarize filing activity, tokens, and estimated cost."""
     app_dir = get_default_app_dir()
@@ -112,6 +146,9 @@ def handle_stats(parsed: argparse.Namespace) -> int:
         return 0
 
     metrics = _calculate_metrics(records)
+    memory, mem_status = _memory_overview()
+    memory["status"] = mem_status
+    metrics["memory"] = memory
 
     if CliArgs.from_namespace(parsed).json:
         print(json.dumps(metrics, indent=2))
@@ -143,6 +180,23 @@ def handle_stats(parsed: argparse.Namespace) -> int:
         print("Top Document Types:")
         for doc_type, count in metrics["top_document_types"].items():
             print(f"  {doc_type + ':':<24} {count}")
+
+    try:
+        examples = int(memory.get("examples", 0) or 0)
+        if examples > 0 or mem_status == "Disabled":
+            print("-----------------------------------------------------------------")
+            print("Filing Memory:")
+            print(f"  Status:           {mem_status}")
+            print(f"  Examples Learned: {examples}")
+            print(
+                f"  Calibrated Folders: {_format_calibrated(memory.get('calibrated_folders', {}) or {})}"
+            )
+            last = memory.get("last_learned") or "—"
+            if isinstance(last, str) and "T" in last:
+                last = last.replace("T", " ")[:16]
+            print(f"  Last Learned:     {last}")
+    except Exception:  # noqa: BLE001 - memory must never crash stats
+        pass
 
     print("=================================================================")
     return 0

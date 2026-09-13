@@ -51,7 +51,11 @@ from scansort.core.constants import (
     STATUS_SUCCESS,
     STATUS_UNDONE,
 )
-from scansort.core.fs import normalize_relative_folder, relative_folder_is_safe
+from scansort.core.fs import (
+    interprocess_file_lock,
+    normalize_relative_folder,
+    relative_folder_is_safe,
+)
 from scansort.document.ocr import OcrError, has_ocr_support, ocr_pdf_inplace
 
 logger = logging.getLogger(__name__)
@@ -289,9 +293,12 @@ class MemoryStore:
         conn.execute(_EXAMPLES_DDL)
         conn.execute(_METADATA_DDL)
 
-    def _remove_db_files(self) -> None:
-        for suffix in ("", "-wal", "-shm"):
-            Path(str(self.db_path) + suffix).unlink(missing_ok=True)
+    def _remove_db_files(self) -> bool:
+        targets = [Path(str(self.db_path) + suffix) for suffix in ("", "-wal", "-shm")]
+        existed = any(target.exists() for target in targets)
+        for target in targets:
+            target.unlink(missing_ok=True)
+        return existed
 
     def _connect(self, timeout: float = 5.0) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,6 +420,81 @@ class MemoryStore:
             )
         scored.sort(key=lambda example: example.similarity, reverse=True)
         return scored[:k]
+
+    def list_examples(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the most recent indexed examples, newest first.
+
+        Read-only: returns ``[]`` when the database is missing and never
+        creates files. Fail-open on any storage error.
+        """
+        if not self.db_path.exists():
+            return []
+        try:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    "SELECT sha256, folder, summary, document_type, status,"
+                    " timestamp FROM examples ORDER BY rowid DESC LIMIT ?",
+                    (max(0, int(limit)),),
+                ).fetchall()
+        except (sqlite3.Error, OSError, ValueError) as e:
+            logger.warning("RAG memory list failed: %s", e)
+            return []
+        return [
+            {
+                "sha256": str(sha or ""),
+                "folder": str(folder or ""),
+                "summary": str(summary or ""),
+                "document_type": str(doc_type or ""),
+                "status": str(status or ""),
+                "timestamp": str(timestamp or ""),
+            }
+            for sha, folder, summary, doc_type, status, timestamp in rows
+        ]
+
+    def forget_folder(self, folder: str) -> int:
+        """Delete indexed examples for *folder* (case-insensitive).
+
+        Returns the number of rows removed, or 0 when the store is missing
+        or nothing matched. Fail-open on any storage error.
+        """
+        normalized = normalize_relative_folder(str(folder or ""))
+        if not normalized or not self.db_path.exists():
+            return 0
+        # SQLite's built-in LOWER() is ASCII-only while stored folders preserve
+        # case, so match with Python's Unicode-aware casefold() on fetched values
+        # (a Python-lowercased parameter compared to LOWER(folder) would never
+        # match non-ASCII uppercase names such as "Öl/Rechnungen").
+        wanted = normalized.casefold()
+        try:
+            with closing(self._connect(MEMORY_WRITE_TIMEOUT_S)) as conn, conn:
+                rows = conn.execute("SELECT DISTINCT folder FROM examples").fetchall()
+                targets = [
+                    str(row[0] or "")
+                    for row in rows
+                    if normalize_relative_folder(str(row[0] or "")).casefold() == wanted
+                ]
+                if not targets:
+                    return 0
+                placeholders = ",".join("?" for _ in targets)
+                cursor = conn.execute(
+                    f"DELETE FROM examples WHERE folder IN ({placeholders})",
+                    targets,
+                )
+                return int(cursor.rowcount or 0)
+        except (sqlite3.Error, OSError, ValueError) as e:
+            logger.warning("RAG memory forget failed: %s", e)
+            return 0
+
+    def clear(self) -> bool:
+        """Delete the vector store files; True when anything was removed.
+
+        Fail-open: storage errors are logged and return False, never raise.
+        """
+        try:
+            return self._remove_db_files()
+        except OSError as e:
+            logger.warning("RAG memory clear failed: %s", e)
+            return False
 
     def _get_meta(self, key: str) -> str | None:
         try:
@@ -676,3 +758,70 @@ def propose_hint_keywords(summary: str | None, *, max_keywords: int = 3) -> list
         if len(keywords) >= max_keywords:
             break
     return keywords
+
+
+def rebuild_memory(
+    db_path: Path | str,
+    jsonl_path: Path | str,
+    lock_path: Path | str,
+    *,
+    limit: int = MEMORY_BACKFILL_LIMIT,
+) -> int:
+    """Clear the store and re-index history; return rows indexed.
+
+    Holds the dedicated ``index.lock`` (never ``operations.lock``).
+    Best-effort: any failure is logged and returns 0, never raises.
+    """
+    try:
+        with interprocess_file_lock(Path(lock_path)):
+            store = MemoryStore(db_path)
+            try:
+                store.clear()
+            except Exception as e:  # noqa: BLE001 - clear is best-effort
+                logger.warning("RAG memory rebuild clear failed: %s", e)
+            return store.backfill_from_history(jsonl_path, limit=limit)
+    except Exception as e:  # noqa: BLE001 - rebuild never breaks callers
+        logger.warning("RAG memory rebuild failed: %s", e)
+        return 0
+
+
+def memory_summary(db_path: Path | str, jsonl_path: Path | str) -> dict[str, Any]:
+    """Return a best-effort filing-memory overview for stats/tray/CLI surfaces.
+
+    Read paths never create the database: a missing store yields a zeroed
+    summary. Never raises.
+    """
+    db = Path(db_path)
+    zeroed: dict[str, Any] = {
+        "examples": 0,
+        "calibrated_folders": {},
+        "last_learned": None,
+        "db_path": str(db),
+    }
+    try:
+        store = MemoryStore(db)
+        examples = store.count()
+        last_learned: str | None = None
+        if db.exists():
+            try:
+                with closing(store._connect()) as conn:
+                    row = conn.execute("SELECT MAX(timestamp) FROM examples").fetchone()
+                    candidate = str((row or [None])[0] or "").strip()
+                    last_learned = candidate or None
+            except (sqlite3.Error, OSError, ValueError) as e:
+                logger.warning("RAG memory summary timestamp failed: %s", e)
+                last_learned = None
+        try:
+            calibrated = compute_folder_thresholds_cached(jsonl_path)
+        except Exception as e:  # noqa: BLE001 - thresholds are best-effort
+            logger.warning("RAG memory summary thresholds failed: %s", e)
+            calibrated = {}
+        return {
+            "examples": int(examples),
+            "calibrated_folders": dict(calibrated),
+            "last_learned": last_learned,
+            "db_path": str(db),
+        }
+    except Exception as e:  # noqa: BLE001 - summary never breaks callers
+        logger.warning("RAG memory summary failed: %s", e)
+        return zeroed

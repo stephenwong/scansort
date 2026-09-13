@@ -141,6 +141,27 @@ class SystemTrayApp:
 
         return pystray.Menu(*_build_recursive(tree))
 
+    def _memory_status_suffix(self) -> str:
+        """Return the tray memory segment, or "" when it must be omitted.
+
+        Best-effort: any failure degrades to no segment so the menu rebuild
+        can never fail.
+        """
+        try:
+            if not getattr(self.config, "rag_memory_enabled", True):
+                return " · Memory: off"
+            # Count only: the menu rebuilds often and must not parse history.
+            from scansort.classification.memory import (
+                MemoryStore,
+                memory_db_path_for,
+            )
+
+            store = MemoryStore(memory_db_path_for(get_default_app_dir()))
+            return f" · Memory: {store.count()}"
+        except Exception:  # noqa: BLE001 - menu rebuild must never fail
+            logger.debug("Tray memory status unavailable", exc_info=True)
+            return ""
+
     def _build_menu(self) -> pystray.Menu:
         """Construct the complete right-click context menu."""
         paused = self.is_paused()
@@ -149,6 +170,7 @@ class SystemTrayApp:
             if paused
             else f"ScanSort {__version__}: Monitoring Active"
         )
+        status_text += self._memory_status_suffix()
         pause_action_text = "Resume Monitoring" if paused else "Pause Monitoring"
 
         review_items = get_review_queue(
@@ -177,6 +199,7 @@ class SystemTrayApp:
             pystray.MenuItem(
                 "Taxonomy Doctor...", lambda icon, item: self.open_taxonomy_doctor()
             ),
+            pystray.MenuItem("Filing Memory...", lambda icon, item: self.open_memory()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Open Drop Folder", lambda icon, item: self.open_drop_folder()
@@ -261,6 +284,24 @@ class SystemTrayApp:
             except Exception as e:  # noqa: BLE001
                 logger.exception("Taxonomy Doctor failed: %s", e)
                 show_toast("ScanSort", f"Could not run Taxonomy Doctor: {e}")
+
+        return self._offload(_task, async_task)
+
+    def open_memory(self, async_task: bool = True) -> threading.Thread | None:
+        """Display the filing-memory dialog."""
+
+        def _task():
+            try:
+                from scansort.ui.memory import open_memory_dialog
+
+                dialog = open_memory_dialog(
+                    config=self.config,
+                    on_changed=self._refresh_menu,
+                )
+                self._run_owned_mainloop(dialog)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Filing Memory dialog failed: %s", e)
+                show_toast("ScanSort", f"Could not open Filing Memory: {e}")
 
         return self._offload(_task, async_task)
 

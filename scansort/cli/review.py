@@ -199,6 +199,12 @@ def _run_cli_review(
             if in_hint.lower() != "n":
                 hint_to_save = in_hint or suggested_kw
 
+            indexed = False
+
+            def _record_indexed(value: bool) -> None:
+                nonlocal indexed
+                indexed = value
+
             try:
                 dest = file_reviewed_item(
                     item=item,
@@ -212,6 +218,7 @@ def _run_cli_review(
                     history_csv=history_csv,
                     lock_path=lock_path,
                     on_duplicate=_confirm_duplicate,
+                    on_indexed=_record_indexed,
                 )
                 duplicates_dir = resolve_duplicates_dir(
                     config.documents_root, config.fallback_folder
@@ -219,7 +226,16 @@ def _run_cli_review(
                 if dest.parent == duplicates_dir:
                     print(f"Duplicate moved to the Duplicates folder: {dest.name}.\n")
                 else:
-                    print(f"Successfully filed to {dest.name} in '{target_folder}'.\n")
+                    print(f"Successfully filed to {dest.name} in '{target_folder}'.")
+                    if config.rag_memory_enabled and indexed:
+                        print("Remembered for future documents.")
+                    if not hint_to_save:
+                        print(
+                            "No keyword hint saved (generic summary)."
+                            if not suggested_kw
+                            else "No keyword hint saved."
+                        )
+                    print()
                 break
             except (OSError, ValueError) as e:
                 print(f"Error filing document: {e}\n")

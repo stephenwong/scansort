@@ -79,6 +79,35 @@ def test_parser_history_status_accepts_reviewed():
     assert args.status == "REVIEWED"
 
 
+def test_build_parser_memory_subcommand():
+    parser = build_parser()
+    args = parser.parse_args(["memory", "--list", "-n", "5"])
+    assert args.command == "memory"
+    assert args.memory_list is True
+    assert args.limit == 5
+    args = parser.parse_args(["memory", "--forget-folder", "Bills/Power"])
+    assert args.memory_forget_folder == "Bills/Power"
+    args = parser.parse_args(["memory", "--clear"])
+    assert args.memory_clear is True
+    args = parser.parse_args(["memory", "--rebuild", "--json"])
+    assert args.memory_rebuild is True
+    assert args.json is True
+
+
+def test_parser_rejects_combined_memory_action_flags():
+    """The memory actions are mutually exclusive; combining them exits 2."""
+    import pytest
+
+    for combo in (
+        ["memory", "--list", "--clear"],
+        ["memory", "--rebuild", "--forget-folder", "Bills"],
+        ["memory", "--clear", "--rebuild"],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            build_parser().parse_args(combo)
+        assert exc.value.code == 2
+
+
 def test_parser_rejects_out_of_range_max_depth():
     """F22: --max-depth must be range-checked at the parser level."""
     import pytest

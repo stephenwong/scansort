@@ -716,3 +716,94 @@ def test_settings_save_merges_non_dialog_fields_from_disk(tk_root, tmp_path: Pat
 
     saved = mock_save.call_args.args[0]
     assert saved.max_folder_depth == 5
+
+
+def test_settings_memory_group_defaults(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs, rag_memory_enabled=True)
+    summary = {
+        "examples": 412,
+        "calibrated_folders": {},
+        "last_learned": None,
+        "db_path": "db",
+    }
+    with patch("scansort.classification.memory.memory_summary", return_value=summary):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        assert dialog.memory_count_var.get() == "412 examples learned"
+        dialog.destroy()
+    cfg_off = AppConfig(
+        watch_folder=inbox, documents_root=docs, rag_memory_enabled=False
+    )
+    dialog = SettingsDialog(master=tk_root, config=cfg_off)
+    assert dialog.memory_count_var.get() == "Memory is off"
+    dialog.destroy()
+
+
+def test_settings_memory_clear_confirms_and_clears(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+    with (
+        patch("tkinter.messagebox.askyesno", return_value=True),
+        patch("scansort.classification.memory.MemoryStore") as mock_store,
+    ):
+        dialog._clear_memory()
+        mock_store.return_value.clear.assert_called_once()
+    dialog.destroy()
+
+
+def test_settings_memory_clear_declined_does_nothing(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+    with (
+        patch("tkinter.messagebox.askyesno", return_value=False),
+        patch("scansort.classification.memory.MemoryStore") as mock_store,
+    ):
+        dialog._clear_memory()
+        mock_store.assert_not_called()
+    dialog.destroy()
+
+
+def test_settings_memory_count_unavailable_on_error(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs, rag_memory_enabled=True)
+    with patch(
+        "scansort.classification.memory.memory_summary",
+        side_effect=RuntimeError("locked"),
+    ):
+        dialog = SettingsDialog(master=tk_root, config=cfg)
+        assert dialog.memory_count_var.get() == "Memory status unavailable"
+        dialog.destroy()
+
+
+def test_settings_memory_clear_error_shows_error(tk_root, tmp_path: Path):
+    inbox = tmp_path / "Inbox"
+    docs = tmp_path / "Documents"
+    inbox.mkdir()
+    docs.mkdir()
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs)
+    dialog = SettingsDialog(master=tk_root, config=cfg)
+    with (
+        patch("tkinter.messagebox.askyesno", return_value=True),
+        patch(
+            "scansort.classification.memory.MemoryStore",
+            side_effect=RuntimeError("disk full"),
+        ),
+        patch("scansort.ui.settings.messagebox.showerror") as mock_err,
+    ):
+        dialog._clear_memory()
+        mock_err.assert_called_once()
+    dialog.destroy()

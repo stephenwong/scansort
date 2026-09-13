@@ -225,3 +225,69 @@ def test_load_history_records_io_error_returns_none(tmp_path, monkeypatch):
 
     monkeypatch.setattr("builtins.open", _denied_open)
     assert load_history_records(hist) is None
+
+
+def test_history_shows_routing_rationale_for_review(mock_app_dir: Path, capsys):
+    """Review-routed scans are logged SUCCESS with a _Review_Needed destination."""
+    _write_history(
+        mock_app_dir,
+        [
+            {
+                "status": "SUCCESS",
+                "original_filename": "scan.pdf",
+                "destination_folder": "_Review_Needed",
+                "routing_rationale": "Confidence 0.65 below 0.75 calibrated threshold",
+            }
+        ],
+    )
+    assert main_cli(["history"]) == 0
+    out = capsys.readouterr().out
+    assert "Why: Confidence 0.65 below 0.75 calibrated threshold" in out
+
+
+def test_history_shows_rationale_for_review_subfolder(mock_app_dir: Path, capsys):
+    _write_history(
+        mock_app_dir,
+        [
+            {
+                "status": "SUCCESS",
+                "original_filename": "blank.pdf",
+                "destination_folder": "_Review_Needed/Blank_Scans",
+                "routing_rationale": "No readable content detected",
+            }
+        ],
+    )
+    assert main_cli(["history"]) == 0
+    assert "Why: No readable content detected" in capsys.readouterr().out
+
+
+def test_history_omits_rationale_for_plain_taxonomy_success(mock_app_dir: Path, capsys):
+    _write_history(
+        mock_app_dir,
+        [
+            {
+                "status": "SUCCESS",
+                "original_filename": "bill.pdf",
+                "destination_folder": "Utilities/Electricity",
+                "routing_rationale": "Matched discovered taxonomy folder",
+            }
+        ],
+    )
+    assert main_cli(["history"]) == 0
+    assert "Why:" not in capsys.readouterr().out
+
+
+def test_history_json_includes_rationale(mock_app_dir: Path, capsys):
+    _write_history(
+        mock_app_dir,
+        [
+            {
+                "status": "FAILED",
+                "original_filename": "scan.pdf",
+                "routing_rationale": "calibrated bar",
+            }
+        ],
+    )
+    assert main_cli(["history", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data[0]["routing_rationale"] == "calibrated bar"

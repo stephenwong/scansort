@@ -338,6 +338,7 @@ def file_reviewed_item(
     history_csv: Path | None = None,
     lock_path: Path | None = None,
     on_duplicate: Callable[[dict[str, Any]], bool] | None = None,
+    on_indexed: Callable[[bool], None] | None = None,
 ) -> Path:
     """Manually file an item from the review queue into a target taxonomy folder.
 
@@ -355,6 +356,10 @@ def file_reviewed_item(
         on_duplicate: Optional callback invoked with the matching history record
             when identical content has already been filed. Return True to file
             anyway, False to route to ``_Review_Needed/Duplicates/``.
+        on_indexed: Optional callback invoked with whether the filing was
+            actually indexed into filing memory (False when memory is disabled,
+            the record was ineligible, or the write failed), so presentation
+            layers never claim a learned filing that did not happen.
 
     Returns:
         Final destination Path of the filed document.
@@ -407,6 +412,7 @@ def file_reviewed_item(
         if pre_existing is not None:
             file_anyway = bool(on_duplicate(pre_existing))
 
+    indexed = False
     with interprocess_file_lock(op_lock):
         dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -478,15 +484,17 @@ def file_reviewed_item(
             # Best-effort: an index failure must not fail the filing.
             if config.rag_memory_enabled:
                 try:
-                    MemoryStore(memory_db_path_for(jsonl_path.parent)).index_record(
-                        {
-                            "sha256": file_hash,
-                            "destination_folder": normalized_folder,
-                            "summary": item.summary,
-                            "document_type": item.document_type,
-                            "suggested_folder": item.suggested_folder,
-                            "status": "REVIEWED",
-                        }
+                    indexed = bool(
+                        MemoryStore(memory_db_path_for(jsonl_path.parent)).index_record(
+                            {
+                                "sha256": file_hash,
+                                "destination_folder": normalized_folder,
+                                "summary": item.summary,
+                                "document_type": item.document_type,
+                                "suggested_folder": item.suggested_folder,
+                                "status": "REVIEWED",
+                            }
+                        )
                     )
                 except Exception as e:  # noqa: BLE001 - memory never breaks filing
                     logger.warning("RAG memory index failed: %s", e)
@@ -510,6 +518,11 @@ def file_reviewed_item(
                         normalized_folder,
                         e,
                     )
+
+    # Report the real indexing outcome outside the operations lock so callers
+    # (CLI/GUI) only claim a learned filing when one actually happened.
+    if on_indexed is not None:
+        on_indexed(indexed)
 
     if converted_pdf is not None:
         converted_pdf.unlink(missing_ok=True)
