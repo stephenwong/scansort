@@ -175,14 +175,20 @@ class DocumentClassification(_ClassificationFields):
     candidates_tokens: int = Field(
         default=0, ge=0, description="Candidates token count from Gemini API"
     )
+    cached_tokens: int = Field(
+        default=0, ge=0, description="Cached prompt token count from Gemini API"
+    )
+    thoughts_tokens: int = Field(
+        default=0, ge=0, description="Thinking token count from Gemini API"
+    )
     estimated_cost_usd: str | float | None = Field(
         default=None, description="Formatted estimated USD cost string or float"
     )
 
     @property
     def total_tokens(self) -> int:
-        """Sum of prompt and candidate tokens consumed."""
-        return self.prompt_tokens + self.candidates_tokens
+        """Sum of prompt, candidate, and thinking tokens consumed."""
+        return self.prompt_tokens + self.candidates_tokens + self.thoughts_tokens
 
     @field_validator("document_date")
     @classmethod

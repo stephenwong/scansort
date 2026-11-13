@@ -25,6 +25,8 @@ def log_classification_event(
     routing_rationale: str | None = None,
     prompt_tokens: int = 0,
     candidates_tokens: int = 0,
+    cached_tokens: int = 0,
+    thoughts_tokens: int = 0,
     raw_response_text: str | None = None,
 ) -> None:
     """Emit comprehensive structured log messages for a completed Gemini classification.
@@ -34,12 +36,14 @@ def log_classification_event(
 
     Args:
         file_name: Name of the input file being classified.
-        model: Model name string (e.g. 'gemini-3.1-flash-lite').
+        model: Model name string (e.g. 'gemini-3.5-flash-lite').
         latency_seconds: Execution duration of the Gemini API call in seconds.
         classification: The extracted DocumentClassification instance.
         routing_rationale: Explanation of the destination folder routing decision.
         prompt_tokens: Number of prompt/input tokens consumed.
         candidates_tokens: Number of output/completion tokens returned.
+        cached_tokens: Number of cached prompt tokens matched.
+        thoughts_tokens: Number of reasoning/thinking output tokens consumed.
         raw_response_text: Unprocessed JSON/text string returned by Gemini.
     """
     logger.info(
@@ -63,12 +67,14 @@ def log_classification_event(
     if routing_rationale and routing_rationale.strip():
         logger.info("Routing decision: %s", _clean_for_log(routing_rationale))
 
-    if prompt_tokens > 0 or candidates_tokens > 0:
+    if prompt_tokens > 0 or candidates_tokens > 0 or thoughts_tokens > 0:
         logger.info(
             format_token_cost_summary(
                 model=model,
                 prompt_tokens=prompt_tokens,
                 candidates_tokens=candidates_tokens,
+                cached_tokens=cached_tokens,
+                thoughts_tokens=thoughts_tokens,
             )
         )
 

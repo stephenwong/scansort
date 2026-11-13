@@ -17,10 +17,11 @@ from scansort.classification.memory import (
     memory_db_path_for,
     memory_lock_path_for,
 )
-from scansort.classification.models import DocumentClassification
+from scansort.classification.models import DocumentClassification, sanitize_date
 from scansort.classification.taxonomy import FolderMapper
 from scansort.core.config import AppConfig, get_default_app_dir
 from scansort.core.constants import (
+    BLANK_SCANS_DIR,
     FOLDER_MAP_FILENAME,
     HINTS_FILENAME,
     HISTORY_CSV_NAME,
@@ -29,6 +30,7 @@ from scansort.core.constants import (
     MAX_MEMORY_EXAMPLES,
     MEMORY_BACKFILL_LIMIT,
     MEMORY_MIN_SIMILARITY,
+    REVIEW_NEEDED_DIR,
     SCAN_STABILITY_POLL_INTERVAL_S,
     SCAN_STABILITY_TIMEOUT_S,
     SCAN_STABLE_COUNT,
@@ -45,6 +47,7 @@ from scansort.document.ocr import (
     has_ocr_support,
     ocr_pdf_inplace,
 )
+from scansort.document.preview import is_pdf_blank
 from scansort.logging import AuditLogger
 from scansort.pipeline.dispatcher import (
     OPERATIONS_LOCK_FILENAME,
@@ -174,13 +177,21 @@ class ScanSortPipeline:
                 entry["suggested_folder"] = classification.suggested_folder.strip()
             if classification.routing_rationale.strip():
                 entry["routing_rationale"] = classification.routing_rationale.strip()
-            if classification.prompt_tokens or classification.candidates_tokens:
-                entry["tokens"] = {
+            if (
+                classification.prompt_tokens
+                or classification.candidates_tokens
+                or classification.thoughts_tokens
+            ):
+                tokens_payload: dict[str, int] = {
                     "prompt": classification.prompt_tokens,
                     "candidates": classification.candidates_tokens,
-                    "total": classification.prompt_tokens
-                    + classification.candidates_tokens,
+                    "total": classification.total_tokens,
                 }
+                if classification.cached_tokens > 0:
+                    tokens_payload["cached"] = classification.cached_tokens
+                if classification.thoughts_tokens > 0:
+                    tokens_payload["thoughts"] = classification.thoughts_tokens
+                entry["tokens"] = tokens_payload
             # estimated_cost_usd may be a preformatted cost string; only numeric
             # values are recorded in the machine-readable audit entry.
             if isinstance(classification.estimated_cost_usd, (int, float)):
@@ -267,6 +278,30 @@ class ScanSortPipeline:
         into another file's toast.
         """
         cfg = config or self.config
+        if is_pdf_blank(staging_pdf):
+            blank_target = f"{REVIEW_NEEDED_DIR}/{BLANK_SCANS_DIR}"
+            logger.info(
+                "Blank scan detected locally for '%s' -> routing to %s ($0 API cost).",
+                original_name or staging_pdf.name,
+                blank_target,
+            )
+            return (
+                DocumentClassification(
+                    document_date=sanitize_date(None),
+                    description="Blank_Scan",
+                    target_folder=blank_target,
+                    suggested_folder=blank_target,
+                    confidence=1.0,
+                    orientation_correction=0,
+                    document_type="Blank",
+                    summary="Blank scan detected locally before classification.",
+                    folder_reasoning="All pages verified blank locally.",
+                    routing_rationale=f"Blank scan detected locally -> routed to {blank_target}.",
+                    estimated_cost_usd=0.0,
+                ),
+                None,
+            )
+
         taxonomy = self.folder_mapper.get_taxonomy()
         hints = load_folder_hints(self.hints_path)
         examples, folder_thresholds, memory_note = self._retrieve_memory_context(

@@ -208,8 +208,11 @@ def test_classify_document_passes_memory_through(minimal_pdf: Path):
     assert result.target_folder == "Health/Dental"
     _, kwargs = mock_client.models.generate_content.call_args
     instruction = kwargs["config"].system_instruction
-    assert "Past similar:" in instruction
-    assert "past dental bill" in instruction
+    assert "Past similar:" not in instruction
+    contents_text = " ".join(str(item) for item in kwargs["contents"])
+    assert "Past similar:" in contents_text
+    assert "past dental bill" in contents_text
+    assert "0.80" in contents_text
 
 
 def test_non_finite_threshold_falls_back_to_global_floor():

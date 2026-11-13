@@ -686,3 +686,122 @@ def test_model_requested_review_has_accurate_rationale():
     )
     assert res.target_folder == "_Review_Needed"
     assert "Model requested manual review" in res.routing_rationale
+
+
+def test_classify_document_keeps_system_instruction_static_across_memory_changes(
+    minimal_pdf: Path,
+):
+    """Implicit prefix caching requires system_instruction to stay static across scans."""
+    from scansort.classification.memory import MemoryExample
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Electricity_Bill",
+            "target_folder": "Utilities",
+            "confidence": 0.95,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+
+    classifier.classify_document(minimal_pdf, taxonomy=["Utilities"])
+    first_instruction = mock_client.models.generate_content.call_args[1][
+        "config"
+    ].system_instruction
+
+    classifier.classify_document(
+        minimal_pdf,
+        taxonomy=["Utilities"],
+        examples=[
+            MemoryExample(folder="Utilities", summary="August bill", similarity=0.92)
+        ],
+        folder_thresholds={"Utilities": 0.85},
+    )
+    second_call_kwargs = mock_client.models.generate_content.call_args[1]
+    assert second_call_kwargs["config"].system_instruction == first_instruction
+    contents_text = " ".join(str(c) for c in second_call_kwargs["contents"])
+    assert "August bill" in contents_text
+    assert "0.85" in contents_text
+
+
+def test_classify_document_extracts_cached_and_thoughts_usage(
+    minimal_pdf: Path, caplog
+):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Water_Bill",
+            "target_folder": "Utilities",
+            "confidence": 0.95,
+        }
+    )
+    usage = MagicMock()
+    usage.prompt_token_count = 2000
+    usage.candidates_token_count = 100
+    usage.cached_content_token_count = 1500
+    usage.thoughts_token_count = 50
+    mock_response.usage_metadata = usage
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(
+        api_key="AIzaSyDummyKey123", model="gemini-3.5-flash-lite"
+    )
+    classifier._client = mock_client
+
+    res = classifier.classify_document(minimal_pdf, taxonomy=["Utilities"])
+    assert res.prompt_tokens == 2000
+    assert res.candidates_tokens == 100
+    assert res.cached_tokens == 1500
+    assert res.thoughts_tokens == 50
+    # 500 uncached * 0.30/1M + 1500 cached * 0.03/1M + 150 output * 2.50/1M
+    expected_cost = 0.00015 + 0.000045 + 0.000375
+    assert pytest.approx(res.estimated_cost_usd, 1e-9) == expected_cost
+    assert "1,500 cached" in caplog.text
+    assert "+50 thoughts" in caplog.text
+
+
+def test_classify_document_caps_preview_pages_sent_to_gemini(tmp_path: Path):
+    import io
+
+    import img2pdf
+    from PIL import Image
+    from pypdf import PdfReader
+
+    imgs = []
+    for _ in range(6):
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 300), "white").save(buf, format="JPEG")
+        imgs.append(buf.getvalue())
+    six_page_pdf = tmp_path / "six_pages.pdf"
+    six_page_pdf.write_bytes(img2pdf.convert(imgs))
+
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "document_date": "260901",
+            "description": "Long_Report",
+            "target_folder": "Utilities",
+            "confidence": 0.95,
+        }
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    classifier = GeminiClassifier(api_key="AIzaSyDummyKey123")
+    classifier._client = mock_client
+    with patch("scansort.classification.client.types.Part.from_bytes") as mock_part:
+        classifier.classify_document(six_page_pdf, taxonomy=["Utilities"])
+
+    sent_bytes = mock_part.call_args.kwargs["data"]
+    assert len(PdfReader(io.BytesIO(sent_bytes)).pages) == 4
+    assert len(PdfReader(io.BytesIO(six_page_pdf.read_bytes())).pages) == 6

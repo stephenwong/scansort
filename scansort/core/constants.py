@@ -8,11 +8,21 @@ UNDONE_PREFIX: str = "_undone_"
 CONFIG_FILENAME: str = "config.json"
 HINTS_FILENAME: str = "folder_hints.json"
 # Single canonical source of truth for the default Gemini model across the application.
-DEFAULT_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+DEFAULT_GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 SUPPORTED_GEMINI_MODELS: tuple[str, ...] = (
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
 )
+
+# Gemini classification preview payload bounds (full staging PDF is still archived).
+MAX_CLASSIFICATION_PAGES: int = 4
+MAX_CLASSIFICATION_PDF_BYTES: int = 10 * 1024 * 1024  # 10 MiB
+
+# Conservative local blank-page pre-check thresholds.
+BLANK_MAX_TEXT_CHARS: int = 15
+BLANK_MIN_PAGE_DIMENSION: int = 400
+BLANK_MAX_DARK_PIXEL_RATIO: float = 0.002
+BLANK_MAX_STDDEV: float = 4.0
 DEFAULT_MAX_FOLDER_DEPTH: int = 3
 
 DEFAULT_IGNORED_FOLDERS: set[str] = {

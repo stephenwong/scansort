@@ -180,7 +180,7 @@ All settings can be changed via the **Settings dialog** (tray → Settings...) o
 | :--- | :--- | :--- | :--- |
 | Watch folder | `--watch-folder` | Scanner output directory to monitor | `%USERPROFILE%\Scans\Inbox` |
 | Documents folder | `--documents-folder` | Root of your filing destination | `%USERPROFILE%\Documents` |
-| Gemini model | `--gemini-model` | AI model for classification | `gemini-3.1-flash-lite` |
+| Gemini model | `--gemini-model` | AI model for classification | `gemini-3.5-flash-lite` |
 | API key | `--set-key` | Stored in OS credential vault | — |
 | Auto-start | `--autostart enable/disable` | Launch on login | Disabled |
 | Context menu | `--context-menu enable/disable` | Windows Explorer right-click integration | Disabled |

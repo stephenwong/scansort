@@ -46,19 +46,29 @@ def _calculate_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         tokens_info = r.get("tokens")
         p_tok = 0
         c_tok = 0
+        cached_tok = 0
+        thoughts_tok = 0
         if isinstance(tokens_info, dict):
             p_tok = int(tokens_info.get("prompt", 0) or 0)
             c_tok = int(tokens_info.get("candidates", 0) or 0)
+            cached_tok = int(tokens_info.get("cached", 0) or 0)
+            thoughts_tok = int(tokens_info.get("thoughts", 0) or 0)
             prompt_tokens += p_tok
-            candidates_tokens += c_tok
+            candidates_tokens += c_tok + thoughts_tok
 
         # Cost calculation
         cost_entry = r.get("estimated_cost_usd")
         if isinstance(cost_entry, (int, float)):
             total_cost_usd += float(cost_entry)
-        elif p_tok or c_tok:
+        elif p_tok or c_tok or thoughts_tok:
             model = str(r.get("gemini_model") or "")
-            total_cost_usd += calculate_gemini_cost(model, p_tok, c_tok)
+            total_cost_usd += calculate_gemini_cost(
+                model,
+                p_tok,
+                c_tok,
+                cached_tokens=cached_tok,
+                thoughts_tokens=thoughts_tok,
+            )
 
     # Successful outcomes include direct filings, collision-renamed filings,
     # manual reviews, and OCR backfills; counting only the first two deflated

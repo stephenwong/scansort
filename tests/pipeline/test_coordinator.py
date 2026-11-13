@@ -1337,3 +1337,75 @@ def test_process_file_ocr_failure_routes_to_review(tmp_path: Path):
     record = _read_history(tmp_path / "appdata")[-1]
     assert record["status"] == "FAILED"
     assert record["summary"] == "Failed processing; routed to review folder."
+
+
+def test_process_file_blank_scan_skips_gemini_at_zero_cost(tmp_path: Path):
+    import img2pdf
+
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+    app_dir = tmp_path / "appdata"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root, dry_run=False)
+    mock_classifier = _make_classifier()
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir, classifier=mock_classifier)
+
+    # Full scanner-sized white image (600x800) wrapped as PDF
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 800), color="white").save(buf, format="JPEG")
+    blank_pdf = inbox / "blank_sheet.pdf"
+    blank_pdf.write_bytes(img2pdf.convert(buf.getvalue()))
+
+    dest = pipeline.process_file(blank_pdf)
+
+    mock_classifier.classify_document.assert_not_called()
+    assert dest is not None and dest.exists()
+    assert dest.parent == docs_root / "_Review_Needed" / "Blank_Scans"
+    history = json.loads(
+        (app_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+    )
+    assert history["status"] == "SUCCESS"
+    assert history["document_type"] == "Blank"
+    assert history["estimated_cost_usd"] == 0.0
+    assert history["destination_folder"] == "_Review_Needed/Blank_Scans"
+
+
+def test_process_file_multipage_pdf_archives_all_pages(tmp_path: Path):
+    import img2pdf
+    from PIL import ImageDraw
+    from pypdf import PdfReader
+
+    inbox = tmp_path / "Inbox"
+    inbox.mkdir()
+    docs_root = tmp_path / "Documents"
+    (docs_root / "Utilities").mkdir(parents=True)
+    app_dir = tmp_path / "appdata"
+
+    cfg = AppConfig(watch_folder=inbox, documents_root=docs_root, dry_run=False)
+    mock_classifier = _make_classifier()
+    mock_classifier.classify_document.return_value = DocumentClassification(
+        document_date="260901",
+        description="Multi_Page_Contract",
+        target_folder="Utilities",
+        confidence=0.95,
+        orientation_correction=0,
+        document_type="Other",
+        summary="Six page utility contract",
+    )
+    pipeline = ScanSortPipeline(config=cfg, app_dir=app_dir, classifier=mock_classifier)
+
+    imgs = []
+    for _ in range(6):
+        img = Image.new("RGB", (500, 650), color="white")
+        ImageDraw.Draw(img).rectangle([50, 50, 250, 120], fill="black")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        imgs.append(buf.getvalue())
+    scan = inbox / "six_pages.pdf"
+    scan.write_bytes(img2pdf.convert(imgs))
+
+    dest = pipeline.process_file(scan)
+    assert dest is not None and dest.exists()
+    assert len(PdfReader(io.BytesIO(dest.read_bytes())).pages) == 6

@@ -337,7 +337,7 @@ def test_cli_config_show_json(capsys):
         assert main_cli(["config", "--show", "--json"]) == 0
         captured = capsys.readouterr()
         data = json.loads(captured.out)
-        assert data["gemini_model"] == "gemini-3.1-flash-lite"
+        assert data["gemini_model"] == "gemini-3.5-flash-lite"
         assert data["start_on_boot"] is True
         assert "AIza" in data["gemini_api_key"]
         assert "SecretKey" not in data["gemini_api_key"]

@@ -54,8 +54,33 @@ def test_stats_fallback_cost_calculation(mock_app_dir: Path, capsys):
     assert exit_code == 0
     captured = capsys.readouterr()
     data = json.loads(captured.out)
-    # Pricing: 0.075 + 0.30 = 0.375
-    assert data["total_cost_usd"] == 0.375
+    # Pricing for gemini-3.1-flash-lite: 0.25 + 1.50 = 1.75
+    assert data["total_cost_usd"] == 1.75
+
+
+def test_stats_fallback_cost_with_cached_and_thoughts_tokens(
+    mock_app_dir: Path, capsys
+):
+    record = {
+        "status": "SUCCESS",
+        "gemini_model": "gemini-3.5-flash-lite",
+        "tokens": {
+            "prompt": 1000000,
+            "candidates": 500000,
+            "cached": 800000,
+            "thoughts": 500000,
+            "total": 2000000,
+        },
+    }
+    _write_stats_records(mock_app_dir, [record])
+
+    exit_code = main_cli(["stats", "--json"])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+    # 200k uncached * 0.30 + 800k cached * 0.03 + 1M output (500k + 500k) * 2.50
+    # = 0.06 + 0.024 + 2.50 = 2.584
+    assert data["total_cost_usd"] == 2.584
 
 
 def test_stats_json_output(
