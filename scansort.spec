@@ -92,6 +92,9 @@ hiddenimports = [
     "keyring.backends",
     "watchfiles",
     "google.genai",
+    "httpx2",
+    "httpcore2",
+    "truststore",
     "pypdf",
     "img2pdf",
     "pytesseract",
@@ -104,12 +107,13 @@ hiddenimports = [
     "tkinter.ttk",
     "tzdata.zoneinfo",
     # Windows toast notifications (optional 'windows' extra) - lazily imported
-    # by scansort.platform.toasts, so their winrt extension modules must be named here.
-    "windows_toasts",
+    # by scansort.platform.toasts, so their winrt projection modules must be named here.
     "winrt",
     "winrt.windows.data.xml.dom",
     "winrt.windows.foundation",
     "winrt.windows.foundation.collections",
+    "winrt.windows.storage",
+    "winrt.windows.storage.streams",
     "winrt.windows.ui.notifications",
 ]
 hiddenimports += collect_submodules("pystray")

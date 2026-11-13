@@ -7,6 +7,7 @@ from pathlib import Path
 import img2pdf
 from PIL import Image, ImageStat
 from pypdf import PasswordType, PdfReader, PdfWriter
+from pypdf.errors import DeprecationError as PyPdfDeprecationError
 from pypdf.errors import PyPdfError
 
 from scansort.core.constants import (
@@ -19,18 +20,17 @@ from scansort.core.constants import (
 )
 
 logger = logging.getLogger(__name__)
+_PYPDF_ERRORS = (PyPdfError, PyPdfDeprecationError)
 
 
 def _open_unlocked_reader(raw_bytes: bytes, name: str) -> PdfReader:
     """Parse *raw_bytes* as an unlocked PdfReader or raise ValueError."""
     try:
         reader = PdfReader(io.BytesIO(raw_bytes))
-    except (PyPdfError, OSError, ValueError, NotImplementedError, KeyError) as e:
+    except (*_PYPDF_ERRORS, OSError, ValueError, NotImplementedError, KeyError) as e:
         raise ValueError(f"PDF {name} is unreadable: {e}") from e
     if reader.is_encrypted and reader.decrypt("") == PasswordType.NOT_DECRYPTED:
-        raise ValueError(
-            f"PDF {name} is password protected and cannot be classified."
-        )
+        raise ValueError(f"PDF {name} is password protected and cannot be classified.")
     return reader
 
 
@@ -52,12 +52,12 @@ def _downscale_first_page_image(reader: PdfReader, max_bytes: int) -> bytes | No
     best_area = -1
     try:
         images = list(reader.pages[0].images)
-    except (PyPdfError, OSError, ValueError, TypeError, KeyError):
+    except (*_PYPDF_ERRORS, OSError, ValueError, TypeError, KeyError):
         return None
     for item in images:
         try:
             pil_img = item.image
-        except (OSError, ValueError, TypeError, NotImplementedError):
+        except OSError, ValueError, TypeError, NotImplementedError:
             continue
         if pil_img is None:
             continue
@@ -74,7 +74,10 @@ def _downscale_first_page_image(reader: PdfReader, max_bytes: int) -> bytes | No
             working
             if scale == 1.0
             else working.resize(
-                (max(1, int(working.width * scale)), max(1, int(working.height * scale))),
+                (
+                    max(1, int(working.width * scale)),
+                    max(1, int(working.height * scale)),
+                ),
                 Image.Resampling.LANCZOS,
             )
         )
@@ -176,13 +179,13 @@ def _page_has_vector_content(page: object) -> bool:
     """Return True if *page* has non-trivial drawing stream bytes."""
     try:
         contents = page.get_contents()  # type: ignore[attr-defined]
-    except (PyPdfError, OSError, ValueError, TypeError, KeyError):
+    except (*_PYPDF_ERRORS, OSError, ValueError, TypeError, KeyError):
         return True
     if contents is None:
         return False
     try:
         data = contents.get_data()
-    except (PyPdfError, OSError, ValueError, TypeError, KeyError):
+    except (*_PYPDF_ERRORS, OSError, ValueError, TypeError, KeyError):
         return True
     return len(data.strip()) > 0
 
@@ -196,7 +199,7 @@ def is_pdf_blank(pdf_path: Path) -> bool:
     """
     try:
         reader = _open_unlocked_reader(pdf_path.read_bytes(), pdf_path.name)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
 
     pages = list(reader.pages)
@@ -206,14 +209,14 @@ def is_pdf_blank(pdf_path: Path) -> bool:
     for page in pages:
         try:
             text = (page.extract_text() or "").strip()
-        except (PyPdfError, OSError, ValueError, TypeError, KeyError):
+        except (*_PYPDF_ERRORS, OSError, ValueError, TypeError, KeyError):
             return False
         if len(text) >= BLANK_MAX_TEXT_CHARS:
             return False
 
         try:
             images = list(page.images)
-        except (PyPdfError, OSError, ValueError, TypeError, KeyError):
+        except (*_PYPDF_ERRORS, OSError, ValueError, TypeError, KeyError):
             return False
 
         if not images:
@@ -228,7 +231,7 @@ def is_pdf_blank(pdf_path: Path) -> bool:
         for item in images:
             try:
                 pil_img = item.image
-            except (OSError, ValueError, TypeError, NotImplementedError):
+            except OSError, ValueError, TypeError, NotImplementedError:
                 return False
             if pil_img is None:
                 return False

@@ -200,3 +200,20 @@ def test_prepare_pdf_returns_raw_bytes_for_quirked_small_pdf(tmp_path: Path):
     quirked = tmp_path / "quirked.pdf"
     quirked.write_bytes(b"%PDF-1.4 truncated-eof")
     assert prepare_pdf_for_classification(quirked) == b"%PDF-1.4 truncated-eof"
+
+
+def test_preview_handles_pypdf_deprecation_error(tmp_path: Path, monkeypatch):
+    from pypdf.errors import DeprecationError
+
+    pdf_path = _make_multipage_pdf(tmp_path / "legacy.pdf", 6)
+
+    def _raise_deprecated(*_args, **_kwargs):
+        raise DeprecationError("Deprecated filter abbreviation /A85")
+
+    monkeypatch.setattr("scansort.document.preview.PdfReader", _raise_deprecated)
+    assert is_pdf_blank(pdf_path) is False
+    assert (
+        prepare_pdf_for_classification(pdf_path, max_pages=4) == pdf_path.read_bytes()
+    )
+    with pytest.raises(ValueError, match="unreadable"):
+        prepare_pdf_for_classification(pdf_path, max_pages=4, max_bytes=10)

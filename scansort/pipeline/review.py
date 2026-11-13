@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pypdf.errors import DeprecationError as PyPdfDeprecationError
 from pypdf.errors import PyPdfError
 
 from scansort.classification.hints import add_folder_hint, get_default_hints_path
@@ -444,7 +445,7 @@ def file_reviewed_item(
                         subject=item.summary,
                         keywords=[item.document_type, normalized_folder],
                     )
-                except (OSError, ValueError, PyPdfError) as e:
+                except (OSError, ValueError, PyPdfError, PyPdfDeprecationError) as e:
                     logger.warning(
                         "Could not update metadata during review filing: %s", e
                     )

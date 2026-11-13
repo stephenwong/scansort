@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytesseract
 from pypdf import PasswordType, PdfReader, PdfWriter
+from pypdf.errors import DeprecationError as PyPdfDeprecationError
 from pypdf.errors import PyPdfError
 from pypdf.generic import (
     ArrayObject,
@@ -83,7 +84,14 @@ def _open_reader(pdf_path: Path) -> PdfReader:
     """Parse *pdf_path* from an in-memory buffer, rejecting corrupt/encrypted files."""
     try:
         reader = PdfReader(io.BytesIO(pdf_path.read_bytes()))
-    except (PyPdfError, OSError, ValueError, NotImplementedError, KeyError) as e:
+    except (
+        PyPdfError,
+        PyPdfDeprecationError,
+        OSError,
+        ValueError,
+        NotImplementedError,
+        KeyError,
+    ) as e:
         raise OcrError(f"PDF {pdf_path.name} is unreadable: {e}") from e
     if reader.is_encrypted and reader.decrypt("") == PasswordType.NOT_DECRYPTED:
         raise OcrError(
@@ -95,7 +103,7 @@ def _open_reader(pdf_path: Path) -> PdfReader:
 def _page_text_length(page: object) -> int:
     try:
         return len((page.extract_text() or "").strip())  # type: ignore[attr-defined]
-    except PyPdfError, OSError, ValueError, TypeError, KeyError:
+    except PyPdfError, PyPdfDeprecationError, OSError, ValueError, TypeError, KeyError:
         return 0
 
 
@@ -265,7 +273,7 @@ def _copy_document_metadata(reader: PdfReader, writer: PdfWriter) -> None:
             logger.warning("Could not copy PDF DocInfo during OCR: %s", e)
     try:
         existing_xmp = reader.xmp_metadata
-    except AttributeError, OSError, PyPdfError:
+    except AttributeError, OSError, PyPdfError, PyPdfDeprecationError:
         existing_xmp = None
     if existing_xmp is not None:
         try:
@@ -325,7 +333,7 @@ def ocr_pdf_inplace(
     writer = PdfWriter()
     try:
         writer.append(reader)
-    except (PyPdfError, OSError, ValueError) as e:
+    except (PyPdfError, PyPdfDeprecationError, OSError, ValueError) as e:
         raise OcrError(f"Could not reparse {pdf_path.name} for OCR: {e}") from e
     _copy_document_metadata(reader, writer)
 
@@ -362,7 +370,7 @@ def ocr_pdf_inplace(
 
     try:
         atomic_write(target, lambda out: writer.write(out))
-    except (PyPdfError, OSError, ValueError) as e:
+    except (PyPdfError, PyPdfDeprecationError, OSError, ValueError) as e:
         raise OcrError(f"Could not write OCR output for {pdf_path.name}: {e}") from e
     mean_confidence = sum(confidences) / len(confidences) if confidences else None
     logger.info(

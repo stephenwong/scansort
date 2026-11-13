@@ -346,8 +346,8 @@ def test_existing_outline_and_catalog_preserved(tmp_path: Path):
     writer = PdfWriter()
     writer.add_blank_page(width=72, height=72)
     writer.add_blank_page(width=72, height=72)
-    writer.add_outline_item("Chapter 1", 0)
-    writer.add_outline_item("Chapter 2", 1)
+    writer.add_outline_item(title="Chapter 1", page_number=0)
+    writer.add_outline_item(title="Chapter 2", page_number=1)
     with open(src, "wb") as f:
         writer.write(f)
 

@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from pypdf import PasswordType, PdfReader, PdfWriter
+from pypdf.errors import DeprecationError as PyPdfDeprecationError
 from pypdf.errors import PyPdfError
 from pypdf.xmp import XmpInformation
 
@@ -118,7 +119,7 @@ def process_pdf_metadata_and_rotation(
     existing_xmp: XmpInformation | None = None
     try:
         existing_xmp = reader.xmp_metadata
-    except AttributeError, OSError, PyPdfError:
+    except AttributeError, OSError, PyPdfError, PyPdfDeprecationError:
         existing_xmp = None
 
     writer = PdfWriter()

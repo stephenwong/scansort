@@ -1,8 +1,9 @@
-"""Windows native toast notifications backed by the optional ``windows-toasts`` extra.
+"""Windows native toast notifications backed by the optional ``windows`` (PyWinRT) extra.
 
-The library is only imported lazily on Windows. Off-Windows development and CI
-runs exercise every reachable path through an injected fake backend, while the
-real WinRT display code is confined to ``WindowsToastBackend``.
+The WinRT projection packages are imported lazily on Windows. Off-Windows
+development and CI runs exercise every reachable path through injected fake
+``winrt`` modules, while real WinRT display calls are confined to
+``WindowsToastBackend``.
 """
 
 import logging
@@ -14,11 +15,14 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 logger = logging.getLogger(__name__)
 
-# App User Model ID registered with the Windows toast backend.
+# Attribution label and known AUMID enabling foreground action buttons without
+# requiring system-wide AppUserModelId registry registration.
 TOASTER_AUM_ID = "ScanSort"
+_DEFAULT_AUM_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\cmd.exe"
 # Bounded retention so WinRT activation callbacks survive garbage collection.
 _RECENT_TOAST_LIMIT = 20
 
@@ -58,27 +62,42 @@ def open_path(target_path: Path | str, *, create_file: bool = False) -> bool:
 
 
 class WindowsToastBackend:
-    """Thin wrapper isolating every ``windows_toasts`` interaction."""
+    """Thin wrapper isolating every PyWinRT toast notification interaction."""
 
     def __init__(self) -> None:
-        import windows_toasts
+        import winrt.windows.data.xml.dom as winrt_dom
+        import winrt.windows.ui.notifications as winrt_notifications
 
-        toaster_cls = getattr(
-            windows_toasts,
-            "InteractableWindowsToaster",
-            getattr(windows_toasts, "WindowsToaster", None),
-        )
-        if toaster_cls is None:
+        xml_doc_cls = getattr(winrt_dom, "XmlDocument", None)
+        if xml_doc_cls is None:
+            raise ImportError("winrt.windows.data.xml.dom.XmlDocument not found")
+
+        manager_cls = getattr(winrt_notifications, "ToastNotificationManager", None)
+        if manager_cls is None:
             raise ImportError(
-                "Neither InteractableWindowsToaster nor WindowsToaster found"
+                "winrt.windows.ui.notifications.ToastNotificationManager not found"
             )
 
-        self._toaster = toaster_cls(TOASTER_AUM_ID)
-        toast_cls = getattr(windows_toasts, "Toast", None)
+        create_notifier = getattr(
+            manager_cls,
+            "create_toast_notifier_with_id",
+            getattr(manager_cls, "create_toast_notifier", None),
+        )
+        if create_notifier is None:
+            raise ImportError("ToastNotificationManager notifier factory not found")
+
+        toast_cls = getattr(winrt_notifications, "ToastNotification", None)
         if toast_cls is None:
-            raise ImportError("windows_toasts.Toast not found")
-        self._toast_class = toast_cls
-        self._toast_button_class = getattr(windows_toasts, "ToastButton", None)
+            raise ImportError(
+                "winrt.windows.ui.notifications.ToastNotification not found"
+            )
+
+        self._notifier = create_notifier(_DEFAULT_AUM_ID)
+        self._xml_document_cls = xml_doc_cls
+        self._toast_notification_cls = toast_cls
+        self._activated_args_cls = getattr(
+            winrt_notifications, "ToastActivatedEventArgs", None
+        )
         self._recent_toasts: deque[Any] = deque(maxlen=_RECENT_TOAST_LIMIT)
 
     def show(
@@ -89,14 +108,39 @@ class WindowsToastBackend:
         folder_path: Path | str | None = None,
         log_path: Path | str | None = None,
     ) -> None:
-        toast = self._toast_class()
-        toast.text_fields = [title, body]
+        actions_xml = ""
+        if log_path is not None:
+            actions_xml = (
+                "<actions>"
+                '<action content="View Logs" arguments="view_log" activationType="foreground"/>'
+                "</actions>"
+            )
 
-        if log_path is not None and self._toast_button_class is not None:
-            btn = self._toast_button_class(content="View Logs", arguments="view_log")
-            toast.AddAction(btn)
+        toast_xml = (
+            '<toast useButtonStyle="true">'
+            "<visual>"
+            '<binding template="ToastGeneric">'
+            f"<text>{escape(title)}</text>"
+            f"<text>{escape(body)}</text>"
+            f'<text placement="attribution">{escape(TOASTER_AUM_ID)}</text>'
+            "</binding>"
+            "</visual>"
+            f"{actions_xml}"
+            "</toast>"
+        )
 
-        def _handle_activated(args: Any = None) -> None:
+        xml_doc = self._xml_document_cls()
+        xml_doc.load_xml(toast_xml)
+        toast = self._toast_notification_cls(xml_doc)
+
+        def _handle_activated(_sender: Any = None, args: Any = None) -> None:
+            if (
+                args is not None
+                and not hasattr(args, "arguments")
+                and self._activated_args_cls is not None
+                and hasattr(args, "as_")
+            ):
+                args = args.as_(self._activated_args_cls)
             arg_str = getattr(args, "arguments", None)
             if arg_str == "view_log" and log_path is not None:
                 open_path(log_path, create_file=True)
@@ -106,10 +150,10 @@ class WindowsToastBackend:
                 on_click()
 
         if on_click is not None or folder_path is not None or log_path is not None:
-            toast.on_activated = _handle_activated
+            toast.add_activated(_handle_activated)
 
         self._recent_toasts.append(toast)
-        self._toaster.show_toast(toast)
+        self._notifier.show(toast)
 
 
 def _get_backend() -> WindowsToastBackend:
@@ -132,7 +176,7 @@ def show_toast(
     """Display a Windows toast notification, never raising.
 
     Returns False when toasts are unsupported on this platform, the optional
-    ``windows-toasts`` backend is unavailable, or the display call fails.
+    ``winrt`` backend is unavailable, or the display call fails.
     """
     if sys.platform != "win32":
         return False

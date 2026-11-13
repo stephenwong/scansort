@@ -6,7 +6,7 @@ import math
 import time
 from pathlib import Path
 
-import httpx
+import httpx2
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -391,7 +391,7 @@ class GeminiClassifier:
 
         except (
             APIError,
-            httpx.HTTPError,
+            httpx2.HTTPError,
             OSError,
             RuntimeError,
             TypeError,

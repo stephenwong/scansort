@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/stephenwong/scansort/actions/workflows/ci.yml/badge.svg)](https://github.com/stephenwong/scansort/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/stephenwong/scansort)](https://github.com/stephenwong/scansort/releases/latest)
-[![Python](https://img.shields.io/badge/python-≥3.14-3776AB?logo=python&logoColor=white)](https://www.python.org)
+[![Python](https://img.shields.io/badge/python-≥3.15-3776AB?logo=python&logoColor=white)](https://www.python.org)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](https://github.com/stephenwong/scansort/releases/latest)
 [![Powered by Gemini](https://img.shields.io/badge/powered%20by-Google%20Gemini-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
 
@@ -137,7 +137,7 @@ flowchart TD
 For the standalone Windows build (`ScanSort.exe`), that's all you need — no Python required.
 
 For running from source:
-- Python 3.14+
+- Python 3.15+
 - [Astral `uv`](https://docs.astral.sh/uv/)
 - (Optional) [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) — only needed for OCR text layers when running from source; the standalone Windows build bundles it.
 
@@ -330,7 +330,7 @@ scansort/
 | [pystray](https://pypi.org/project/pystray/) | Cross-platform system tray integration |
 | [pydantic](https://pypi.org/project/pydantic/) | Configuration validation and structured AI response models |
 | [keyring](https://pypi.org/project/keyring/) | OS credential vault for API key storage |
-| [windows-toasts](https://pypi.org/project/windows-toasts/) | Native Windows toast notifications (optional) |
+| [winrt](https://pypi.org/project/winrt-runtime/) | Native Windows toast notifications via PyWinRT 4.x (optional) |
 
 ### Key Conventions
 

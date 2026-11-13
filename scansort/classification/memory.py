@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from pypdf import PdfReader
+from pypdf.errors import DeprecationError as PyPdfDeprecationError
 from pypdf.errors import PyPdfError
 
 from scansort.core.constants import (
@@ -583,9 +584,23 @@ def _extract_pdf_text(pdf_path: Path, max_chars: int) -> str:
         for page in reader.pages:
             try:
                 parts.append(page.extract_text() or "")
-            except PyPdfError, OSError, ValueError, TypeError, KeyError:
+            except (
+                PyPdfError,
+                PyPdfDeprecationError,
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ):
                 parts.append("")
-    except PyPdfError, OSError, ValueError, NotImplementedError, KeyError:
+    except (
+        PyPdfError,
+        PyPdfDeprecationError,
+        OSError,
+        ValueError,
+        NotImplementedError,
+        KeyError,
+    ):
         return ""
     return " ".join(" ".join(parts).split())[:max_chars]
 

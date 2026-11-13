@@ -805,3 +805,23 @@ def test_classify_document_caps_preview_pages_sent_to_gemini(tmp_path: Path):
     sent_bytes = mock_part.call_args.kwargs["data"]
     assert len(PdfReader(io.BytesIO(sent_bytes)).pages) == 4
     assert len(PdfReader(io.BytesIO(six_page_pdf.read_bytes())).pages) == 6
+
+
+def test_classify_document_catches_httpx2_error_and_redacts_secret(tmp_path: Path):
+    import httpx2
+
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = httpx2.ConnectError(
+        "network timeout key=AIzaSySecretKey1234567890"
+    )
+
+    classifier = GeminiClassifier(api_key="AIzaSySecretKey1234567890")
+    classifier._client = mock_client
+
+    res = classifier.classify_document(pdf_path, taxonomy=["Utilities"])
+    assert res.target_folder == "_Review_Needed"
+    assert res.confidence == 0.0
+    assert "AIzaSySecretKey1234567890" not in res.routing_rationale
